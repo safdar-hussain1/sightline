@@ -18,6 +18,10 @@ it lets go of it, and a process opening the cache finds either no
 is killed half-way: a cache never looks complete unless it is. A build that
 fails with an error deletes its temporary files and leaves no ``meta.json``,
 so the next build starts again.
+
+``open_cache`` is the read-only way in, for commands that publish what they compute from
+a cache: it opens a cache only when its fingerprint is the one the drive's labels give
+now, and never builds one.
 """
 
 from __future__ import annotations
@@ -41,8 +45,9 @@ from sightline.data.preprocess import (
     INPUT_WIDTH,
     preprocess_frame,
 )
+from sightline.paths import MissingDataError
 
-__all__ = ["DriveCache", "build_cache"]
+__all__ = ["DriveCache", "build_cache", "open_cache"]
 
 _CACHE_VERSION = 2
 
@@ -114,6 +119,26 @@ def _write_text(path: Path, text: str) -> None:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
+
+
+def open_cache(labels: DriveLabels, cache_dir: str | Path) -> DriveCache:
+    """The cache at ``cache_dir``, opened only if it was built from ``labels`` as they are now.
+
+    Raises MissingDataError, naming the command that builds the cache, when there is no
+    cache or its fingerprint differs from the one ``labels`` give (another label file,
+    other repairs or other preprocessing). Nothing is ever written.
+    """
+    cache_dir = Path(cache_dir)
+    drive = labels.root.name
+    if not (cache_dir / "meta.json").is_file():
+        raise MissingDataError(f"no cache for drive {drive!r} at {cache_dir}; "
+                               f"run `sightline cache --drive {drive}` first")
+    cache = DriveCache(cache_dir)
+    fingerprint = _fingerprint(labels)
+    if {k: cache.meta.get(k) for k in fingerprint} != fingerprint:
+        raise MissingDataError(f"the cache at {cache_dir} was built from other labels or settings than "
+                               f"drive {drive!r} has now; run `sightline cache --drive {drive}` to build it again")
+    return cache
 
 
 def build_cache(

@@ -12,7 +12,8 @@ option, so nothing can shadow silently.
     sightline figures [--summary reports/summary.json] [--out-dir reports/figures]
     sightline leakage --drive drive2018 --seed 0 [--out reports/leakage.json]
     sightline legacy  --weights PATH [--out reports/legacy.json]
-    sightline export  --run runs/... --out web/public/models/sightline.onnx
+    sightline export  --run drive2018_sightlinenet_blocked_s0 --out PATH.onnx
+    sightline site-data [--summary reports/summary.json] [--out-dir web/public] [--reports-dir reports]
     sightline demo    --drive drive2017 --run runs/... --out demo.mp4
 
 ``--drive`` takes a drive name, looked up under ``--data-dir`` (default
@@ -30,7 +31,10 @@ and scores the lookup table the shuffled split rewards: copy the label of the
 most similar training frame. ``legacy`` scores the standard-recipe PilotNet
 (shuffled split, MSE in radians, atan head) from its TF1 weights, which are
 not part of the repository: ``--weights`` or ``SIGHTLINE_LEGACY_WEIGHTS``
-names their .npz.
+names their .npz. ``export`` writes one run as an ONNX graph (steering angle and saliency)
+after checking it against PyTorch; ``site-data`` writes everything the browser page loads
+(both models, the demo clips, results.json, the self-test fixture and the leakage pairs)
+from the summary, the reports and the checkpoints, and records it in reports/export.json.
 """
 
 from __future__ import annotations
@@ -296,13 +300,54 @@ def cmd_legacy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _need_onnx(command: str) -> None:
+    try:
+        import onnx  # noqa: F401
+        import onnxruntime  # noqa: F401
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in ("onnx", "onnxruntime"):
+            raise
+        raise CommandError(f"{command} needs onnx and onnxruntime: pip install -e '.[export]'") from None
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     from sightline.export.onnx_export import export_run
 
-    result = export_run(
-        Path(args.run), Path(args.out), _workspace(args), check_frames=args.check_frames
-    )
+    _need_onnx("export")
+    ws = _workspace(args)
+    run = _run_path(ws, args.run)
+    try:
+        result = export_run(run, Path(args.out), ws, check_frames=args.check_frames)
+    except (ValueError, RuntimeError) as exc:
+        raise CommandError(f"cannot export run {run.name!r}: {exc}") from None
     print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_site_data(args: argparse.Namespace) -> int:
+    _need_onnx("site-data")
+    from sightline.export.site_data import build_site_data
+
+    summary = Path(args.summary)
+    if not summary.is_file():
+        raise MissingDataError(f"no summary at {summary}; write it with `sightline report`")
+    reports_dir = Path(args.reports_dir)
+    try:
+        export = build_site_data(summary, _workspace(args), out_dir=Path(args.out_dir), reports_dir=reports_dir,
+                                 clip_frames=args.clip_frames, video=not args.no_video)
+    except (ValueError, RuntimeError) as exc:
+        raise CommandError(f"cannot build the site data: {exc}") from None
+    for key, model in export["models"].items():
+        parity = model["parity"]
+        print(f"{key}: {model['run']} -> {model['file']} ({model['bytes']:,} bytes); onnxruntime within "
+              f"{parity['max_angle_diff_deg']:.1e} deg and {parity['max_saliency_diff']:.1e} saliency of "
+              f"PyTorch on {parity['frames']} frame stacks")
+    for cid, clip in export["clips"].items():
+        mae = clip["clip_mae_deg"]
+        print(f"{cid}: {clip['drive']} frames {clip['first_frame']}..{clip['first_frame'] + clip['n'] - 1}; "
+              f"MAE on this clip: sightline {mae['sightline']:.2f} deg, shuffled {mae['shuffled']:.2f} deg, "
+              f"straight ahead {mae['zero']:.2f} deg")
+    print(f"wrote {args.out_dir} and {reports_dir / 'export.json'}")
     return 0
 
 
@@ -449,11 +494,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_legacy)
 
     p = sub.add_parser("export", help="export a run to ONNX with saliency output")
-    p.add_argument("--run", required=True)
-    p.add_argument("--out", required=True)
-    p.add_argument("--check-frames", type=int, default=64)
+    p.add_argument("--run", required=True, help="run name under --runs-dir, or a path to a run folder")
+    p.add_argument("--out", required=True, help="where to write the .onnx file")
+    p.add_argument("--check-frames", type=_int_from(1), default=64,
+                   help="test-split frames onnxruntime must reproduce PyTorch on")
     _add_locations(p)
     p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("site-data", help="write the browser page's models, demo clips and results from the reports")
+    p.add_argument("--summary", default="reports/summary.json", help="the summary naming the shipped run")
+    p.add_argument("--out-dir", default="web/public", help="the page's public folder")
+    p.add_argument("--reports-dir", default="reports",
+                   help="folder of the run, leakage and standard-recipe reports; export.json is written here")
+    p.add_argument("--clip-frames", type=_int_from(8), default=420, help="scored frames per demo clip")
+    p.add_argument("--no-video", action="store_true", help="write everything but the clip videos (they need ffmpeg)")
+    _add_locations(p)
+    p.set_defaults(fn=cmd_site_data)
 
     p = sub.add_parser("demo", help="render the cockpit demo video")
     p.add_argument("--drive", required=True)
