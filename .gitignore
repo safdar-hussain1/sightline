@@ -1,0 +1,28 @@
+# datasets and heavyweight model weights never enter the repo
+# (anchored to repo root on purpose — web/public assets must not be shadowed;
+#  structural guard: tests/test_guards.py)
+/data/
+/runs/
+/checkpoints/
+*.pt
+*.pth
+*.ckpt*
+*.npz
+
+# environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# node
+node_modules/
+/web/dist/
+
+# OS noise
+.DS_Store
