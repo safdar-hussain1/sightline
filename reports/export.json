@@ -1,0 +1,116 @@
+{
+  "clips": {
+    "c2017": {
+      "clip_mae_deg": {
+        "shuffled": 14.172779347286339,
+        "sightline": 10.781124932478582,
+        "zero": 42.11435712341751
+      },
+      "drive": "drive2017",
+      "first_frame": 33112,
+      "label_sd_deg": 44.8319653691566,
+      "lead_in": 2,
+      "min_frames_from_training": null,
+      "n": 420,
+      "rule": "the 420-frame window with the largest standard deviation of its steering labels, among the windows that fit, with the 2 frames before them, inside the whole of drive2017 and whose labels, those 2 frames included, all stay within 90 degrees either way, so that the clip shows road following rather than parking or intersection manoeuvres; windows start every 10 frames and ties go to the earliest",
+      "twin_neighbour_frac": 0.0,
+      "twin_trained_frac": 0.0,
+      "video": {
+        "bytes": 3783748,
+        "file": "data/clips/c2017/clip.mp4",
+        "height": 256,
+        "sha256": "b4e605c085985e9a03e7c5a7b48442ca50139d00169265a14a2e853195872ec2",
+        "width": 456
+      },
+      "windows": 3917
+    },
+    "c2018": {
+      "clip_mae_deg": {
+        "shuffled": 5.627607620576219,
+        "sightline": 14.258731264195271,
+        "zero": 46.699309566209
+      },
+      "drive": "drive2018",
+      "first_frame": 28752,
+      "label_sd_deg": 42.24203341774059,
+      "lead_in": 2,
+      "min_frames_from_training": 501,
+      "n": 420,
+      "rule": "the 420-frame window with the largest standard deviation of its steering labels, among the windows that fit, with the 2 frames before them, inside one blocked test stretch of drive2018 (every frame at least 501 frames from training) and whose labels, those 2 frames included, all stay within 90 degrees either way, so that the clip shows road following rather than parking or intersection manoeuvres; windows start every 10 frames and ties go to the earliest",
+      "twin_neighbour_frac": 0.9714285714285714,
+      "twin_trained_frac": 0.7095238095238096,
+      "video": {
+        "bytes": 2122861,
+        "file": "data/clips/c2018/clip.mp4",
+        "height": 256,
+        "sha256": "a6b6c6010a9d3418b9509e9bde274480780caff9d2baddf85bd3084bea09db16",
+        "width": 456
+      },
+      "windows": 301
+    }
+  },
+  "code_version": "00f053aa775c07a98be1e955751ac87189144d89",
+  "device": "cpu",
+  "models": {
+    "shuffled": {
+      "bytes": 1170711,
+      "checkpoint_sha256": "1a0123189dc7607c4db2e9f0b667fd0aaf6f10d0ca7b556f0c5b834102ef7ab1",
+      "file": "models/sightline-shuffled.onnx",
+      "frame_lags": [
+        2
+      ],
+      "model": "sightlinenet",
+      "opset": 17,
+      "parity": {
+        "angle_tolerance_deg": 0.0005,
+        "frames": 848,
+        "max_angle_diff_deg": 0.00012969970703125,
+        "max_saliency_diff": 8.165836334228516e-06,
+        "saliency_tolerance": 0.0001
+      },
+      "run": "drive2018_sightlinenet_leaky_s2",
+      "sha256": "f137b012950fe28a0a55c64440299352be8471663322d91d456a1e85b8b4a69b"
+    },
+    "sightline": {
+      "bytes": 1170713,
+      "checkpoint_sha256": "c41f1bc8ff179395352afd54ff5face0ff33ff8e7fab8125c9c1b61d283a2d46",
+      "file": "models/sightline.onnx",
+      "frame_lags": [
+        2
+      ],
+      "model": "sightlinenet",
+      "opset": 17,
+      "parity": {
+        "angle_tolerance_deg": 0.0005,
+        "frames": 848,
+        "max_angle_diff_deg": 0.000179290771484375,
+        "max_saliency_diff": 7.450580596923828e-06,
+        "saliency_tolerance": 0.0001
+      },
+      "run": "drive2018_sightlinenet_blocked_s2",
+      "sha256": "77e13d2cf1965b5b662dcb68b3a4a225eb8922e67492bb7c2f45e58e1c19a341"
+    }
+  },
+  "selftest": {
+    "clip": "c2018",
+    "frames": [
+      28752,
+      28812,
+      28872,
+      28932,
+      28991,
+      29051,
+      29111,
+      29171
+    ]
+  },
+  "versions": {
+    "ffmpeg": "8.1.1",
+    "numpy": "2.5.1",
+    "onnx": "1.22.0",
+    "onnxruntime": "1.28.0",
+    "pillow": "12.3.0",
+    "python": "3.12.13",
+    "torch": "2.13.0"
+  }
+}
