@@ -1,8 +1,16 @@
-"""Synthetic drives: tiny, deterministic stand-ins for the real dataset.
+"""Shared fixtures: every test runs outside the repository, and synthetic drives.
 
-Each frame is a 455x256 BGR image with a bright vertical bar whose horizontal
-position follows the steering angle, so a model can learn the mapping in one
-epoch and a broken pipeline is visible. Labels use the timestamped format.
+A command's relative default (``runs``, ``data``, ``reports``) resolves against the working
+directory, so every test runs from a tmp folder of its own and the session itself from
+another, and a test that needs a repository file names it by an absolute path under
+``REPO``. Behind that, a tripwire records the repository's drive caches and label files
+when the session starts and fails the test after which any of them changed: a cache that
+training processes have memory-mapped must never change under them.
+
+Synthetic drives are tiny, deterministic stand-ins for the real dataset. Each frame is a
+455x256 BGR image with a bright vertical bar whose horizontal position follows the
+steering angle, so a model can learn the mapping in one epoch and a broken pipeline is
+visible. Labels use the timestamped format.
 
 With ``scenery=True`` the bar stands in front of a grey background that drifts
 slowly from frame to frame, as roadside scenery does: neighbouring frames look
@@ -11,6 +19,7 @@ same bar position is pixel-identical, however far apart in time.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,8 +27,92 @@ import cv2
 import numpy as np
 import pytest
 
+#: the repository; tests reach its files by absolute paths built from this, never through
+#: the working directory
+REPO = Path(__file__).resolve().parents[1]
+
 W, H = 455, 256
 
+
+# --- every test runs outside the repository -------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def session_outside_the_repository(tmp_path_factory):
+    """Module- and session-scoped fixtures are set up before a test enters its own folder,
+    so the session runs from a tmp folder of its own as well."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.chdir(tmp_path_factory.mktemp("session"))
+        yield
+
+
+@pytest.fixture(autouse=True)
+def inside_tmp(tmp_path, monkeypatch):
+    """Every test runs from its own tmp folder, so a relative default folder (runs/, data/,
+    reports/) lands there and never reaches the repository's."""
+    monkeypatch.chdir(tmp_path)
+
+
+# --- the tripwire -----------------------------------------------------------------------------
+
+def _watched_files(root: Path) -> dict[str, tuple[int, int, int]]:
+    """``(size, mtime_ns, inode)`` of every file under ``root/runs/cache`` and of every
+    ``root/data/<drive>/data.txt`` there is, keyed by the path relative to ``root``. Stat
+    calls only, so it is cheap enough to run after every test."""
+    paths = [Path(folder) / name for folder, _, names in os.walk(root / "runs" / "cache") for name in names]
+    data = root / "data"
+    if data.is_dir():
+        paths += [Path(entry.path) / "data.txt" for entry in os.scandir(data) if entry.is_dir()]
+    state = {}
+    for path in paths:
+        try:
+            st = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:  # a drive without labels, or a file deleted while listed
+            continue
+        state[path.relative_to(root).as_posix()] = (st.st_size, st.st_mtime_ns, st.st_ino)
+    return state
+
+
+def workspace_state(root: Path) -> dict[str, tuple[int, int, int]] | None:
+    """The drive caches and label files of the repository at ``root`` (see ``_watched_files``);
+    None when ``root/runs/cache`` does not exist: a fresh clone has no cache to protect."""
+    return _watched_files(root) if (root / "runs" / "cache").is_dir() else None
+
+
+def workspace_changes(before: dict | None, root: Path) -> list[str]:
+    """Each file of ``before`` changed or deleted since, and each new one; nothing when
+    ``before`` is None."""
+    if before is None:
+        return []
+    after = _watched_files(root)
+    return sorted([f"{path} (deleted)" for path in before.keys() - after.keys()]
+                  + [f"{path} (new)" for path in after.keys() - before.keys()]
+                  + [f"{path} (changed)" for path in before.keys() & after.keys() if after[path] != before[path]])
+
+
+def check_workspace(before: dict | None, root: Path) -> None:
+    """Fail, naming every changed file, when the workspace at ``root`` is not as ``before``."""
+    changes = workspace_changes(before, root)
+    if changes:
+        pytest.fail(f"the repository's drive caches or label files changed: {', '.join(changes)}; "
+                    "a test writes only under its own tmp folder", pytrace=False)
+
+
+@pytest.fixture(scope="session")
+def workspace_before():
+    """The repository's drive caches and label files as the session found them."""
+    before = workspace_state(REPO)
+    yield before
+    check_workspace(before, REPO)  # what tearing down the last module's fixtures did
+
+
+@pytest.fixture(autouse=True)
+def real_workspace_untouched(workspace_before):
+    """The tripwire: fails the test after which the repository's caches or labels changed."""
+    yield
+    check_workspace(workspace_before, REPO)
+
+
+# --- synthetic drives -------------------------------------------------------------------------
 
 def _scenery(seed: int, grid: tuple[int, int] = (6, 16), rho: float = 0.99):
     """Grey backgrounds, one per frame: a coarse random field that keeps a correlation

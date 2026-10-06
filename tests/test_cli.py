@@ -62,8 +62,7 @@ def test_help_runs_as_a_module(tmp_path):
 
 @pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["report"], ["figures"],
                                   ["leakage"], ["legacy"], ["export"], ["demo"]])
-def test_every_subcommand_has_its_own_help(argv, capsys, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_every_subcommand_has_its_own_help(argv, capsys):
     with pytest.raises(SystemExit) as exc:
         main([*argv, "--help"])
     assert exc.value.code == 0

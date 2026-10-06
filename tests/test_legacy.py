@@ -44,13 +44,6 @@ from sightline.reporting import CROSS_FIRST_FRAME
 TOL_DEG = 1e-3
 
 
-@pytest.fixture(autouse=True)
-def inside_tmp(tmp_path, monkeypatch):
-    """Every test runs from its own tmp folder, so a relative default folder (runs/,
-    reports/) can never reach the repository's."""
-    monkeypatch.chdir(tmp_path)
-
-
 def no_cache(*args, **kwargs):
     raise AssertionError("the standard-recipe PilotNet is scored on decoded JPEGs, never on a drive cache")
 
@@ -267,7 +260,7 @@ def evaluated(tmp_path_factory):
     np.savez(path, **weights)
     out = root / "reports" / "legacy.json"
     with pytest.MonkeyPatch.context() as mp:
-        mp.chdir(root)  # a relative default folder would land here, never in the repository
+        mp.chdir(root)  # a relative default folder would land here, where a test checks none was made
         # every route to a drive cache (building one, opening one, mapping its file) raises
         # instead of touching a file, so the evaluation succeeds only without one
         mp.setattr("sightline.data.cache.build_cache", no_cache)

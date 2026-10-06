@@ -247,12 +247,12 @@ def test_positive_patience_still_stops_early(short_drive, monkeypatch):
 
 # --- the training matrix --------------------------------------------------------------
 
-MATRIX = [sys.executable, "scripts/train_matrix.py"]
+MATRIX = [sys.executable, str(REPO / "scripts" / "train_matrix.py")]
 
 
 def test_matrix_dry_run_lists_21_runs_seed_major(tmp_path):
     out = subprocess.run(MATRIX + ["--dry-run", "--runs-dir", str(tmp_path / "runs")],
-                         capture_output=True, text=True, check=True, cwd=REPO).stdout.splitlines()
+                         capture_output=True, text=True, check=True).stdout.splitlines()
     runs = [l for l in out if " train " in l]
     assert len(runs) == 21
     assert all("--seed 0" in l for l in runs[:7])
@@ -263,7 +263,7 @@ def test_every_matrix_command_is_a_valid_train_command(tmp_path):
     from sightline.cli import build_parser
 
     out = subprocess.run(MATRIX + ["--dry-run", "--runs-dir", str(tmp_path / "runs")],
-                         capture_output=True, text=True, check=True, cwd=REPO).stdout.splitlines()
+                         capture_output=True, text=True, check=True).stdout.splitlines()
     parsed = []
     for line in out:
         if " train " in line:
@@ -283,7 +283,7 @@ def test_every_matrix_command_is_a_valid_train_command(tmp_path):
 
 def test_matrix_only_must_match_a_run(tmp_path):
     r = subprocess.run(MATRIX + ["--dry-run", "--runs-dir", str(tmp_path / "runs"), "--only", "nonet"],
-                       capture_output=True, text=True, cwd=REPO)
+                       capture_output=True, text=True)
     assert r.returncode == 2 and "matches no run" in r.stderr
 
 
@@ -293,7 +293,7 @@ def test_matrix_trains_a_real_run_then_skips_it(tmp_path):
     cmd = MATRIX + ["--drive", "drivetest", "--data-dir", str(tmp_path / "data"), "--runs-dir", str(runs),
                     "--epochs", "1", "--block", "100", "--firewall", "20", "--device", "cpu",
                     "--parallel", "1", "--only", "sightlinenet-1f_blocked_s0$"]
-    first = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    first = subprocess.run(cmd, capture_output=True, text=True)
     assert first.returncode == 0, first.stdout + first.stderr
     run = runs / "drivetest_sightlinenet-1f_blocked_s0"
     finished = (run / "history.json").read_bytes()
@@ -303,7 +303,7 @@ def test_matrix_trains_a_real_run_then_skips_it(tmp_path):
     assert "epoch 1/1" in (runs / "logs" / f"{run.name}.log").read_text()
     assert re.search(rf"done +{run.name} exit 0 in [0-9.]+s", first.stdout)
 
-    second = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    second = subprocess.run(cmd, capture_output=True, text=True)
     assert second.returncode == 0, second.stdout + second.stderr
     assert re.search(rf"skip +{run.name}", second.stdout)
     assert (run / "history.json").read_bytes() == finished
