@@ -1,0 +1,495 @@
+/* Sightline.
+ *
+ * Colour carries meaning, and each colour has one job:
+ *   violet  -- the model: its wheel, its line, and the page's one accent;
+ *   ghost   -- the human driver: a neutral outline beside the model;
+ *   heat    -- where the model looks: a ramp from night through violet and
+ *              ember to pale sun, used for attention and for nothing else.
+ * The ramp rises steadily in luminance, so "where it looks" reads as brightness
+ * over road imagery even without colour vision. The dark theme is the ramp's
+ * own dusk, and the cockpit screen is its darkest step in both themes: video
+ * and heat read best on a dark surround, so the page around the screen follows
+ * the visitor's theme and the screen does not.
+ *
+ * Type is the road's: Barlow draws on California's public lettering -- its car
+ * plates and highway signs -- and the footage is Southern California roads.
+ * Barlow Condensed sets the name, the headings and the live readouts, the
+ * readouts with tabular figures so a changing number never shifts its
+ * neighbours; Barlow sets the text.
+ */
+
+/* -- Fonts ---------------------------------------------------------------- */
+
+/* Latin subsets from Google Fonts, served from this site (licence notice in
+   fonts/NOTICE.md). The range is Google's own for the Latin subset; it covers
+   the degree sign, the multiplication sign and the true minus (U+2212). */
+@font-face {
+  font-family: "Barlow";
+  src: url("./fonts/barlow-400-latin.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Barlow";
+  src: url("./fonts/barlow-600-latin.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("./fonts/barlow-condensed-600-latin.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("./fonts/barlow-condensed-700-latin.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Arial resized to Barlow's measure, for the moment before Barlow arrives:
+   the text then wraps where it will wrap in Barlow, so nothing below it moves
+   when the font swaps in. Values from both fonts' metrics on running English
+   text: size-adjust is the width ratio, the overrides are Barlow's ascent and
+   descent divided by it. */
+@font-face {
+  font-family: "Barlow Fallback";
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("Helvetica");
+  size-adjust: 96.7%;
+  ascent-override: 103.4%;
+  descent-override: 20.7%;
+  line-gap-override: 0%;
+}
+
+/* -- Tokens --------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Type. */
+  --font-display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-text: "Barlow", "Barlow Fallback", Arial, sans-serif;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: clamp(1.125rem, 1.05rem + 0.35vw, 1.3125rem);
+  --display-md: clamp(1.75rem, 1.5rem + 1.1vw, 2.25rem);
+  --display-xl: clamp(3rem, 2.25rem + 3.2vw, 4.5rem);
+
+  /* Space, on a 4 px grid. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+  --space-9: 6rem;
+
+  /* Layout. */
+  --max-width: 75rem;
+  --gutter: 1rem;
+  --wrap: min(100% - 2 * var(--gutter), var(--max-width));
+
+  /* Radii follow rank: the screen is the largest thing on the page, controls
+     are smaller, and a chip is smaller still. */
+  --radius-screen: 1.125rem;
+  --radius-control: 0.625rem;
+  --radius-chip: 0.375rem;
+  --radius-pill: 999px;
+
+  /* Page, light: daylight haze. */
+  --ground: #eeedf3;
+  --surface: #f8f7fb;
+  --ink: #1b1630;
+  --ink-2: #4a4561;
+  --ink-3: #5f5a75;
+  --line: #d6d3e0;
+  --line-strong: #a8a2bb;
+  --link: #7524c4;
+  --focus: #7524c4;
+  --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(27 22 48 / 55%), 0 1rem 2rem -1.25rem rgb(27 22 48 / 30%);
+
+  /* The model's colour. #9333ea is the brand violet; --accent-text is the same
+     hue darkened for text on the light page (6.4:1 on --ground). */
+  --accent: #9333ea;
+  --accent-text: #7524c4;
+  --on-accent: #ffffff;
+
+  /* The cockpit screen: identical in both themes. */
+  --console: #0e0b1d;
+  --console-2: #171330;
+  --console-3: #221c42;
+  --console-edge: rgb(236 233 246 / 10%);
+  --console-ink: #ece9f6;
+  --console-ink-2: #aaa4c4;
+  --model: #b07af7;
+  --human: rgb(236 233 246 / 62%);
+
+  /* Attention: dark to light, steadily rising in relative luminance
+     (0.004, 0.145, 0.294, 0.540, 0.893). Saliency, wherever the page draws
+     it, uses these five stops. */
+  --heat-0: #0e0b1d;
+  --heat-1: #9333ea;
+  --heat-2: #f26a2e;
+  --heat-3: #fdb44b;
+  --heat-4: #fff3c4;
+
+  /* The mark: the same drawing as the favicon. */
+  --mark-tile: #17132a;
+  --mark-wheel: #a866f5;
+  --mark-marker: #fff3c4;
+
+  /* The theme toggle shows the theme a press switches to. */
+  --show-moon: block;
+  --show-sun: none;
+}
+
+/* Page, dark: dusk. Written twice -- once for a system that prefers dark and
+   has no stored choice, once for the stored choice -- because CSS cannot share
+   one block between a media query and an attribute selector. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #17132a;
+    --surface: #201b38;
+    --ink: #ece9f6;
+    --ink-2: #c0bad3;
+    --ink-3: #a19bb8;
+    --line: #302a4b;
+    --line-strong: #5b5380;
+    --link: #c28dfb;
+    --focus: #c28dfb;
+    --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
+    --accent-text: #c28dfb;
+    --mark-tile: #0e0b1d;
+    --show-moon: none;
+    --show-sun: block;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #17132a;
+  --surface: #201b38;
+  --ink: #ece9f6;
+  --ink-2: #c0bad3;
+  --ink-3: #a19bb8;
+  --line: #302a4b;
+  --line-strong: #5b5380;
+  --link: #c28dfb;
+  --focus: #c28dfb;
+  --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
+  --accent-text: #c28dfb;
+  --mark-tile: #0e0b1d;
+  --show-moon: none;
+  --show-sun: block;
+}
+
+@media (min-width: 40rem) {
+  :root {
+    --gutter: 1.5rem;
+  }
+}
+
+@media (min-width: 64rem) {
+  :root {
+    --gutter: 2rem;
+  }
+}
+
+/* -- Base ----------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: var(--text-md);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+main {
+  flex: 1 0 auto;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+h2 {
+  font-size: var(--display-md);
+  letter-spacing: -0.005em;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 32%, transparent);
+}
+
+svg {
+  display: block;
+}
+
+/* Live figures: every digit the same width, so a readout that changes from
+   frame to frame never jostles the text beside it. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.wrap {
+  width: var(--wrap);
+  margin-inline: auto;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* -- Masthead ------------------------------------------------------------- */
+
+.masthead {
+  padding-block: var(--space-5) var(--space-5);
+}
+
+/* Narrow: the name and the toggle share a row, the lede runs beneath. Wide:
+   one band -- name, lede, toggle -- so the cockpit starts high on the screen. */
+.masthead__inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name toggle"
+    "lede lede";
+  align-items: center;
+  gap: var(--space-4) var(--space-5);
+}
+
+@media (min-width: 60rem) {
+  .masthead {
+    padding-block: var(--space-6) var(--space-6);
+  }
+
+  .masthead__inner {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "name lede toggle";
+    column-gap: var(--space-7);
+  }
+}
+
+.wordmark {
+  grid-area: name;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.wordmark__name {
+  font-size: var(--display-xl);
+  font-weight: 700;
+  line-height: 0.9;
+  letter-spacing: -0.012em;
+  /* The cap height sits level with the mark: pull the line box in to the
+     glyphs so the two centre on each other. */
+  padding-block: 0.04em 0;
+}
+
+.mark {
+  inline-size: clamp(2.5rem, 2.1rem + 1.6vw, 3.5rem);
+  block-size: auto;
+  aspect-ratio: 1;
+  flex: none;
+}
+
+.mark__tile {
+  fill: var(--mark-tile);
+}
+
+.mark__wheel {
+  stroke: var(--mark-wheel);
+}
+
+.mark__marker {
+  stroke: var(--mark-marker);
+}
+
+.lede {
+  grid-area: lede;
+  max-width: 36em;
+  font-size: var(--text-lg);
+  line-height: 1.45;
+  color: var(--ink-2);
+  /* Two sentences: balanced lines rather than a long one and a stray word. */
+  text-wrap: balance;
+}
+
+.theme-toggle {
+  grid-area: toggle;
+  justify-self: end;
+  display: inline-grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  /* Only the border, which is what hover changes: a background transition
+     would also play, out of step with the page, whenever the theme switches. */
+  transition: border-color 150ms ease;
+}
+
+.theme-toggle:hover {
+  border-color: var(--line-strong);
+}
+
+.theme-toggle__icon {
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme-toggle__icon--moon {
+  display: var(--show-moon);
+}
+
+.theme-toggle__icon--sun {
+  display: var(--show-sun);
+}
+
+/* -- The cockpit's place -------------------------------------------------- */
+
+/* The screen the live demo runs on. It is dark in both themes and holds its
+   size before anything mounts in it, so the page does not move when it does. */
+.cockpit {
+  width: var(--wrap);
+  margin-inline: auto;
+  min-height: clamp(20rem, 56vh, 40rem);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-screen);
+  background: var(--console);
+  color: var(--console-ink);
+  box-shadow: inset 0 0 0 1px var(--console-edge), var(--shadow-screen);
+}
+
+.cockpit__note {
+  padding: var(--space-5);
+  color: var(--console-ink-2);
+}
+
+/* -- Footer --------------------------------------------------------------- */
+
+.site-footer {
+  margin-top: var(--space-8);
+  border-top: 1px solid var(--line);
+  padding-block: var(--space-6) var(--space-7);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.site-footer__inner {
+  display: grid;
+  gap: var(--space-3);
+}
+
+@media (min-width: 60rem) {
+  .site-footer__inner {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.3fr);
+    gap: var(--space-6);
+  }
+}
+
+.site-footer a {
+  color: var(--ink);
+}
+
+.site-footer__credit > a {
+  font-weight: 600;
+}
+
+.site-footer__source {
+  display: block;
+}
+
+/* -- Motion --------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

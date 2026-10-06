@@ -1,0 +1,18 @@
+(function(){let e=document.createElement(`link`).relList;if(e&&e.supports&&e.supports(`modulepreload`))return;for(let e of document.querySelectorAll(`link[rel="modulepreload"]`))n(e);new MutationObserver(e=>{for(let t of e)if(t.type===`childList`)for(let e of t.addedNodes)e.tagName===`LINK`&&e.rel===`modulepreload`&&n(e)}).observe(document,{childList:!0,subtree:!0});function t(e){let t={};return e.integrity&&(t.integrity=e.integrity),e.referrerPolicy&&(t.referrerPolicy=e.referrerPolicy),t.credentials=e.crossOrigin===`use-credentials`?`include`:e.crossOrigin===`anonymous`?`omit`:`same-origin`,t}function n(e){if(e.ep)return;e.ep=!0;let n=t(e);fetch(e.href,n)}})();var e=`sightline-theme`,t=`theme-toggle`,n=`(prefers-color-scheme: dark)`;function r(e){return e===`light`||e===`dark`}function i(){try{let t=localStorage.getItem(e);return r(t)?t:null}catch{return null}}function a(){return typeof matchMedia==`function`&&matchMedia(n).matches?`dark`:`light`}function o(){let e=document.documentElement.getAttribute(`data-theme`);return r(e)?e:a()}function s(){let e=document.getElementById(t);if(e){let t=o()===`dark`?`light`:`dark`;e.setAttribute(`aria-label`,`Switch to the ${t} theme`)}}function c(){let t=o()===`dark`?`light`:`dark`;document.documentElement.setAttribute(`data-theme`,t);try{localStorage.setItem(e,t)}catch{}s()}function l(){let e=i();e&&document.documentElement.setAttribute(`data-theme`,e),document.getElementById(t)?.addEventListener(`click`,c),typeof matchMedia==`function`&&matchMedia(n).addEventListener(`change`,s),s()}var u=`masthead`;`${u}`;var d=`<svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <rect class="mark__tile" width="32" height="32" rx="8" />
+            <g transform="rotate(-14 16 16)" fill="none" stroke-linecap="round">
+              <circle class="mark__wheel" cx="16" cy="16" r="10.5" stroke-width="3" />
+              <path class="mark__wheel" d="M5.8 16.6h7.4M18.8 16.6h7.4M16 19.6v6.6" stroke-width="3" />
+              <circle class="mark__wheel" cx="16" cy="16.8" r="2.9" stroke-width="2.4" />
+              <path class="mark__marker" d="M14.2 5.66a10.5 10.5 0 0 1 3.6 0" stroke-width="3.4" />
+            </g>
+          </svg>`,f=`<svg class="theme-toggle__icon theme-toggle__icon--moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.4 14.3A8.4 8.4 0 0 1 9.7 3.6a8.4 8.4 0 1 0 10.7 10.7Z" /></svg>`,p=`<svg class="theme-toggle__icon theme-toggle__icon--sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.35 5.35l1.55 1.55M17.1 17.1l1.55 1.55M5.35 18.65l1.55-1.55M17.1 6.9l1.55-1.55" /></svg>`;function m(){return`
+      <div class="masthead__inner wrap">
+        <div class="wordmark">
+          ${d}
+          <h1 class="wordmark__name">Sightline</h1>
+        </div>
+        <p class="lede">A steering model you can watch drive. It runs in your browser on recorded road footage, turns its wheel beside the real driver’s, and shows where on the road it looks.</p>
+        <button class="theme-toggle" id="${t}" type="button" aria-label="Switch between the light and dark themes">${f}${p}</button>
+      </div>
+    `}function h(){let e=document.getElementById(u);e&&!e.querySelector(`h1`)&&(e.innerHTML=m())}console.info(`Sightline — built by Safdar Hussain · https://github.com/safdar-hussain1/sightline`),h(),l();

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Sightline · built by Safdar Hussain · https://github.com/safdar-hussain1 -->
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sightline — a steering model that shows where it looks</title>
+    <meta
+      name="description"
+      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+    />
+    <meta name="author" content="Safdar Hussain" />
+    <meta name="google-site-verification" content="0SIEfExLTSQj1qvnHWF5A5fY58KVl2lpIEnePP9CtI0" />
+    <link rel="canonical" href="https://safdar-hussain1.github.io/sightline/" />
+    <!-- The mark: a steering wheel with the centre marker at twelve o'clock. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#eeedf3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#17132a" media="(prefers-color-scheme: dark)" />
+
+    <!-- Open Graph and Twitter. og-image.png is a screenshot of this page's
+         cockpit in a real browser. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Safdar Hussain" />
+    <meta property="og:title" content="Sightline — a steering model that shows where it looks" />
+    <meta
+      property="og:description"
+      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+    />
+    <meta property="og:url" content="https://safdar-hussain1.github.io/sightline/" />
+    <meta property="og:image" content="https://safdar-hussain1.github.io/sightline/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="The Sightline cockpit on a road clip: a heat map over the road showing where the model looks, and its violet steering wheel beside the driver’s ghost wheel."
+    />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Sightline — a steering model that shows where it looks" />
+    <meta
+      name="twitter:description"
+      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+    />
+    <meta name="twitter:image" content="https://safdar-hussain1.github.io/sightline/og-image.png" />
+    <meta
+      name="twitter:image:alt"
+      content="The Sightline cockpit on a road clip: a heat map over the road showing where the model looks, and its violet steering wheel beside the driver’s ghost wheel."
+    />
+
+    <!-- Structured data: the page as an application you can run, and the
+         repository as its source. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebApplication",
+            "name": "Sightline",
+            "url": "https://safdar-hussain1.github.io/sightline/",
+            "description": "Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is.",
+            "image": "https://safdar-hussain1.github.io/sightline/og-image.png",
+            "applicationCategory": "ReferenceApplication",
+            "operatingSystem": "Any (runs in a web browser)",
+            "browserRequirements": "Requires JavaScript and WebAssembly",
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "author": {
+              "@type": "Person",
+              "name": "Safdar Hussain",
+              "url": "https://github.com/safdar-hussain1",
+              "sameAs": [
+                "https://github.com/safdar-hussain1",
+                "https://www.linkedin.com/in/safdar-hussain-a8a61b248"
+              ]
+            }
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "name": "Sightline",
+            "codeRepository": "https://github.com/safdar-hussain1/sightline",
+            "programmingLanguage": ["Python", "TypeScript"],
+            "license": "https://opensource.org/licenses/MIT",
+            "author": {
+              "@type": "Person",
+              "name": "Safdar Hussain",
+              "url": "https://github.com/safdar-hussain1",
+              "sameAs": [
+                "https://github.com/safdar-hussain1",
+                "https://www.linkedin.com/in/safdar-hussain-a8a61b248"
+              ]
+            }
+          }
+        ]
+      }
+    </script>
+
+    <script>
+      // Before the first paint: a stored theme has to be on <html> before
+      // anything is drawn, or every visit flashes the other theme. theme.ts
+      // owns the choice after load and writes the same key.
+      (function () {
+        try {
+          var theme = localStorage.getItem("sightline-theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+        } catch (error) {
+          // Storage is unavailable (private browsing, blocked site data): the
+          // page follows the system theme.
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="masthead" id="masthead"></header>
+
+    <main id="main">
+      <!-- The live demo mounts into this section. Until it does, the section
+           holds the demo's place on the page, so nothing below it moves. -->
+      <section class="cockpit" id="cockpit" aria-label="Live demo">
+        <noscript><p class="cockpit__note">The live demo needs JavaScript.</p></noscript>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner wrap">
+        <p class="site-footer__credit">
+          <a href="https://github.com/safdar-hussain1">Built by Safdar Hussain</a>
+          <span class="site-footer__source">Source code on <a href="https://github.com/safdar-hussain1/sightline">GitHub</a>, under the MIT licence.</span>
+        </p>
+        <p class="site-footer__note">
+          For research and education only. Neither the model nor the data may be used to steer or
+          control a vehicle.
+        </p>
+        <p class="site-footer__note">
+          Driving footage and steering angles from
+          <a href="https://github.com/SullyChen/driving-datasets">Sully Chen’s driving datasets</a>,
+          under the MIT licence.
+        </p>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
