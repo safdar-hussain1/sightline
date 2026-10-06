@@ -1,16 +1,25 @@
 """Split protocols for video-frame datasets.
 
 Consecutive dashcam frames are near-duplicates: same scene, same label, a
-fraction of a second apart. A random split therefore places frames from the
-same moment on both sides of the train/validation boundary, and validation
-error measures memorization distance instead of generalization. Sightline's
-honest protocol splits chronologically and additionally discards a firewall
-of frames at every boundary so that no validation or test frame is within
-``firewall`` frames of anything the model trained on.
+fraction of a second apart. A split that puts neighbouring frames on both
+sides of the train/evaluation boundary measures memorization distance instead
+of generalization. Three protocols are provided:
 
-``random_split`` is kept, deliberately, as the standard failure mode the
-benchmark reproduces and measures. It is not used for any published headline
-number other than the leakage measurement itself.
+``blocked``
+    Interleaved contiguous blocks (train, validation and test stretches
+    repeating across the whole drive) with a firewall of dropped frames at
+    every train/evaluation boundary. Both sides see the same mix of roads and
+    no evaluation frame is within ``2 * firewall + 1`` frames of a training
+    frame. This is the headline honest protocol.
+``forward``
+    Chronological train | firewall | validation | firewall | test, i.e.
+    training on the earlier part of the drive and testing on the later part
+    (see ``chronological_split``). The same distance guarantee as ``blocked``.
+``leaky``
+    Shuffle the frames, then slice. This is the standard failure mode,
+    reproduced on purpose so its optimism can be measured on exactly the same
+    frames the honest protocol scores (see ``paired_frames``). It is never
+    used for a headline number other than the leakage measurement itself.
 """
 
 from __future__ import annotations
@@ -19,7 +28,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["SplitIndices", "chronological_split", "random_split"]
+__all__ = [
+    "PROTOCOLS",
+    "PUBLIC_NAMES",
+    "SplitIndices",
+    "blocked_split",
+    "chronological_split",
+    "make_split",
+    "paired_frames",
+    "random_split",
+]
+
+PROTOCOLS = ("leaky", "blocked", "forward")
+PUBLIC_NAMES = {"leaky": "shuffled", "blocked": "blocked", "forward": "later in the drive"}
 
 
 @dataclass(frozen=True)
@@ -34,12 +55,12 @@ class SplitIndices:
             if arr.size == 0:
                 raise ValueError(f"{name} split is empty")
         overlap = (
-            set(self.train.tolist()) & set(self.val.tolist())
-            | set(self.train.tolist()) & set(self.test.tolist())
-            | set(self.val.tolist()) & set(self.test.tolist())
+            np.intersect1d(self.train, self.val).size
+            + np.intersect1d(self.train, self.test).size
+            + np.intersect1d(self.val, self.test).size
         )
         if overlap:
-            raise ValueError(f"splits overlap on {len(overlap)} indices")
+            raise ValueError(f"splits overlap on {overlap} indices")
 
     def min_train_distance(self, split: str) -> int:
         """Smallest frame-index distance from ``split`` to any train frame."""
@@ -105,3 +126,46 @@ def random_split(
         val=order[train_end:val_end],
         test=order[val_end:],
     )
+
+
+def blocked_split(n: int, block: int = 1500, firewall: int = 250,
+                  pattern: str = "TTVTTET") -> SplitIndices:
+    """Interleaved contiguous blocks with a firewall at every train/eval boundary.
+
+    The drive is cut into ``block``-frame blocks labelled by repeating
+    ``pattern`` (T train, V validation, E test). ``firewall`` frames are
+    dropped on BOTH sides of every boundary between a training block and an
+    evaluation block, so no evaluation frame is within ``2 * firewall + 1``
+    frames of a training frame — the same guarantee as the forward split —
+    while both sides of the split see the same mix of roads.
+    """
+    if set(pattern) - set("TVE") or not set("TVE") <= set(pattern):
+        raise ValueError(f"pattern must use T, V and E, each at least once: {pattern!r}")
+    if block <= 2 * firewall:
+        raise ValueError(f"block ({block}) must exceed twice the firewall ({firewall})")
+    labels = np.array(list(pattern))[(np.arange(n) // block) % len(pattern)]
+    keep = np.ones(n, dtype=bool)
+    for edge in np.flatnonzero(labels[1:] != labels[:-1]) + 1:
+        if "T" in (labels[edge - 1], labels[edge]):
+            keep[max(0, edge - firewall):min(n, edge + firewall)] = False
+    idx = np.arange(n, dtype=np.int64)
+    return SplitIndices(train=idx[keep & (labels == "T")],
+                        val=idx[keep & (labels == "V")],
+                        test=idx[keep & (labels == "E")])
+
+
+def make_split(protocol: str, n: int, seed: int = 0, firewall: int = 250,
+               block: int = 1500) -> SplitIndices:
+    """Build the split for one of ``PROTOCOLS`` over ``n`` frames."""
+    if protocol == "leaky":
+        return random_split(n, seed=seed)
+    if protocol == "blocked":
+        return blocked_split(n, block=block, firewall=firewall)
+    if protocol == "forward":
+        return chronological_split(n, firewall=firewall)
+    raise ValueError(f"unknown protocol {protocol!r}; expected one of {PROTOCOLS}")
+
+
+def paired_frames(blocked: SplitIndices, leaky: SplitIndices) -> np.ndarray:
+    """Frames held out by BOTH protocols: the paired leakage measurement's set."""
+    return np.intersect1d(blocked.test, leaky.test).astype(np.int64)
