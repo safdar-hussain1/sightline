@@ -1,9 +1,12 @@
 """ONNX export with measured parity.
 
-The exported graph takes raw uint8 RGB frames (N, 66, 200, 3) — exactly what
-a browser canvas yields — and returns steering degrees plus the VisualBackProp
+The exported graph takes raw uint8 RGB frames (N, 66, 200, 3k) — the current
+frame and any history frames stacked along channels, each exactly what a
+browser canvas yields — and returns steering degrees plus the VisualBackProp
 saliency map from one forward pass. Normalization lives inside the graph, so
-there is no client-side preprocessing to drift.
+there is no client-side preprocessing to drift. ``export_run`` records the
+model's ``frame_lags`` beside the graph so a client knows which earlier
+frames to stack.
 
 Export is only considered successful when onnxruntime reproduces the PyTorch
 outputs on real frames within tolerance; the measured maximum differences are
@@ -82,6 +85,7 @@ def export_onnx(
 def export_run(run_dir: Path, out_path: Path, workspace: Workspace, check_frames: int = 64) -> dict:
     """Export a trained run, parity-checked on real test-split frames."""
     from sightline.data.cache import DriveCache
+    from sightline.data.frames import stack_frames
     from sightline.reporting import load_run_model
 
     model, history = load_run_model(run_dir)
@@ -95,9 +99,10 @@ def export_run(run_dir: Path, out_path: Path, workspace: Workspace, check_frames
     cache = DriveCache(cache_dir)
     test_idx = np.load(run_dir / "test_idx.npy")
     step = max(1, test_idx.size // check_frames)
-    sample = np.ascontiguousarray(cache.inputs[np.sort(test_idx)[::step][:check_frames]])
+    sample = stack_frames(cache.inputs, np.sort(test_idx)[::step][:check_frames], model.frame_lags)
 
     result = export_onnx(model, out_path, sample)
     result["run"] = run_dir.name
+    result["frame_lags"] = list(model.frame_lags)
     (out_path.with_suffix(".export.json")).write_text(json.dumps(result, indent=2))
     return result

@@ -4,7 +4,8 @@ Implements the VisualBackProp scheme (Bojarski et al. 2016): average each
 conv layer's post-activation feature maps over channels, then walk from the
 deepest layer back to the input, upsampling and pointwise-multiplying, so
 only regions that stay active through the WHOLE stack survive. The result is
-a 66x200 relevance map over the model's input.
+a 66x200 relevance map over the model's input; when the input stacks history
+frames, the map covers the pixel grid they share.
 
 The map is computed with plain tensor ops (no gradients, no hooks), so
 ``SteeringWithSaliency`` exports to ONNX as a single graph with two outputs

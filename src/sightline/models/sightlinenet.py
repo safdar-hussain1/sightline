@@ -11,6 +11,11 @@ practice:
   stacked on four consecutive FC layers.
 * ~0.3M parameters (PilotNet: ~1.6M), small enough to ship to the browser
   as fp32 ONNX.
+* Optional history frames: ``in_frames`` RGB frames stacked along channels
+  (current frame first), so the first conv sees ``3 * in_frames`` channels.
+  Frame-to-frame image motion shows the car's own rotation, which a single
+  frame cannot. Each extra frame adds 1,800 weights to the first conv
+  (287,489 parameters with one frame, 289,289 with two).
 
 The conv stack keeps VALID padding and the 66x200 input so results are
 directly comparable with PilotNet, and the final feature map keeps its
@@ -39,11 +44,14 @@ def _block(cin: int, cout: int, k: int, stride: int) -> nn.Sequential:
 class SightlineNet(nn.Module):
     FEAT_C, FEAT_H, FEAT_W = 64, 1, 18
 
-    def __init__(self, dropout: float = 0.1):
+    def __init__(self, in_frames: int = 1, dropout: float = 0.1):
         super().__init__()
+        if in_frames < 1:
+            raise ValueError(f"in_frames must be at least 1, got {in_frames}")
+        self.in_frames = in_frames
         self.adapter = InputAdapter()
         self.features = nn.Sequential(
-            _block(3, 24, 5, 2),
+            _block(3 * in_frames, 24, 5, 2),
             _block(24, 36, 5, 2),
             _block(36, 48, 5, 2),
             _block(48, 64, 3, 1),
@@ -63,7 +71,7 @@ class SightlineNet(nn.Module):
         self.OUTPUT_SCALE = 30.0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """uint8 NHWC RGB frames -> steering angle in degrees."""
+        """uint8 NHWC RGB frame stacks -> steering angle in degrees."""
         x = self.adapter(x)
         x = self.features(x)
         x = torch.flatten(x, 1)

@@ -30,11 +30,20 @@ __all__ = ["evaluate_run", "load_run_model"]
 
 
 def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
+    """Construct a run's model from its recorded config and load its best weights."""
     for name in ("history.json", "best.pt"):
         if not (run_dir / name).is_file():
             raise MissingDataError(f"run {run_dir.name!r} not found: expected {run_dir / name}")
     history = json.loads((run_dir / "history.json").read_text())
-    model = build_model(history["config"]["model"])
+    config = history["config"]
+    if "frame_lags" not in config:
+        raise ValueError(
+            f"run predates multi-frame support: {run_dir.name!r} records no frame_lags "
+            "in history.json, so the input its model expects is unknown; train it again"
+        )
+    model = build_model(
+        config["model"], frame_lags=tuple(config["frame_lags"]), dropout=config["dropout"]
+    )
     state = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()

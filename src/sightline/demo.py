@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from sightline.data.cache import build_cache
+from sightline.data.frames import stack_frames
 from sightline.data.labels import load_labels, repair_dropouts
 from sightline.paths import Workspace
 from sightline.saliency import SteeringWithSaliency
@@ -85,7 +86,7 @@ def render_demo(
     smoothed = 0.0
     for i in range(start, end):
         frame = cv2.imread(str(labels.frame_path(i)))
-        model_in = torch.from_numpy(np.ascontiguousarray(cache.inputs[i : i + 1])).to(device)
+        model_in = torch.from_numpy(stack_frames(cache.inputs, np.array([i]), model.frame_lags)).to(device)
         with torch.no_grad():
             angle_t, sal_t = wrapper(model_in)
         angle = float(angle_t[0, 0])

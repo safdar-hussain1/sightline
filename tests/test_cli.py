@@ -73,12 +73,14 @@ def test_export_without_a_drive_cache_names_the_cache_command(tmp_path, capsys):
 
     import torch
 
-    from sightline.models import build_model
+    from sightline.models import MODEL_SPECS, build_model
 
+    spec = MODEL_SPECS["sightlinenet"]
     run = tmp_path / "runs" / "r"
     run.mkdir(parents=True)
-    (run / "history.json").write_text(
-        json.dumps({"config": {"model": "sightlinenet", "notes": {"drive": "drivetest"}}}))
+    (run / "history.json").write_text(json.dumps({"config": {
+        "model": "sightlinenet", "frame_lags": list(spec.frame_lags), "dropout": spec.dropout,
+        "notes": {"drive": "drivetest"}}}))
     torch.save(build_model("sightlinenet").state_dict(), run / "best.pt")
     code = main(["export", "--run", str(run), "--out", str(tmp_path / "x.onnx"),
                  "--runs-dir", str(tmp_path / "runs")])
