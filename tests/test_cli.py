@@ -50,19 +50,20 @@ def test_data_verify_exits_nonzero_on_a_problem(tmp_path, capsys):
     assert code == 1 and "drive2018: PROBLEM" in capsys.readouterr().out
 
 
-def test_help_runs_as_a_module():
+def test_help_runs_as_a_module(tmp_path):
     out = subprocess.run([sys.executable, "-m", "sightline.cli", "--help"],
-                         capture_output=True, text=True, check=True, cwd=REPO,
-                         env={**os.environ, "PYTHONPATH": "src"}).stdout
+                         capture_output=True, text=True, check=True, cwd=tmp_path,
+                         env={**os.environ, "PYTHONPATH": str(REPO / "src")}).stdout
     listed = re.search(r"usage: sightline \[-h\]\s+\{([^}]*)\}", out)  # argparse may wrap the line
     assert listed, out
-    assert {"data", "cache", "train", "eval", "report", "figures", "leakage", "export", "demo"} <= set(
+    assert {"data", "cache", "train", "eval", "report", "figures", "leakage", "legacy", "export", "demo"} <= set(
         listed.group(1).split(","))
 
 
 @pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["report"], ["figures"],
-                                  ["leakage"], ["export"], ["demo"]])
-def test_every_subcommand_has_its_own_help(argv, capsys):
+                                  ["leakage"], ["legacy"], ["export"], ["demo"]])
+def test_every_subcommand_has_its_own_help(argv, capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         main([*argv, "--help"])
     assert exc.value.code == 0

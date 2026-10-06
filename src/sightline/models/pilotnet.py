@@ -11,7 +11,7 @@ reach +501.8 deg. That structural cap is one of the standard failure modes
 Sightline measures, so the port must reproduce it exactly.
 
 ``load_legacy_npz`` fills this module with weights extracted from the
-original TF1 checkpoint (tensors named Variable..Variable_19 in creation
+reference TF1 checkpoint (tensors named Variable..Variable_19 in creation
 order), converting HWIO conv kernels to OIHW and re-ordering the first FC
 layer's input dimension from NHWC flatten order to NCHW flatten order.
 """
@@ -69,9 +69,9 @@ class PilotNet(nn.Module):
         return radians * (180.0 / math.pi)
 
     def load_legacy_npz(self, path: str | Path) -> None:
-        """Load weights extracted from the original TF1 checkpoint.
+        """Load weights extracted from the reference TF1 checkpoint.
 
-        The original network consumed BGR frames scaled to [0, 1]; this
+        The reference network consumed BGR frames scaled to [0, 1]; this
         module's adapter emits RGB scaled to [-1, 1]. Both differences are
         absorbed exactly into the first conv layer (it is linear and VALID
         padded): kernels are channel-swapped and halved, and the bias gains

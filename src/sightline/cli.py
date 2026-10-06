@@ -11,6 +11,7 @@ option, so nothing can shadow silently.
     sightline report  [--in-dir reports/runs] [--out reports/summary.json]
     sightline figures [--summary reports/summary.json] [--out-dir reports/figures]
     sightline leakage --drive drive2018 --seed 0 [--out reports/leakage.json]
+    sightline legacy  --weights PATH [--out reports/legacy.json]
     sightline export  --run runs/... --out web/public/models/sightline.onnx
     sightline demo    --drive drive2017 --run runs/... --out demo.mp4
 
@@ -26,13 +27,17 @@ finished run and skips a run whose report describes its current best.pt
 reports and ``figures`` draws the summary. ``leakage`` measures how close the
 training frames of each split sit to its test frames, in time and in pixels,
 and scores the lookup table the shuffled split rewards: copy the label of the
-most similar training frame.
+most similar training frame. ``legacy`` scores the standard-recipe PilotNet
+(shuffled split, MSE in radians, atan head) from its TF1 weights, which are
+not part of the repository: ``--weights`` or ``SIGHTLINE_LEGACY_WEIGHTS``
+names their .npz.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -264,6 +269,33 @@ def cmd_leakage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_legacy(args: argparse.Namespace) -> int:
+    from sightline.legacy import WEIGHTS_ENV, evaluate_legacy
+    from sightline.reporting import write_report
+
+    weights = args.weights or os.environ.get(WEIGHTS_ENV)
+    if not weights:
+        raise CommandError(f"no weights to score: pass --weights PATH (an .npz of the TF1 tensors "
+                           f"Variable .. Variable_19) or set {WEIGHTS_ENV}")
+    try:
+        report = evaluate_legacy(Path(weights), Workspace(data_dir=Path(args.data_dir)),
+                                 firewall=args.firewall, block=args.block)
+    except ValueError as exc:
+        raise CommandError(f"cannot evaluate the standard-recipe PilotNet: {exc}") from None
+    write_report(Path(args.out), report)
+    parity = report["port_parity"]
+    print(f"the PyTorch port is within {parity['max_abs_diff_deg']:.1e} deg of the TF1 graph "
+          f"on {parity['frames']} frames")
+    for key, score in report["eval"].items():
+        print(f"{key}: MAE {score['model']['mae_deg']:.2f} deg on {score['model']['n']} frames "
+              f"(always straight ahead: {score['zero_mae_deg']:.2f} deg)")
+    cap = report["atan_cap"]
+    print(f"largest |prediction| {cap['max_abs_pred_deg']:.1f} deg; labels past 180 deg: "
+          + ", ".join(f"{drive} {count['n']}" for drive, count in sorted(cap["labels_beyond_180"].items())))
+    print(f"wrote {args.out}")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     from sightline.export.onnx_export import export_run
 
@@ -404,6 +436,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default="reports/leakage.json", help="where to write the report")
     _add_locations(p)
     p.set_defaults(fn=cmd_leakage)
+
+    p = sub.add_parser("legacy", help="score the standard-recipe PilotNet from its TF1 weights")
+    p.add_argument("--weights", default=None,
+                   help="the .npz of its TF1 tensors (default: $SIGHTLINE_LEGACY_WEIGHTS)")
+    p.add_argument("--firewall", type=_int_from(0), default=250,
+                   help="firewall of the drive2018 test splits, as in training")
+    p.add_argument("--block", type=_int_from(1), default=1500,
+                   help="block length of the drive2018 blocked split, as in training")
+    p.add_argument("--out", default="reports/legacy.json", help="where to write the report")
+    p.add_argument("--data-dir", default="data", help="folder holding the drive folders")
+    p.set_defaults(fn=cmd_legacy)
 
     p = sub.add_parser("export", help="export a run to ONNX with saliency output")
     p.add_argument("--run", required=True)
