@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from sightline.data.frames import history_indices, stack_frames
 
 
@@ -26,3 +27,9 @@ def test_stack_frames_orders_channels_current_first():
 def test_no_lags_is_the_single_frame_input():
     inputs = np.arange(5 * 66 * 200 * 3, dtype=np.uint64).astype(np.uint8).reshape(5, 66, 200, 3)
     np.testing.assert_array_equal(stack_frames(inputs, np.array([3]), ()), inputs[[3]])
+
+
+@pytest.mark.parametrize("lags", [(0,), (-2,)])
+def test_lags_must_point_into_the_past(lags):
+    with pytest.raises(ValueError, match="positive"):
+        history_indices(np.arange(5), lags)
