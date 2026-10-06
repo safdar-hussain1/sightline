@@ -23,7 +23,7 @@ from sightline.evaluate import (
     smoothness,
 )
 from sightline.models import build_model
-from sightline.paths import MissingDataError, Workspace
+from sightline.paths import MissingDataError, UnusableRunError, Workspace
 from sightline.train import pick_device, predict
 
 __all__ = ["evaluate_run", "load_run_model"]
@@ -37,7 +37,7 @@ def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
     history = json.loads((run_dir / "history.json").read_text())
     config = history["config"]
     if "frame_lags" not in config:
-        raise ValueError(
+        raise UnusableRunError(
             f"run predates multi-frame support: {run_dir.name!r} records no frame_lags "
             "in history.json, so the input its model expects is unknown; train it again"
         )

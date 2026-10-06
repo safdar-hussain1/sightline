@@ -9,8 +9,8 @@ of generalization. Three protocols are provided:
     Interleaved contiguous blocks (train, validation and test stretches
     repeating across the whole drive) with a firewall of dropped frames at
     every train/evaluation boundary. Both sides see the same mix of roads and
-    no evaluation frame is within ``2 * firewall + 1`` frames of a training
-    frame. This is the headline honest protocol.
+    every evaluation frame is at least ``2 * firewall + 1`` frames from a
+    training frame. This is the headline honest protocol.
 ``forward``
     Chronological train | firewall | validation | firewall | test, i.e.
     training on the earlier part of the drive and testing on the later part
@@ -85,9 +85,9 @@ def chronological_split(
 ) -> SplitIndices:
     """Contiguous train | firewall | val | firewall | test split.
 
-    ``firewall`` frames are dropped on each side of every boundary, so the
-    minimum temporal distance between train and evaluation frames is at least
-    ``firewall`` frames by construction.
+    ``firewall`` frames are dropped on each side of every boundary, so every
+    validation and test frame is at least ``2 * firewall + 1`` frames from a
+    training frame by construction.
     """
     if not 0 < train_frac < 1 or not 0 < val_frac < 1 or train_frac + val_frac >= 1:
         raise ValueError("fractions must be positive and sum below 1")
@@ -135,12 +135,16 @@ def blocked_split(n: int, block: int = 1500, firewall: int = 250,
     The drive is cut into ``block``-frame blocks labelled by repeating
     ``pattern`` (T train, V validation, E test). ``firewall`` frames are
     dropped on BOTH sides of every boundary between a training block and an
-    evaluation block, so no evaluation frame is within ``2 * firewall + 1``
-    frames of a training frame — the same guarantee as the forward split —
-    while both sides of the split see the same mix of roads.
+    evaluation block, so every evaluation frame is at least
+    ``2 * firewall + 1`` frames from a training frame — the same guarantee as
+    the forward split — while both sides of the split see the same mix of
+    roads. Validation and test blocks are not firewalled from each other; the
+    default pattern never places them adjacent.
     """
     if set(pattern) - set("TVE") or not set("TVE") <= set(pattern):
         raise ValueError(f"pattern must use T, V and E, each at least once: {pattern!r}")
+    if firewall < 0:
+        raise ValueError("firewall must be non-negative")
     if block <= 2 * firewall:
         raise ValueError(f"block ({block}) must exceed twice the firewall ({firewall})")
     labels = np.array(list(pattern))[(np.arange(n) // block) % len(pattern)]
@@ -149,9 +153,15 @@ def blocked_split(n: int, block: int = 1500, firewall: int = 250,
         if "T" in (labels[edge - 1], labels[edge]):
             keep[max(0, edge - firewall):min(n, edge + firewall)] = False
     idx = np.arange(n, dtype=np.int64)
-    return SplitIndices(train=idx[keep & (labels == "T")],
-                        val=idx[keep & (labels == "V")],
-                        test=idx[keep & (labels == "E")])
+    parts = {name: idx[keep & (labels == code)]
+             for name, code in (("train", "T"), ("val", "V"), ("test", "E"))}
+    empty = [name for name, part in parts.items() if part.size == 0]
+    if empty:
+        raise ValueError(
+            f"n={n} too small for the blocked split with block={block}, firewall={firewall}: "
+            f"no {' or '.join(empty)} frames"
+        )
+    return SplitIndices(**parts)
 
 
 def make_split(protocol: str, n: int, seed: int = 0, firewall: int = 250,

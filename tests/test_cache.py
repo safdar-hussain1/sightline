@@ -9,12 +9,17 @@ def test_unchanged_drive_reuses_the_cache(tmp_path):
     drive = make_drive(tmp_path, "drivetest", n=10)
     cache_dir = tmp_path / "cache"
     build_cache(load_labels(drive), cache_dir)
-    before = [(p.name, p.stat().st_mtime_ns) for p in sorted(cache_dir.iterdir())]
-    build_cache(load_labels(drive), cache_dir)
-    assert before == [(p.name, p.stat().st_mtime_ns) for p in sorted(cache_dir.iterdir())]
+    # a byte that differs from what preprocessing wrote; regenerating would overwrite it
+    with open(cache_dir / "inputs.u8", "r+b") as f:
+        sentinel = (f.read(1)[0] + 128) % 256
+        f.seek(0)
+        f.write(bytes([sentinel]))
+    cache = build_cache(load_labels(drive), cache_dir)
+    assert (cache_dir / "inputs.u8").read_bytes()[0] == sentinel
+    assert cache.inputs[0, 0, 0, 0] == sentinel
 
 
-def test_same_size_label_edit_forces_a_rebuild(tmp_path):
+def test_same_size_label_edit_regenerates_the_cache(tmp_path):
     drive = make_drive(tmp_path, "drivetest", n=10, timestamps=False)
     cache_dir = tmp_path / "cache"
     first = float(build_cache(load_labels(drive), cache_dir).angles_deg[0])

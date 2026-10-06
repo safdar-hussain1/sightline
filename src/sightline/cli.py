@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from sightline.paths import MissingDataError, Workspace
+from sightline.paths import MissingDataError, UnusableRunError, Workspace
 
 
 def _workspace(args: argparse.Namespace) -> Workspace:
@@ -130,7 +130,7 @@ def cmd_data_verify(args: argparse.Namespace) -> int:
     failed = False
     for name in args.drive or sorted(KNOWN_DRIVES):
         try:
-            report = verify_drive(ws.drive(name), name)
+            report = verify_drive(ws.drive(name, verify_hint=False), name)
         except MissingDataError as exc:
             report = {"ok": False, "problems": [str(exc)]}
         if report["ok"]:
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.fn(args)
-    except MissingDataError as exc:
+    except (MissingDataError, UnusableRunError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

@@ -60,4 +60,32 @@ def test_make_split_rejects_unknown_protocols():
 
 def test_forward_is_the_chronological_split():
     f, c = make_split("forward", N), chronological_split(N)
-    np.testing.assert_array_equal(f.test, c.test)
+    for name in ("train", "val", "test"):
+        np.testing.assert_array_equal(getattr(f, name), getattr(c, name))
+
+def test_make_split_passes_block_and_firewall_through():
+    m, b = make_split("blocked", N, block=700, firewall=100), blocked_split(N, block=700, firewall=100)
+    for name in ("train", "val", "test"):
+        np.testing.assert_array_equal(getattr(m, name), getattr(b, name))
+    assert m.train.size != blocked_split(N).train.size
+    f, c = make_split("forward", N, firewall=100), chronological_split(N, firewall=100)
+    for name in ("train", "val", "test"):
+        np.testing.assert_array_equal(getattr(f, name), getattr(c, name))
+
+@pytest.mark.parametrize("protocol", ["blocked", "forward"])
+@pytest.mark.parametrize("firewall", [0, 20, 250])
+def test_the_closest_eval_frame_is_exactly_2_firewall_plus_1_from_training(protocol, firewall):
+    s = make_split(protocol, N, firewall=firewall)
+    assert min(s.min_train_distance("val"), s.min_train_distance("test")) == 2 * firewall + 1
+
+@pytest.mark.parametrize("protocol", ["blocked", "forward"])
+def test_a_negative_firewall_is_rejected(protocol):
+    with pytest.raises(ValueError, match="firewall must be non-negative"):
+        make_split(protocol, N, firewall=-1)
+
+@pytest.mark.parametrize("n", [1, 2000, 3001, 7500, 7501])
+def test_blocked_split_says_when_the_drive_is_too_short(n):
+    # 1500-frame blocks TTVTTET: no validation frame before 3000 (and a 1-frame
+    # validation block at 3000 sits inside the firewall); no test frame before 7500
+    with pytest.raises(ValueError, match=f"n={n} too small for the blocked split"):
+        blocked_split(n)
