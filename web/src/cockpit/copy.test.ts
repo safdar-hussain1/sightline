@@ -1,0 +1,108 @@
+import { describe, expect, it } from "vitest";
+
+import { AssetError } from "../data/load.ts";
+import type { Clip } from "../data/types.ts";
+import { eyeCaption, failureMessage, modelNote, splitTitle } from "./copy.ts";
+
+/** The parts of a clip the copy reads. */
+function clip(overrides: Partial<Clip> = {}): Clip {
+  return {
+    id: "c2018",
+    drive: "drive2018",
+    title: "2018: minutes it never trained on",
+    fps: 17.5,
+    n: 420,
+    lead_in: 2,
+    first_frame: 28752,
+    frame_lags: [2],
+    rule: "",
+    labels_deg: [],
+    expected: { sightline: [], shuffled: [] },
+    sprite: { files: [], frames_per_sheet: 60, frame_w: 200, frame_h: 66, decoded_sha256: [] },
+    video: "clip.mp4",
+    video_size: [456, 256],
+    camera_size: [455, 256],
+    clip_mae_deg: { sightline: 14.26, shuffled: 5.63, zero: 46.7 },
+    twin_trained_frac: 0.7095,
+    twin_neighbour_frac: 0.9714,
+    ...overrides,
+  };
+}
+
+describe("modelNote", () => {
+  it("says what Sightline is, whatever the clip", () => {
+    expect(modelNote("sightline", clip())).toBe(modelNote("sightline", null));
+    expect(modelNote("sightline", null)).toMatch(/held back/);
+  });
+
+  it("explains a twin that looks better here by the frames it trained on, from the clip's own numbers", () => {
+    expect(modelNote("shuffled", clip())).toBe(
+      "The same network, trained on shuffled frames. It looks better on this clip because it trained on 71% of these very frames, and 97% sit within one frame of one it trained on.",
+    );
+  });
+
+  it("does not say the twin looks better on a clip where it does not", () => {
+    const note = modelNote("shuffled", clip({ clip_mae_deg: { sightline: 5, shuffled: 6, zero: 40 } }));
+    expect(note).not.toMatch(/better/);
+    expect(note).toMatch(/71% of these very frames/);
+  });
+
+  it("says so when the twin never trained on the clip", () => {
+    expect(
+      modelNote("shuffled", clip({ twin_trained_frac: 0, twin_neighbour_frac: 0, clip_mae_deg: { sightline: 10.78, shuffled: 14.17, zero: 42.1 } })),
+    ).toBe("The same network, trained on shuffled frames. It never trained on any frame of this clip.");
+  });
+
+  it("claims nothing about the clip when the clip file does not say", () => {
+    const { twin_trained_frac: _, twin_neighbour_frac: __, ...older } = clip();
+    expect(modelNote("shuffled", older)).toBe("The same network, trained on shuffled frames.");
+  });
+});
+
+describe("splitTitle", () => {
+  it("splits a clip title into its year and its description", () => {
+    expect(splitTitle("2018: minutes it never trained on")).toEqual(["2018", "minutes it never trained on"]);
+    expect(splitTitle("2017: another day")).toEqual(["2017", "another day"]);
+  });
+
+  it("treats a title without a colon as all description", () => {
+    expect(splitTitle("a clip")).toEqual(["", "a clip"]);
+  });
+});
+
+describe("eyeCaption", () => {
+  it("states the input's size and the history frame's age from the clip", () => {
+    expect(eyeCaption(clip())).toBe(
+      "What the model gets: 200 × 66 pixels of this frame and of the one 114 ms before it, with where it looked.",
+    );
+  });
+
+  it("follows the clip's own lags and rate", () => {
+    expect(eyeCaption(clip({ frame_lags: [1, 3], fps: 10 }))).toMatch(/the ones 100 ms and 300 ms before it/);
+    expect(eyeCaption(clip({ frame_lags: [] }))).toBe(
+      "What the model gets: 200 × 66 pixels of this frame, with where it looked.",
+    );
+  });
+});
+
+describe("failureMessage", () => {
+  it("says in plain words why the demo cannot run, by what went wrong", () => {
+    expect(failureMessage(new AssetError("x", "missing", "u"))).toMatch(/not on this copy of the site/);
+    expect(failureMessage(new AssetError("x", "unreachable", "u"))).toMatch(/could not download.*reload/);
+    expect(failureMessage(new AssetError("x", "invalid", "u"))).toMatch(/not in the form this page reads/);
+    expect(failureMessage(new AssetError("x", "undecodable", "u"))).toMatch(/could not decode the clip/);
+    expect(failureMessage(new Error("no available backend found"))).toMatch(/could not run the model/);
+  });
+
+  it("never shows a URL or a stack of technical detail", () => {
+    for (const error of [
+      new AssetError("could not reach http://127.0.0.1/data/results.json: Failed to fetch", "unreachable", "http://127.0.0.1/data/results.json"),
+      new Error("WebAssembly SIMD is not supported in the current environment."),
+      "a string",
+    ]) {
+      const message = failureMessage(error);
+      expect(message).not.toMatch(/https?:|Failed to fetch|WebAssembly SIMD/);
+      expect(message.endsWith(".")).toBe(true);
+    }
+  });
+});

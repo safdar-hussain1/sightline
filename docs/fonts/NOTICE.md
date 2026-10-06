@@ -1,9 +1,8 @@
 # Fonts shipped with this site
 
-This notice is published next to the page because the SIL Open Font License asks
-for it to travel with the font files. The files themselves sit beside the sources
-in `web/src/fonts/`, and the build serves them from `assets/` with a content hash
-in each name; match them by family and weight below rather than by file name.
+This notice is published beside the font files because the SIL Open Font License
+asks for it to travel with them: they are the `.woff2` files in this folder, served
+under their own names.
 
 The page is set in Barlow, a typeface that draws on California's public
 lettering: its car plates, highway signs, buses and trains. Barlow Condensed sets

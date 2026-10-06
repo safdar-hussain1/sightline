@@ -20,12 +20,14 @@
 
 /* -- Fonts ---------------------------------------------------------------- */
 
-/* Latin subsets from Google Fonts, served from this site (licence notice in
-   fonts/NOTICE.md). The range is Google's own for the Latin subset; it covers
-   the degree sign, the multiplication sign and the true minus (U+2212). */
+/* Latin subsets from Google Fonts, served from this site under stable names in
+   fonts/, beside their licence notice (fonts/NOTICE.md); index.html preloads
+   the face the heading uses. The range is Google's own for the Latin subset;
+   it covers the degree sign, the multiplication sign and the true minus
+   (U+2212). */
 @font-face {
   font-family: "Barlow";
-  src: url("./fonts/barlow-400-latin.woff2") format("woff2");
+  src: url("/fonts/barlow-400-latin.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -34,7 +36,7 @@
 
 @font-face {
   font-family: "Barlow";
-  src: url("./fonts/barlow-600-latin.woff2") format("woff2");
+  src: url("/fonts/barlow-600-latin.woff2") format("woff2");
   font-weight: 600;
   font-style: normal;
   font-display: swap;
@@ -43,7 +45,7 @@
 
 @font-face {
   font-family: "Barlow Condensed";
-  src: url("./fonts/barlow-condensed-600-latin.woff2") format("woff2");
+  src: url("/fonts/barlow-condensed-600-latin.woff2") format("woff2");
   font-weight: 600;
   font-style: normal;
   font-display: swap;
@@ -52,7 +54,7 @@
 
 @font-face {
   font-family: "Barlow Condensed";
-  src: url("./fonts/barlow-condensed-700-latin.woff2") format("woff2");
+  src: url("/fonts/barlow-condensed-700-latin.woff2") format("woff2");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -125,6 +127,7 @@
   /* The model's colour. #9333ea is the brand violet; --accent-text is the same
      hue darkened for text on the light page (6.4:1 on --ground). */
   --accent: #9333ea;
+  --accent-halo: rgb(147 51 234 / 38%);
   --accent-text: #7524c4;
   --on-accent: #ffffff;
 
@@ -132,11 +135,28 @@
   --console: #0e0b1d;
   --console-2: #171330;
   --console-3: #221c42;
-  --console-edge: rgb(236 233 246 / 10%);
   --console-ink: #ece9f6;
   --console-ink-2: #aaa4c4;
+  --console-line: rgb(236 233 246 / 16%);
+  --console-selected: rgb(194 141 251 / 55%);
+  --console-focus: #c28dfb;
   --model: #b07af7;
+  --model-stripe: #e7d6ff;
+  --model-unlit: #3a3456;
   --human: rgb(236 233 246 / 62%);
+  --human-shadow: rgb(236 233 246 / 24%);
+  /* The gap between the model's wheel and the driver's. */
+  --gap-arc: #ece9f6;
+  /* The error strip: one violet ramp, dim to bright, for how hard the driver
+     was turning (checked: monotone lightness, 3.6:1 for the dimmest step on
+     the strip's ground). */
+  --regime-straight: #7a5fc0;
+  --regime-gentle: #ac86f6;
+  --regime-sharp: #e6d6ff;
+  --strip-average: rgb(236 233 246 / 70%);
+  --strip-playhead: #ece9f6;
+  /* On the light page the dark screen stands out by itself. */
+  --console-frame: 0 0 0 0 transparent;
 
   /* Attention: dark to light, steadily rising in relative luminance
      (0.004, 0.145, 0.294, 0.540, 0.893). Saliency, wherever the page draws
@@ -174,6 +194,7 @@
     --focus: #c28dfb;
     --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
     --accent-text: #c28dfb;
+    --console-frame: 0 0 0 1px #4d4475, 0 0 0 5px rgb(147 51 234 / 10%);
     --mark-tile: #0e0b1d;
     --show-moon: none;
     --show-sun: block;
@@ -193,6 +214,7 @@
   --focus: #c28dfb;
   --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
   --accent-text: #c28dfb;
+  --console-frame: 0 0 0 1px #4d4475, 0 0 0 5px rgb(147 51 234 / 10%);
   --mark-tile: #0e0b1d;
   --show-moon: none;
   --show-sun: block;
@@ -328,7 +350,7 @@ svg {
 
 @media (min-width: 60rem) {
   .masthead {
-    padding-block: var(--space-6) var(--space-6);
+    padding-block: var(--space-5) var(--space-5);
   }
 
   .masthead__inner {
@@ -393,7 +415,7 @@ svg {
   inline-size: 2.75rem;
   block-size: 2.75rem;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--ink);
@@ -401,10 +423,17 @@ svg {
   /* Only the border, which is what hover changes: a background transition
      would also play, out of step with the page, whenever the theme switches. */
   transition: border-color 150ms ease;
+  /* It needs a script to work; until index.html's first script marks the page
+     with the "js" class, it holds its place unseen. */
+  visibility: hidden;
+}
+
+.js .theme-toggle {
+  visibility: visible;
 }
 
 .theme-toggle:hover {
-  border-color: var(--line-strong);
+  border-color: var(--ink-3);
 }
 
 .theme-toggle__icon {
@@ -425,24 +454,674 @@ svg {
   display: var(--show-sun);
 }
 
-/* -- The cockpit's place -------------------------------------------------- */
+/* -- The cockpit ----------------------------------------------------------- */
 
-/* The screen the live demo runs on. It is dark in both themes and holds its
-   size before anything mounts in it, so the page does not move when it does. */
+/* The live demo: the footage with the model's heat on it, the wheel, the
+   readouts and the strip, on one dark screen. On a phone it is one column,
+   footage first and the wheel right under it; on a wide screen the footage and
+   its controls take the left and the instruments the right. The build writes
+   this markup into the page, so it holds its final size from the first paint. */
+
 .cockpit {
-  width: var(--wrap);
-  margin-inline: auto;
-  min-height: clamp(20rem, 56vh, 40rem);
+  scroll-margin-top: var(--space-4);
+}
+
+.cockpit__console {
   display: grid;
-  place-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "clips"
+    "screen"
+    "instruments"
+    "transport"
+    "key"
+    "models"
+    "note"
+    "eye";
+  gap: var(--space-4);
+  padding: var(--space-3);
   border-radius: var(--radius-screen);
   background: var(--console);
   color: var(--console-ink);
-  box-shadow: inset 0 0 0 1px var(--console-edge), var(--shadow-screen);
+  box-shadow: var(--console-frame), var(--shadow-screen);
 }
 
-.cockpit__note {
+/* Inside the screen, focus has to show on the dark console in both themes. */
+.cockpit__console :focus-visible {
+  outline-color: var(--console-focus);
+}
+
+.cockpit__side {
+  display: contents;
+}
+
+@media (min-width: 40rem) {
+  .cockpit__console {
+    padding: var(--space-4);
+  }
+}
+
+@media (min-width: 60rem) {
+  .cockpit__console {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+    grid-template-areas:
+      "clips     models"
+      "screen    side"
+      "transport side"
+      "key       side"
+      ".         side";
+    grid-template-rows: auto auto auto auto 1fr;
+    column-gap: var(--space-6);
+    row-gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+  }
+
+  .cockpit__side {
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+}
+
+/* -- Pickers: which footage, which model. Radio buttons drawn as two
+   segments, so the arrow keys and screen readers treat them as one choice. */
+
+.picker {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1);
+  /* Room for the options before the clip files name them. */
+  min-height: 3.5rem;
+}
+
+.picker--clips {
+  grid-area: clips;
+}
+
+.picker--models {
+  grid-area: models;
+}
+
+.picker__option {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 0.125rem;
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-3);
+  border-radius: calc(var(--radius-control) - 0.25rem);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.picker__option:hover {
+  background: var(--console-3);
+}
+
+.picker__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.picker__option:has(.picker__input:checked) {
+  background: var(--console-3);
+  box-shadow: inset 0 0 0 1px var(--console-selected);
+}
+
+.picker__option:has(.picker__input:focus-visible) {
+  outline: 2px solid var(--console-focus);
+  outline-offset: 2px;
+}
+
+.picker[disabled] .picker__option {
+  cursor: default;
+}
+
+.picker[disabled] {
+  opacity: 0.6;
+}
+
+/* Before the clip files name the clips there is nothing to choose: the picker
+   holds its place without drawing an empty bar. */
+.picker:not(:has(.picker__option)) {
+  background: transparent;
+}
+
+.picker__lead {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.picker__sub {
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--console-ink-2);
+  text-wrap: balance;
+}
+
+/* -- The windshield: the camera frame, and the band of it the model sees,
+   painted with where it looked. */
+
+.windshield {
+  grid-area: screen;
+  position: relative;
+  margin: 0;
+  aspect-ratio: var(--camera-aspect, 16 / 9);
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+}
+
+.windshield__camera {
+  position: absolute;
+  inset: 0;
+}
+
+/* The video carries one padding column more than the camera frame; it is
+   drawn that much wider and the column falls outside the windshield. */
+.windshield__video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: calc(100% * var(--video-overhang, 1));
+  height: 100%;
+  object-fit: fill;
+}
+
+.windshield__band {
+  position: absolute;
+  inset: calc(var(--band-top, 0.42) * 100%) 0 0 0;
+  border-top: 1px solid rgb(255 255 255 / 75%);
+  transition: opacity 400ms ease;
+}
+
+.windshield__heat {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.windshield__tag {
+  position: absolute;
+  top: 0;
+  left: var(--space-3);
+  translate: 0 -50%;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-chip);
+  background: rgb(14 11 29 / 82%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 30%);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.windshield__status {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  max-width: calc(100% - 2 * var(--space-3));
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-chip);
+  background: rgb(14 11 29 / 82%);
+  font-size: var(--text-sm);
+}
+
+.windshield__status[hidden],
+html:not(.js) .windshield__status {
+  display: none;
+}
+
+/* Before the clip is ready, and when it cannot run, the message is the
+   windshield's whole content. */
+[data-state="loading"] .windshield__status,
+[data-state="unavailable"] .windshield__status {
+  inset: 0;
+  max-width: none;
+  display: grid;
+  place-items: center;
   padding: var(--space-5);
+  border-radius: 0;
+  background: transparent;
+  color: var(--console-ink-2);
+  font-size: var(--text-md);
+  text-align: center;
+  text-wrap: balance;
+}
+
+[data-state="loading"] .windshield__band,
+[data-state="unavailable"] .windshield__band {
+  opacity: 0;
+}
+
+.cockpit__noscript {
+  grid-column: 1 / -1;
+  color: var(--console-ink-2);
+}
+
+/* -- Transport: one big play button, a frame back and forward, and the strip. */
+
+.transport {
+  grid-area: transport;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "play back forward ."
+    "strip strip strip strip";
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@media (min-width: 40rem) {
+  .transport {
+    grid-template-areas: "play back forward strip";
+    column-gap: var(--space-2);
+  }
+}
+
+.play {
+  grid-area: play;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 7.5rem;
+  min-height: 3rem;
+  padding: 0 var(--space-5) 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 600 var(--text-md) / 1 var(--font-text);
+  cursor: pointer;
+  transition: box-shadow 150ms ease;
+}
+
+/* Hover adds a halo rather than a lighter fill, which would take the label
+   under 4.5:1. */
+.play:hover:not(:disabled) {
+  box-shadow: 0 0 0 4px var(--accent-halo);
+}
+
+.play:disabled,
+.step:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.play__icon {
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  fill: currentColor;
+}
+
+.play__icon--pause,
+.play[data-playing="true"] .play__icon--play {
+  display: none;
+}
+
+.play[data-playing="true"] .play__icon--pause {
+  display: block;
+}
+
+.step {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--console-line);
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+  color: var(--console-ink);
+  cursor: pointer;
+}
+
+.step:hover:not(:disabled) {
+  background: var(--console-3);
+}
+
+.step[data-cockpit="back"] {
+  grid-area: back;
+}
+
+.step[data-cockpit="forward"] {
+  grid-area: forward;
+}
+
+.step__icon {
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.strip {
+  grid-area: strip;
+  position: relative;
+  height: 3rem;
+  border-radius: var(--radius-chip);
+  background: var(--console-2);
+  cursor: pointer;
+  /* The strip is a scrubber: a drag across it must not scroll the page. */
+  touch-action: none;
+}
+
+.strip[aria-disabled="true"] {
+  cursor: default;
+}
+
+.strip__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* -- The strip's key, its average, and any standing remark about the clip. */
+
+.strip-key {
+  grid-area: key;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-5);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--console-ink-2);
+}
+
+.strip-key__title {
+  color: var(--console-ink);
+  font-weight: 600;
+}
+
+.strip-key__regimes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.strip-key__average {
+  margin-left: auto;
+}
+
+.swatch {
+  display: inline-block;
+  inline-size: 0.625rem;
+  block-size: 0.625rem;
+  margin-right: 0.375rem;
+  border-radius: 2px;
+}
+
+.swatch--straight {
+  background: var(--regime-straight);
+}
+
+.swatch--gentle {
+  background: var(--regime-gentle);
+}
+
+.swatch--sharp {
+  background: var(--regime-sharp);
+}
+
+.swatch--average {
+  inline-size: 1rem;
+  block-size: 0;
+  border-top: 1px solid var(--strip-average);
+  border-radius: 0;
+  vertical-align: middle;
+}
+
+.cockpit__notice {
+  flex-basis: 100%;
+  color: var(--console-ink);
+}
+
+/* -- The model's note: what the selected model is, and what this clip is to it. */
+
+.model-note {
+  grid-area: note;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--console-ink-2);
+}
+
+@media (min-width: 60rem) {
+  /* Above the wheel, the note holds the height of the longest one, so
+     switching models does not move the wheel. */
+  .model-note {
+    min-height: 6em;
+  }
+}
+
+/* -- Instruments: the wheel and its readouts. */
+
+.instruments {
+  grid-area: instruments;
+  display: grid;
+  grid-template-columns: minmax(8rem, 2fr) minmax(0, 3fr);
+  align-items: center;
+  gap: var(--space-4);
+}
+
+@media (min-width: 60rem) {
+  .instruments {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .wheel-box {
+    inline-size: min(100%, 14.5rem);
+    margin-inline: auto;
+  }
+}
+
+.wheel {
+  inline-size: 100%;
+  block-size: auto;
+  overflow: visible;
+}
+
+.wheel__track {
+  fill: none;
+  stroke: var(--console-line);
+  stroke-width: 1.5;
+}
+
+.wheel__gap {
+  fill: none;
+  stroke: var(--gap-arc);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.wheel__turn {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  /* About one frame of the clip: the wheel moves between frames instead of
+     jumping. Reduced motion turns it off with every other transition. */
+  transition: transform 60ms linear;
+}
+
+/* The driver's wheel is a shadow behind the model's: spokes wider and fainter
+   than the model's, so where the two agree it is a halo round each spoke, and
+   where they differ it shows as a second wheel turned to the driver's angle. */
+.wheel__ghost-spokes {
+  fill: none;
+  stroke: var(--human-shadow);
+  stroke-width: 26;
+  stroke-linecap: round;
+}
+
+.wheel__ghost-pointer {
+  fill: none;
+  stroke: var(--human);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.wheel__model {
+  --wheel-ink: var(--model);
+}
+
+.wheel__rim {
+  fill: none;
+  stroke: var(--wheel-ink);
+  stroke-width: 16;
+  transition: stroke 400ms ease;
+}
+
+.wheel__stripe {
+  fill: none;
+  stroke: var(--model-stripe);
+  stroke-width: 16;
+  transition: stroke 400ms ease;
+}
+
+.wheel__spokes {
+  fill: none;
+  stroke: var(--wheel-ink);
+  stroke-width: 13;
+  stroke-linecap: round;
+  transition: stroke 400ms ease;
+}
+
+.wheel__hub {
+  fill: var(--console-3);
+  stroke: var(--wheel-ink);
+  stroke-width: 5;
+  transition: stroke 400ms ease;
+}
+
+.wheel__pointer {
+  fill: var(--wheel-ink);
+  transition: fill 400ms ease;
+}
+
+/* Until the model is running, its wheel is unlit and the driver's ghost is
+   not shown: there is nothing yet to compare. */
+[data-state="loading"] .wheel__model,
+[data-state="unavailable"] .wheel__model {
+  --wheel-ink: var(--model-unlit);
+  --model-stripe: var(--model-unlit);
+}
+
+[data-state="loading"] .wheel__ghost,
+[data-state="unavailable"] .wheel__ghost {
+  opacity: 0;
+}
+
+.readouts {
+  display: grid;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+
+@media (min-width: 60rem) {
+  .readouts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.readout {
+  min-width: 0;
+}
+
+.readout dt {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--console-ink-2);
+}
+
+.readout dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.3em;
+  line-height: 1.15;
+  color: var(--console-ink);
+}
+
+.readout__size {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 1.3rem + 0.8vw, 1.875rem);
+  font-weight: 600;
+}
+
+.readout__side {
+  font-size: var(--text-sm);
+  color: var(--console-ink-2);
+}
+
+.key {
+  inline-size: 0.875rem;
+  block-size: 0.75rem;
+  flex: none;
+}
+
+.key--model path {
+  fill: var(--model);
+}
+
+.key--driver path {
+  fill: none;
+  stroke: var(--human);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.key--gap path {
+  fill: none;
+  stroke: var(--gap-arc);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+/* -- The model's eye: its own 200 x 66 input, pixel for pixel. */
+
+.eye {
+  grid-area: eye;
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.eye__canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  aspect-ratio: 200 / 66;
+  border-radius: var(--radius-chip);
+  background: var(--console-2);
+  image-rendering: pixelated;
+}
+
+.eye__caption {
+  font-size: 0.8125rem;
+  line-height: 1.4;
   color: var(--console-ink-2);
 }
 

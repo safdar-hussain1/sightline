@@ -17,3 +17,10 @@ declare module "*?raw" {
   const text: string;
   export default text;
 }
+
+/** `import url from "...?url"`: the URL the bundler gives the file in the
+ * build -- for the runtime's wasm binary, a hashed file beside the app. */
+declare module "*?url" {
+  const url: string;
+  export default url;
+}

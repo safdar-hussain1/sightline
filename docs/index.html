@@ -15,6 +15,8 @@
     <!-- The mark: a steering wheel with the centre marker at twelve o'clock. -->
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <meta name="color-scheme" content="light dark" />
+    <!-- The heading's face, wanted for the first paint. -->
+    <link rel="preload" href="./fonts/barlow-condensed-700-latin.woff2" as="font" type="font/woff2" crossorigin />
     <meta name="theme-color" content="#eeedf3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#17132a" media="(prefers-color-scheme: dark)" />
 
@@ -98,8 +100,11 @@
     <script>
       // Before the first paint: a stored theme has to be on <html> before
       // anything is drawn, or every visit flashes the other theme. theme.ts
-      // owns the choice after load and writes the same key.
+      // owns the choice after load and writes the same key. The "js" class
+      // shows the controls that need scripts (the theme toggle, the demo's
+      // status line); without scripts they stay out of sight.
       (function () {
+        document.documentElement.classList.add("js");
         try {
           var theme = localStorage.getItem("sightline-theme");
           if (theme === "light" || theme === "dark") {
@@ -111,8 +116,8 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-DNKpjXsw.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CouDVdKV.css">
+    <script type="module" crossorigin src="./assets/index-DlNO8bFh.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BEIDGJbf.css">
   </head>
   <body>
     <header class="masthead" id="masthead">
@@ -135,10 +140,71 @@
     </header>
 
     <main id="main">
-      <!-- The live demo mounts into this section. Until it does, the section
-           holds the demo's place on the page, so nothing below it moves. -->
+      <!-- The live demo. The build writes its markup in, so the first paint
+           already has its layout and nothing below it moves when it starts. -->
       <section class="cockpit" id="cockpit" aria-label="Live demo">
-        <noscript><p class="cockpit__note">The live demo needs JavaScript.</p></noscript>
+        <div class="cockpit__console wrap" data-state="loading">
+          <fieldset class="picker picker--clips" data-cockpit="clips" disabled>
+            <legend class="visually-hidden">Footage</legend>
+          </fieldset>
+
+          <figure class="windshield" data-cockpit="windshield">
+            <div class="windshield__camera">
+              <video class="windshield__video" data-cockpit="video" muted playsinline loop preload="none" disablepictureinpicture aria-hidden="true" tabindex="-1"></video>
+              <div class="windshield__band" data-cockpit="band" aria-hidden="true">
+                <canvas class="windshield__heat" data-cockpit="heat" width="200" height="66"></canvas>
+                <span class="windshield__tag">What the model sees</span>
+              </div>
+            </div>
+            <p class="windshield__status" data-cockpit="status" role="status">Loading the model and the footage</p>
+          </figure>
+
+          <div class="transport">
+            <button class="play" data-cockpit="play" type="button" disabled><svg class="play__icon play__icon--play" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l10.5-6.5z"/></svg><svg class="play__icon play__icon--pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg><span class="play__label" data-cockpit="play-label">Play</span></button>
+            <button class="step" data-cockpit="back" type="button" aria-label="Back one frame" disabled><svg class="step__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button>
+            <button class="step" data-cockpit="forward" type="button" aria-label="Forward one frame" disabled><svg class="step__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9.5 6.5 5.5 5.5-5.5 5.5"/></svg></button>
+            <div class="strip" data-cockpit="strip" role="slider" tabindex="-1" aria-label="Position in the clip" aria-disabled="true" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="No clip loaded yet">
+              <canvas class="strip__canvas" data-cockpit="strip-canvas" aria-hidden="true"></canvas>
+            </div>
+          </div>
+
+          <div class="strip-key">
+            <p class="strip-key__title">How far off, frame by frame</p>
+            <ul class="strip-key__regimes" aria-label="Column colour: how hard the driver was turning">
+              <li><span class="swatch swatch--straight" aria-hidden="true"></span>straight</li>
+              <li><span class="swatch swatch--gentle" aria-hidden="true"></span>gentle curve</li>
+              <li><span class="swatch swatch--sharp" aria-hidden="true"></span>sharp curve</li>
+            </ul>
+            <p class="strip-key__average"><span class="swatch swatch--average" aria-hidden="true"></span>This clip, on average: <span class="tnum" data-cockpit="average">—</span></p>
+            <p class="cockpit__notice" data-cockpit="notice" role="status" hidden></p>
+          </div>
+
+          <fieldset class="picker picker--models" data-cockpit="models" disabled>
+            <legend class="visually-hidden">Model</legend>
+            <label class="picker__option"><input class="picker__input" type="radio" name="cockpit-model" value="sightline" checked /><span class="picker__lead">Sightline</span><span class="picker__sub">blocked split</span></label>
+            <label class="picker__option"><input class="picker__input" type="radio" name="cockpit-model" value="shuffled" /><span class="picker__lead">Its twin</span><span class="picker__sub">shuffled split</span></label>
+          </fieldset>
+
+          <div class="cockpit__side">
+            <p class="model-note" data-cockpit="note"></p>
+
+            <div class="instruments">
+              <div class="wheel-box" data-cockpit="wheel"><svg class="wheel" viewBox="0 0 240 240" aria-hidden="true" focusable="false"><circle class="wheel__track" cx="120" cy="120" r="111"/><path class="wheel__gap" data-wheel="error" d=""/><g class="wheel__turn wheel__ghost" data-wheel="human"><path class="wheel__ghost-spokes" d="M38 124H93M147 124H202M120 147V202"/><path class="wheel__ghost-pointer" d="M120 18L111.5 1H128.5Z"/></g><g class="wheel__turn wheel__model" data-wheel="model"><circle class="wheel__rim" cx="120" cy="120" r="88"/><path class="wheel__stripe" d="M109.28 32.66A88 88 0 0 1 130.72 32.66"/><path class="wheel__spokes" d="M38 124H93M147 124H202M120 147V202"/><circle class="wheel__hub" cx="120" cy="120" r="26"/><path class="wheel__pointer" d="M120 16L113.5 3H126.5Z"/></g></svg></div>
+              <dl class="readouts">
+                <div class="readout readout--model"><dt><svg class="key key--model" viewBox="0 0 14 12" aria-hidden="true" focusable="false"><path d="M7 10.5 1.5 1.5h11z"/></svg><span data-cockpit="model-name">Sightline</span></dt><dd><span class="readout__size tnum" data-cockpit="model-angle">—</span> <span class="readout__side" data-cockpit="model-side"></span></dd></div>
+                <div class="readout readout--driver"><dt><svg class="key key--driver" viewBox="0 0 14 12" aria-hidden="true" focusable="false"><path d="M7 10.5 1.5 1.5h11z"/></svg>Driver</dt><dd><span class="readout__size tnum" data-cockpit="driver-angle">—</span> <span class="readout__side" data-cockpit="driver-side"></span></dd></div>
+                <div class="readout readout--gap"><dt><svg class="key key--gap" viewBox="0 0 14 12" aria-hidden="true" focusable="false"><path d="M1.75 9a7 7 0 0 1 10.5 0"/></svg>Off by</dt><dd><span class="readout__size tnum" data-cockpit="gap">—</span></dd></div>
+              </dl>
+            </div>
+
+            <figure class="eye">
+              <canvas class="eye__canvas" data-cockpit="eye" width="200" height="66" aria-hidden="true"></canvas>
+              <figcaption class="eye__caption" data-cockpit="eye-caption">The model’s own input, with where it looked</figcaption>
+            </figure>
+          </div>
+
+          <noscript><p class="cockpit__noscript">The live demo needs JavaScript.</p></noscript>
+        </div>
       </section>
     </main>
 

@@ -15,6 +15,8 @@
     <!-- The mark: a steering wheel with the centre marker at twelve o'clock. -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="color-scheme" content="light dark" />
+    <!-- The heading's face, wanted for the first paint. -->
+    <link rel="preload" href="/fonts/barlow-condensed-700-latin.woff2" as="font" type="font/woff2" crossorigin />
     <meta name="theme-color" content="#eeedf3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#17132a" media="(prefers-color-scheme: dark)" />
 
@@ -98,8 +100,11 @@
     <script>
       // Before the first paint: a stored theme has to be on <html> before
       // anything is drawn, or every visit flashes the other theme. theme.ts
-      // owns the choice after load and writes the same key.
+      // owns the choice after load and writes the same key. The "js" class
+      // shows the controls that need scripts (the theme toggle, the demo's
+      // status line); without scripts they stay out of sight.
       (function () {
+        document.documentElement.classList.add("js");
         try {
           var theme = localStorage.getItem("sightline-theme");
           if (theme === "light" || theme === "dark") {
@@ -116,11 +121,9 @@
     <header class="masthead" id="masthead"></header>
 
     <main id="main">
-      <!-- The live demo mounts into this section. Until it does, the section
-           holds the demo's place on the page, so nothing below it moves. -->
-      <section class="cockpit" id="cockpit" aria-label="Live demo">
-        <noscript><p class="cockpit__note">The live demo needs JavaScript.</p></noscript>
-      </section>
+      <!-- The live demo. The build writes its markup in, so the first paint
+           already has its layout and nothing below it moves when it starts. -->
+      <section class="cockpit" id="cockpit" aria-label="Live demo"></section>
     </main>
 
     <footer class="site-footer">
