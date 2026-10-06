@@ -34,7 +34,9 @@ METRICS = {"n", "mae_deg", "rmse_deg", "medae_deg", "within_1p5_deg", "within_5_
 SPLIT_SCORE = {"n", "model", "regimes", "baselines", "pearson_r", "sign_agreement", "skill_vs_zero",
                "smoothness"}
 REPORT = {"run", "model", "protocol", "seed", "frame_lags", "n_params", "best_epoch", "epochs_run",
-          "code_version", "versions", "device", "splits", "train_mean_deg", "val", "test", "cross_drive"}
+          "code_version", "versions", "device", "splits", "train_mean_deg", "val", "test", "cross_drive",
+          "train_config"}
+RECIPE = ("epochs", "patience", "lr", "batch_size", "weight_decay", "augment", "dropout")
 
 
 def _name(model, protocol, seed):
@@ -109,6 +111,17 @@ def test_run_report_has_the_contract_keys(ctx):
         assert ("paired" in r) == (protocol in ("leaky", "blocked"))
         if "paired" in r:
             assert {"seed", "n", "model"} <= r["paired"].keys() and r["paired"]["model"].keys() == METRICS
+
+
+def test_run_reports_record_the_training_recipe_from_the_run(ctx):
+    from sightline.models import MODEL_SPECS
+
+    for name, r in ctx.reports.items():
+        config = json.loads((ctx.root / "runs" / name / "history.json").read_text())["config"]
+        assert r["train_config"] == {key: config[key] for key in RECIPE}, name
+        spec = MODEL_SPECS[r["model"]]
+        assert r["train_config"] == {"epochs": 1, "patience": 0, "lr": 3e-4, "batch_size": 128,
+                                     "weight_decay": 1e-4, "augment": spec.augment, "dropout": spec.dropout}, name
 
 
 def test_paired_scores_use_identical_frames_for_both_protocols(ctx):
@@ -379,6 +392,16 @@ def _with_change(ctx, run, change):
     ("drive 'drivetest'", _name("sightlinenet", "forward", 0),
      lambda r: r["drives"]["drivetest"].update(label_sha256="0" * 64)),
     ("cross drive", _name("sightlinenet", "forward", 0), lambda r: r.pop("cross_drive")),
+    ("training recipe", _name("pilotnet", "blocked", 0), lambda r: r["train_config"].update(epochs=2)),
+    ("training recipe", _name("sightlinenet", "forward", 0), lambda r: r["train_config"].update(patience=8)),
+    ("training recipe", _name("sightlinenet", "leaky", 1), lambda r: r["train_config"].update(lr=1e-3)),
+    ("training recipe", _name("pilotnet", "leaky", 0), lambda r: r["train_config"].update(batch_size=64)),
+    ("training recipe", _name("sightlinenet", "blocked", 0), lambda r: r["train_config"].update(weight_decay=0.0)),
+    ("training recipe", _name("sightlinenet", "blocked", 1), lambda r: r.pop("train_config")),
+    ("augmentation and dropout of sightlinenet", _name("sightlinenet", "blocked", 1),
+     lambda r: r["train_config"].update(augment="standard")),
+    ("augmentation and dropout of pilotnet", _name("pilotnet", "blocked", 0),
+     lambda r: r["train_config"].update(dropout=0.5)),
 ])
 def test_summary_refuses_runs_made_or_scored_differently(ctx, what, run, change):
     from sightline.reporting import aggregate
@@ -387,6 +410,19 @@ def test_summary_refuses_runs_made_or_scored_differently(ctx, what, run, change)
         aggregate(_with_change(ctx, run, change))
     message = str(exc.value)
     assert run in message and "\n" not in message
+
+
+def test_summary_records_the_shared_recipe_and_each_models_own_augmentation(ctx, summary):
+    from sightline.models import MODEL_SPECS
+
+    # the two models train with different augmentation and dropout, and that is accepted
+    assert MODEL_SPECS["pilotnet"].augment != MODEL_SPECS["sightlinenet"].augment
+    assert MODEL_SPECS["pilotnet"].dropout != MODEL_SPECS["sightlinenet"].dropout
+    assert summary["train_config"] == {
+        "epochs": 1, "patience": 0, "lr": 3e-4, "batch_size": 128, "weight_decay": 1e-4,
+        "models": {model: {"augment": MODEL_SPECS[model].augment, "dropout": MODEL_SPECS[model].dropout}
+                   for model in ("pilotnet", "sightlinenet")},
+    }
 
 
 def test_summary_refuses_a_report_whose_run_has_another_checkpoint(ctx, tmp_path):
@@ -527,3 +563,6 @@ def test_a_report_is_current_only_for_the_checkpoint_it_describes(ctx, tmp_path)
     assert stale_reason(unreadable, ctx.root / "runs" / name) == "its report cannot be read"
     no_weights = _copy_run(ctx, tmp_path, name, skip=("best.pt",))
     assert stale_reason(report, no_weights) == "its run has no best.pt"
+    no_recipe = tmp_path / "no-recipe.json"
+    no_recipe.write_text(json.dumps({k: v for k, v in ctx.reports[name].items() if k != "train_config"}))
+    assert stale_reason(no_recipe, ctx.root / "runs" / name) == "its report records no training recipe"

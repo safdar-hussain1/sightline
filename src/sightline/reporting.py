@@ -12,8 +12,10 @@ seeds per model and protocol, the paired leakage measurement, the
 generalisation ladder (shuffled, blocked, later in the drive, another day)
 and the shipped model, chosen on validation MAE alone. It refuses reports
 that were not made and scored alike: different library versions, drives,
-split settings, evaluation device, frame history per model, frames behind a
-shared baseline, or a checkpoint that is no longer the run's best.pt.
+split settings, evaluation device, training recipe (epochs, patience,
+learning rate, batch size and weight decay for every run; augmentation and
+dropout per model), frame history per model, frames behind a shared
+baseline, or a checkpoint that is no longer the run's best.pt.
 Published documents read their numbers from these reports, nowhere else.
 
 Reports are written as sorted, indented JSON of plain Python values with a
@@ -63,6 +65,11 @@ CROSS_FIRST_FRAME = 2
 
 #: protocols scored on the paired frames
 PAIRED_PROTOCOLS = ("leaky", "blocked")
+
+#: the training recipe a run report copies from its history.json: every run of a summary
+#: shares the first five, and every run of one model shares its augmentation and dropout
+SHARED_RECIPE = ("epochs", "patience", "lr", "batch_size", "weight_decay")
+MODEL_RECIPE = ("augment", "dropout")
 
 #: the generalisation ladder, in order: (rung, protocol, split)
 LADDER = (
@@ -145,6 +152,8 @@ def stale_reason(report_path: Path, run_dir: Path) -> str | None:
         return "its run has no best.pt"  # evaluating it names the missing file
     if not isinstance(report, dict) or report.get("checkpoint_sha256") != checkpoint_sha256(run_dir):
         return "its report was made from another checkpoint"
+    if "train_config" not in report:
+        return "its report records no training recipe"
     return None
 
 
@@ -257,6 +266,7 @@ def evaluate_run(
         "code_version": history.get("code_version"),
         "eval_code_version": code_version(),
         "train_device": history.get("device"),
+        "train_config": {key: config.get(key) for key in (*SHARED_RECIPE, *MODEL_RECIPE)},
         "device": str(torch_device),
         "versions": _versions(),
         "drive": notes["drive"],
@@ -474,13 +484,22 @@ def aggregate(run_reports: list[dict], runs_dir: Path | None = None) -> dict:
     device = _require_one(reports, lambda r: r["device"], "evaluation device")
     _require_one(reports, lambda r: {"firewall": r["splits"]["firewall"], "block": r["splits"]["block"]},
                  "split settings (firewall, block)")
+    unrecorded = [r["run"] for r in reports if not isinstance(r.get("train_config"), dict)]
+    if unrecorded:
+        raise ValueError(f"the reports of {_runs_text(unrecorded)} record no training recipe; evaluate them again")
+    recipe = _require_one(reports, lambda r: {k: r["train_config"].get(k) for k in SHARED_RECIPE},
+                          f"training recipe ({', '.join(SHARED_RECIPE)})")
     cross_drive = _require_one(reports, lambda r: r.get("cross_drive", {}).get("drive"), "cross drive")
     if cross_drive is not None:
         _require_one(reports, lambda r: r["cross_drive"]["baselines"]["zero"]["mae_deg"],
                      "zero baseline on the cross drive (the same frames for every run)")
+    recipe["models"] = {}
     for model in sorted({r["model"] for r in reports}):
-        _require_one([r for r in reports if r["model"] == model], lambda r: r["frame_lags"],
-                     f"frame_lags of {model}")
+        members = [r for r in reports if r["model"] == model]
+        _require_one(members, lambda r: r["frame_lags"], f"frame_lags of {model}")
+        recipe["models"][model] = _require_one(
+            members, lambda r: {k: r["train_config"].get(k) for k in MODEL_RECIPE},
+            f"augmentation and dropout of {model}")
     drives = {
         name: _require_one([r for r in reports if name in r["drives"]], lambda r: r["drives"][name],
                            f"drive {name!r}")
@@ -523,6 +542,7 @@ def aggregate(run_reports: list[dict], runs_dir: Path | None = None) -> dict:
             "eval": ordered_unique(r.get("eval_code_version") for r in reports),
         },
         "runs": sorted(r["run"] for r in reports),
+        "train_config": recipe,
         "groups": groups,
         "paired_leakage": paired,
         "ladder": {m: _ladder(m, groups, train_drive, cross_drive) for m in models},
