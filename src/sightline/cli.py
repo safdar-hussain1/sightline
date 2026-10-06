@@ -10,6 +10,7 @@ option, so nothing can shadow silently.
     sightline eval    --all [--out-dir reports/runs] [--overwrite]
     sightline report  [--in-dir reports/runs] [--out reports/summary.json]
     sightline figures [--summary reports/summary.json] [--out-dir reports/figures]
+    sightline leakage --drive drive2018 --seed 0 [--out reports/leakage.json]
     sightline export  --run runs/... --out web/public/models/sightline.onnx
     sightline demo    --drive drive2017 --run runs/... --out demo.mp4
 
@@ -22,7 +23,10 @@ touches an existing run unless given ``--overwrite``. ``eval`` scores runs on
 the CPU unless ``--device`` names another; ``eval --all`` writes one report per
 finished run and skips a run whose report describes its current best.pt
 (``--overwrite`` evaluates every run again). ``report`` summarises the run
-reports and ``figures`` draws the summary.
+reports and ``figures`` draws the summary. ``leakage`` measures how close the
+training frames of each split sit to its test frames, in time and in pixels,
+and scores the lookup table the shuffled split rewards: copy the label of the
+most similar training frame.
 """
 
 from __future__ import annotations
@@ -46,6 +50,14 @@ class CommandError(Exception):
 
 def _workspace(args: argparse.Namespace) -> Workspace:
     return Workspace(data_dir=Path(args.data_dir), runs_dir=Path(args.runs_dir))
+
+
+def _drive_name(text: str) -> str:
+    """``text`` if it names a drive under --data-dir; a path is refused, so nothing is
+    read or cached outside the workspace."""
+    if text in ("", ".", "..") or Path(text).name != text:
+        raise CommandError(f"--drive takes a drive name under --data-dir, not a path: {text!r}")
+    return text
 
 
 def _load_drive(ws: Workspace, name: str, repair: bool = True):
@@ -72,8 +84,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     from sightline.data.splits import make_split
     from sightline.train import TrainConfig, resolve_device, train_model
 
-    if args.drive in ("", ".", "..") or Path(args.drive).name != args.drive:
-        raise CommandError(f"--drive takes a drive name under --data-dir, not a path: {args.drive!r}")
+    _drive_name(args.drive)
     try:
         device = resolve_device(args.device)
     except ValueError as exc:
@@ -230,6 +241,30 @@ def cmd_figures(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_leakage(args: argparse.Namespace) -> int:
+    from sightline.data.splits import PUBLIC_NAMES
+    from sightline.leakage import LOOKUP_PROTOCOLS, leakage_report
+    from sightline.reporting import write_report
+
+    drive = _drive_name(args.drive)
+    labels, cache = _load_drive(_workspace(args), drive)
+    dt_s = labels.median_dt_s() if labels.has_timestamps else None
+    try:
+        report = leakage_report(cache, drive=drive, seed=args.seed, dt_s=dt_s,
+                                firewall=args.firewall, block=args.block)
+    except ValueError as exc:
+        raise CommandError(f"cannot analyse {drive!r} with --block {args.block} "
+                           f"--firewall {args.firewall}: {exc}") from None
+    write_report(Path(args.out), report)
+    for protocol in LOOKUP_PROTOCOLS:
+        gap, lookup = report["gaps"][protocol]["test"]["median_frames"], report["memoriser"][protocol]
+        print(f"{PUBLIC_NAMES[protocol]} split: the median test frame is {gap:g} frame{'' if gap == 1 else 's'} "
+              f"from training; copying the label of the most similar training frame scores MAE "
+              f"{lookup['mae_deg']:.2f} deg on the {lookup['n']} paired frames")
+    print(f"wrote {args.out}")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     from sightline.export.onnx_export import export_run
 
@@ -359,6 +394,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--summary", default="reports/summary.json", help="the summary to draw")
     p.add_argument("--out-dir", default="reports/figures", help="folder for the PNG figures")
     p.set_defaults(fn=cmd_figures)
+
+    p = sub.add_parser("leakage", help="measure how close training frames sit to test frames, in time and pixels")
+    p.add_argument("--drive", required=True, help="drive name under --data-dir")
+    p.add_argument("--seed", type=_int_from(0), default=0, help="seed of the shuffled split")
+    p.add_argument("--firewall", type=_int_from(0), default=250,
+                   help="frames dropped on each side of every train/evaluation boundary, as in training")
+    p.add_argument("--block", type=_int_from(1), default=1500,
+                   help="block length of the blocked split, as in training")
+    p.add_argument("--out", default="reports/leakage.json", help="where to write the report")
+    _add_locations(p)
+    p.set_defaults(fn=cmd_leakage)
 
     p = sub.add_parser("export", help="export a run to ONNX with saliency output")
     p.add_argument("--run", required=True)

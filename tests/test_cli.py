@@ -54,13 +54,14 @@ def test_help_runs_as_a_module():
     out = subprocess.run([sys.executable, "-m", "sightline.cli", "--help"],
                          capture_output=True, text=True, check=True, cwd=REPO,
                          env={**os.environ, "PYTHONPATH": "src"}).stdout
-    listed = re.search(r"usage: sightline \[-h\] \{([^}]*)\}", out)
+    listed = re.search(r"usage: sightline \[-h\]\s+\{([^}]*)\}", out)  # argparse may wrap the line
     assert listed, out
-    assert {"data", "cache", "train", "eval", "report", "figures", "export", "demo"} <= set(listed.group(1).split(","))
+    assert {"data", "cache", "train", "eval", "report", "figures", "leakage", "export", "demo"} <= set(
+        listed.group(1).split(","))
 
 
 @pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["report"], ["figures"],
-                                  ["export"], ["demo"]])
+                                  ["leakage"], ["export"], ["demo"]])
 def test_every_subcommand_has_its_own_help(argv, capsys):
     with pytest.raises(SystemExit) as exc:
         main([*argv, "--help"])
