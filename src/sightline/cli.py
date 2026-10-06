@@ -335,7 +335,7 @@ def cmd_site_data(args: argparse.Namespace) -> int:
     try:
         export = build_site_data(summary, _workspace(args), out_dir=Path(args.out_dir), reports_dir=reports_dir,
                                  clip_frames=args.clip_frames, video=not args.no_video)
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         raise CommandError(f"cannot build the site data: {exc}") from None
     for key, model in export["models"].items():
         parity = model["parity"]

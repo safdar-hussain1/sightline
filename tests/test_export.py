@@ -6,6 +6,8 @@ export at the end uses a drive, a small synthetic one with its cache.
 """
 import hashlib
 import json
+import warnings
+from pathlib import Path
 
 import numpy as np
 import onnx
@@ -125,6 +127,41 @@ def test_an_export_over_its_size_limit_leaves_no_file(tmp_path):
     with pytest.raises(ValueError, match="limit"):
         export_onnx(model, out, _inputs(model, 1), max_bytes=2_000_000)
     assert not out.exists() and list(out.parent.iterdir()) == []
+
+
+def test_the_parity_gate_can_be_set_per_export(tmp_path):
+    model = _model("sightlinenet")
+    result = export_onnx(model, tmp_path / "m.onnx", _inputs(model, 2), angle_tolerance_deg=1e-4,
+                         saliency_tolerance=1e-4)
+    assert (result["angle_tolerance_deg"], result["saliency_tolerance"]) == (1e-4, 1e-4)
+    assert result["max_angle_diff_deg"] <= 1e-4 and result["max_saliency_diff"] <= 1e-4
+    with pytest.raises(RuntimeError, match="exceeds -1 deg"):
+        export_onnx(model, tmp_path / "n.onnx", _inputs(model, 2), angle_tolerance_deg=-1.0)
+    assert not (tmp_path / "n.onnx").exists()
+
+
+class _CheckedRegressor(torch.nn.Module):
+    """The regressor behind a data-dependent check, which the tracer warns about."""
+
+    def __init__(self, inner):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, x):
+        if bool(x.abs().sum() >= 0):
+            return self.inner(x)
+        return self.inner(x)
+
+
+def test_the_export_hides_the_adapters_channel_check_warning_and_no_other(tmp_path):
+    model = _model("sightlinenet")
+    model.regressor = _CheckedRegressor(model.regressor)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        export_onnx(model, tmp_path / "m.onnx", _inputs(model, 2))
+    traced = [w for w in caught if issubclass(w.category, torch.jit.TracerWarning)]
+    # the adapter's check is hidden; the check in this file still warns
+    assert traced and {Path(w.filename).name for w in traced} == {"test_export.py"}
 
 
 # --- a trained run ----------------------------------------------------------------------

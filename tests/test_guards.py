@@ -91,6 +91,7 @@ def test_no_process_documents_tracked():
         "runs/anything/best.pt",
         "weights.npz",
         "model.ckpt.index",
+        "web/.public-k2x9q1/data/results.json",
     ],
 )
 def test_private_paths_are_ignored(path: str):

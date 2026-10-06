@@ -9,9 +9,12 @@ videos into a second folder, which must hold the same bytes otherwise.
 
 The 2018 stand-in keeps the image of frame ``i`` under the file name frame ``i + 7`` had:
 a drive's frames are its label rows, so code that assumes ``<i>.jpg`` shows the wrong frame.
+One of its labels is a 120 deg spike, so the clip window that would vary most is one a clip
+may not show (every label within 90 deg) and the rule must pick another.
 
 The tests at the end check the committed site data in ``web/public`` against the committed
-reports; they skip while none is committed.
+reports; they skip while ``web/public/data/results.json`` is not tracked by git, and fail
+when it is tracked but missing or unreadable.
 """
 import base64
 import copy
@@ -19,6 +22,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,6 +45,8 @@ from sightline.paths import MissingDataError, UnusableRunError, Workspace
 from sightline.reporting import load_run_model
 
 N, N_CROSS, BLOCK, FIREWALL, CLIP, SHIFT = 1600, 300, 200, 20, 100, 7
+#: a label past the clips' 90 deg limit, inside the 2018 test stretch's most varied windows
+SPIKE_ROW, SPIKE_DEG = 1150, 120.0
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 needs_ffmpeg = pytest.mark.skipif(FFMPEG is None or FFPROBE is None,
                                   reason="ffmpeg and ffprobe are not installed, so no clip video was written")
@@ -65,6 +71,13 @@ def _store_frames_under_other_names(drive: Path, shift: int) -> None:
     (drive / "data.txt").write_text("\n".join(renamed) + "\n")
 
 
+def _set_angle(drive: Path, row: int, angle: float) -> None:
+    lines = (drive / "data.txt").read_text().splitlines()
+    name, rest = lines[row].split(" ", 1)
+    lines[row] = f"{name} {angle:.6f},{rest.split(',', 1)[1]}"
+    (drive / "data.txt").write_text("\n".join(lines) + "\n")
+
+
 def _tf1_weights(seed: int = 0) -> dict:
     rng = np.random.default_rng(seed)
     return {name: (rng.normal(0.0, 0.1, shape) if len(shape) == 1
@@ -86,6 +99,7 @@ def site(tmp_path_factory):
     root = tmp_path_factory.mktemp("site")
     data, runs, reports = root / "data", root / "runs", root / "reports"
     _store_frames_under_other_names(make_drive(data, "drive2018", n=N, scenery=True), SHIFT)
+    _set_angle(data / "drive2018", SPIKE_ROW, SPIKE_DEG)
     make_drive(data, "drive2017", n=N_CROSS, timestamps=False)
     loc = ["--data-dir", str(data), "--runs-dir", str(runs)]
     split = ["--block", str(BLOCK), "--firewall", str(FIREWALL)]
@@ -161,6 +175,17 @@ def _predict(site, run: str, inputs: np.ndarray) -> np.ndarray:
         return model(torch.from_numpy(inputs))[:, 0].double().numpy()
 
 
+def _ort(path, inputs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """onnxruntime's CPU provider on one thread, 64 stacks at a time, written apart from the
+    builder: the run the expected outputs must come from, bit for bit."""
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    session = ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
+    outputs = [session.run(None, {"frames": np.ascontiguousarray(inputs[s:s + 64])}) for s in range(0, len(inputs), 64)]
+    return np.concatenate([a[:, 0] for a, _ in outputs]), np.concatenate([m for _, m in outputs])
+
+
 def _camera(path) -> np.ndarray:
     with Image.open(path) as image:
         return np.asarray(image.convert("RGB")).astype(np.float64)
@@ -213,10 +238,12 @@ def test_the_models_are_the_shipped_run_and_its_twin_each_under_2_mb(site):
         meta = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"]).get_modelmeta()
         tags = meta.custom_metadata_map
         assert (tags["run"], tags["model"], json.loads(tags["frame_lags"])) == (run, "sightlinenet", [2])
-        # parity is measured on every clip input and every self-test input
-        assert entry["parity"]["frames"] == 2 * CLIP + 8
-        assert 0 <= entry["parity"]["max_angle_diff_deg"] <= 1e-3
-        assert 0 <= entry["parity"]["max_saliency_diff"] <= 1e-3
+        # parity is measured on every clip input and every self-test input, against the shipped gate
+        parity = entry["parity"]
+        assert parity["frames"] == 2 * CLIP + 8
+        assert (parity["angle_tolerance_deg"], parity["saliency_tolerance"]) == (5e-4, 1e-4)
+        assert 0 <= parity["max_angle_diff_deg"] <= parity["angle_tolerance_deg"]
+        assert 0 <= parity["max_saliency_diff"] <= parity["saliency_tolerance"]
 
 
 # --- the clips --------------------------------------------------------------------------
@@ -232,6 +259,9 @@ def test_each_clip_brings_the_history_frames_of_its_first_frame(site):
         assert sprite["files"] == [f"sprite-{k:02d}.jpg" for k in range(math.ceil((clip["lead_in"] + CLIP) / 60))]
         assert len(sprite["decoded_sha256"]) == clip["lead_in"] + CLIP
         assert clip["rule"] == site.export["clips"][cid]["rule"]  # the page can say how it was chosen
+        assert clip["tolerance"] == {"angle_deg": 1e-3}
+        for key in ("twin_trained_frac", "twin_neighbour_frac"):
+            assert clip[key] == site.export["clips"][cid][key]
     assert (site.clips["c2018"]["drive"], site.clips["c2017"]["drive"]) == ("drive2018", "drive2017")
 
 
@@ -270,15 +300,19 @@ def test_the_labels_are_the_cache_labels_of_the_clip_frames(site):
         assert clip["labels_deg"] == [float(a) for a in angles[first:first + CLIP]]
 
 
-def test_expected_outputs_are_cpu_predictions_on_the_decoded_sprites(site):
+def test_expected_outputs_come_from_the_written_onnx_files_on_the_decoded_sprites(site):
+    models = {key: site.out / path for key, path in site.results["assets"]["models"].items()}
     for cid, clip in site.clips.items():
         decoded = _decoded_clip(site, cid)
         inputs = _stacks(decoded, clip["lead_in"], CLIP, clip["frame_lags"])
         for key, run in (("sightline", site.shipped), ("shuffled", site.twin)):
+            expected = np.asarray(clip["expected"][key], dtype=np.float32)
+            # the very bytes the page loads, run by onnxruntime as the builder must run it
+            assert np.array_equal(expected, _ort(models[key], inputs)[0]), (cid, key)
+            # and the PyTorch model agrees, the first output included (its history: the lead-in)
             fresh = _predict(site, run, inputs)
-            np.testing.assert_allclose(clip["expected"][key], fresh, rtol=0, atol=1e-4, err_msg=f"{cid} {key}")
-            # the first expected output uses the lead-in frames as its history
-            assert abs(clip["expected"][key][0] - fresh[0]) <= 1e-4
+            np.testing.assert_allclose(expected, fresh, rtol=0, atol=1e-4, err_msg=f"{cid} {key}")
+            assert abs(expected[0] - fresh[0]) <= 1e-4
         # JPEG changes the pixels enough for this tolerance to tell the sprites from the cache frames
         first = clip["first_frame"]
         cache = site.caches[clip["drive"]]
@@ -317,15 +351,18 @@ def test_a_clip_closer_to_training_than_the_firewall_allows_is_refused():
         site_data.min_gap_to_training(np.arange(139, 250), trained, minimum=41)
 
 
-def _rule(angles: np.ndarray, frames: np.ndarray, n: int, lead_in: int) -> int:
+def _rule(angles: np.ndarray, frames: np.ndarray, n: int, lead_in: int, cap: float | None = 90.0) -> int:
     """The first scored frame of the n-frame window, with its lead-in, inside one stretch of
-    consecutive ``frames``, whose labels vary most (population sd); windows start every 10
-    frames from the first possible one in each stretch; ties go to the earliest."""
+    consecutive ``frames`` and with every one of those labels within ``cap`` deg either way,
+    whose labels vary most (population sd); windows start every 10 frames from the first
+    possible one in each stretch; ties go to the earliest."""
     frames = np.sort(frames)
     cuts = np.flatnonzero(np.diff(frames) > 1) + 1
     best = None
     for stretch in np.split(frames, cuts):
         for first in range(stretch[0] + lead_in, stretch[-1] - n + 2, 10):
+            if cap is not None and np.abs(angles[first - lead_in:first + n].astype(np.float64)).max() > cap:
+                continue
             sd = float(np.std(angles[first:first + n].astype(np.float64)))
             if best is None or sd > best[1]:
                 best = (first, sd)
@@ -337,6 +374,10 @@ def test_each_clip_is_the_window_its_rule_picks_from_the_labels(site):
     test = make_split("blocked", N, firewall=FIREWALL, block=BLOCK).test
     angles = site.caches["drive2018"].angles_deg
     assert clip["first_frame"] == _rule(angles, test, CLIP, clip["lead_in"])
+    # the spike sits in the windows that would vary most: the limit changes the choice
+    assert _rule(angles, test, CLIP, clip["lead_in"], cap=None) != clip["first_frame"]
+    shown = angles[clip["first_frame"] - clip["lead_in"]:clip["first_frame"] + CLIP]
+    assert np.abs(shown).max() <= 90 < SPIKE_DEG == float(angles[SPIKE_ROW])
     clip = site.clips["c2017"]
     angles = site.caches["drive2017"].angles_deg
     assert clip["first_frame"] == _rule(angles, np.arange(N_CROSS), CLIP, clip["lead_in"])
@@ -345,7 +386,27 @@ def test_each_clip_is_the_window_its_rule_picks_from_the_labels(site):
         assert (entry["drive"], entry["first_frame"], entry["n"], entry["lead_in"]) == \
             (clip["drive"], clip["first_frame"], CLIP, clip["lead_in"])
         assert "standard deviation" in entry["rule"] and "every 10 frames" in entry["rule"]
+        assert "within 90 degrees either way" in entry["rule"] and "road following" in entry["rule"]
     assert "blocked test" in site.export["clips"]["c2018"]["rule"]
+
+
+def test_each_clip_says_how_much_of_it_the_twin_trained_on(site):
+    trained = np.load(site.runs / site.twin / "train_idx.npy")
+    clip = site.clips["c2018"]
+    frames = np.arange(clip["first_frame"], clip["first_frame"] + CLIP)
+    nearest = np.abs(frames[:, None] - trained[None, :]).min(axis=1)
+    assert clip["twin_trained_frac"] == np.isin(frames, trained).mean() == pytest.approx(0.7, abs=0.15)
+    assert clip["twin_neighbour_frac"] == (nearest <= 1).mean() > clip["twin_trained_frac"]
+    # the twin trained on the 2018 drive only: none of the 2017 clip
+    assert (site.clips["c2017"]["twin_trained_frac"], site.clips["c2017"]["twin_neighbour_frac"]) == (0.0, 0.0)
+
+
+def test_twin_exposure_counts_frames_trained_on_and_their_neighbours():
+    exposure = site_data.twin_exposure(np.arange(10, 20), np.array([10, 11, 15, 30]))
+    # trained on 10, 11, 15; within one frame of one of them: 10, 11, 12, 14, 15, 16
+    assert exposure == {"twin_trained_frac": 0.3, "twin_neighbour_frac": 0.6}
+    assert site_data.twin_exposure(np.arange(5), np.empty(0, dtype=np.int64)) == \
+        {"twin_trained_frac": 0.0, "twin_neighbour_frac": 0.0}
 
 
 @needs_ffmpeg
@@ -390,25 +451,23 @@ def test_the_self_test_inputs_are_raw_cache_frames_of_the_2018_clip(site):
     assert raw == stacked.tobytes()
 
 
-def test_the_self_test_expects_cpu_outputs_that_the_exported_models_reproduce(site):
+def test_the_self_test_expects_the_outputs_of_the_written_onnx_files(site):
+    from sightline.saliency import SteeringWithSaliency
+
     expected = site.selftest
     assert expected["tolerance"] == {"angle_deg": 1e-3, "saliency": 1e-3}
     inputs = np.frombuffer((site.out / "data" / "selftest" / "frames.bin").read_bytes(), np.uint8)
     inputs = inputs.reshape(expected["shape"])
     for key, run in (("sightline", site.shipped), ("shuffled", site.twin)):
+        angles = np.asarray(expected["angles"][key], dtype=np.float32)
+        maps = np.frombuffer(base64.b64decode(expected["saliency_f32_b64"][key]), "<f4").reshape(8, 66, 200)
+        ort_angle, ort_saliency = _ort(site.out / site.results["assets"]["models"][key], inputs)
+        assert np.array_equal(angles, ort_angle) and np.array_equal(maps, ort_saliency), key
         model, _ = load_run_model(site.runs / run)
-        from sightline.saliency import SteeringWithSaliency
-
         with torch.no_grad():
             angle, saliency = SteeringWithSaliency(model).eval()(torch.from_numpy(inputs.copy()))
-        maps = np.frombuffer(base64.b64decode(expected["saliency_f32_b64"][key]), "<f4").reshape(8, 66, 200)
-        np.testing.assert_allclose(expected["angles"][key], angle[:, 0].numpy(), rtol=0, atol=1e-4)
+        np.testing.assert_allclose(angles, angle[:, 0].numpy(), rtol=0, atol=1e-4)
         np.testing.assert_allclose(maps, saliency.numpy(), rtol=0, atol=1e-4)
-        session = ort.InferenceSession(str(site.out / site.results["assets"]["models"][key]),
-                                       providers=["CPUExecutionProvider"])
-        ort_angle, ort_saliency = session.run(None, {"frames": inputs})
-        assert np.abs(ort_angle[:, 0] - np.asarray(expected["angles"][key])).max() <= 1e-3
-        assert np.abs(ort_saliency - maps).max() <= 1e-3
 
 
 # --- the leakage pairs ------------------------------------------------------------------
@@ -461,6 +520,7 @@ COVERAGE = [
     ("legacy.eval", "legacy", "eval"),
     ("legacy.atan_cap", "legacy", "atan_cap"),
     ("legacy.port_parity", "legacy", "port_parity"),
+    ("legacy.recipe", "legacy", "recipe"),
     ("legacy.trained_on", "legacy", "trained_on"),
     ("legacy.seen_first_frame", "legacy", "seen_first_frame"),
     ("legacy.splits", "legacy", "splits"),
@@ -681,6 +741,114 @@ def test_a_leakage_report_of_other_splits_is_refused(site, tmp_path):
     assert not (tmp_path / "public").exists()
 
 
+def _reports_with(site, tmp_path, change) -> Path:
+    """A copy of the fixture's reports in which ``change`` alters the summary (``"summary"``)
+    or the shipped run's or the twin's report (``"shipped"``, ``"twin"``)."""
+    reports = tmp_path / "reports"
+    shutil.copytree(site.reports, reports)
+    files = {"summary": reports / "summary.json", "shipped": reports / "runs" / f"{site.shipped}.json",
+             "twin": reports / "runs" / f"{site.twin}.json"}
+    loaded = {key: json.loads(path.read_text()) for key, path in files.items()}
+    change(loaded)
+    for key, path in files.items():
+        path.write_text(json.dumps(loaded[key]))
+    return reports
+
+
+def _untouched(runs, data):
+    pass
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda r: r["shipped"].update(protocol="forward"), "trained on the later in the drive split, not the blocked one"),
+    (lambda r: r["twin"].update(protocol="blocked"), "trained on the blocked split, not the shuffled one"),
+    (lambda r: r["twin"].update(seed=1), "has seed 1, the shipped run seed 0"),
+])
+def test_a_twin_that_is_not_the_shipped_runs_shuffled_twin_is_refused(site, tmp_path, change, message):
+    reports = _reports_with(site, tmp_path, change)
+    with pytest.raises(ValueError, match=re.escape(message)) as exc:
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
+    assert "\n" not in str(exc.value)
+    assert not (tmp_path / "public").exists()
+
+
+def _add_one(tree, key):
+    tree[key] += 1.0
+
+
+@pytest.mark.parametrize("change, named", [
+    (lambda r: _add_one(r["summary"]["groups"]["sightlinenet/blocked"]["test_mae_deg"]["values"], 0), "test_mae_deg"),
+    (lambda r: _add_one(r["summary"]["groups"]["sightlinenet/leaky"]["val_mae_deg"]["values"], 0), "val_mae_deg"),
+    (lambda r: _add_one(r["summary"]["paired_leakage"]["sightlinenet"]["per_seed"][0], "blocked_mae_deg"),
+     "blocked paired MAE"),
+    (lambda r: r["summary"]["regimes"]["models"]["sightlinenet"].update(run="drive2018_sightlinenet_blocked_s9"),
+     "regimes"),
+])
+def test_a_summary_that_disagrees_with_the_run_reports_is_refused(site, tmp_path, change, named):
+    reports = _reports_with(site, tmp_path, change)
+    with pytest.raises(ValueError, match="sightline report") as exc:
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
+    assert named in str(exc.value) and "\n" not in str(exc.value)
+    assert not (tmp_path / "public").exists()
+
+
+@pytest.mark.parametrize("change, named, command", [
+    (lambda r: r["summary"].pop("regimes"), "'regimes.models'", "sightline report"),
+    (lambda r: r["summary"].pop("train_config"), "'train_config'", "sightline report"),
+    (lambda r: r["shipped"]["splits"].pop("block"), "'splits.block'", "sightline eval --all"),
+])
+def test_a_report_lacking_a_key_the_site_reads_is_a_one_line_error(site, tmp_path, capsys, change, named, command):
+    reports = _reports_with(site, tmp_path, change)
+    capsys.readouterr()
+    code = main(_site_data_args(reports / "summary.json", tmp_path / "public", reports, site.loc, video=False))
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if line.startswith("error: ")]
+    assert code == 2 and "Traceback" not in err and len(lines) == 1, err
+    assert named in lines[0] and command in lines[0]
+    assert not (tmp_path / "public").exists()
+
+
+def _snapshot(folder: Path) -> dict:
+    """Every path under ``folder``, with each file's bytes (None for a folder)."""
+    return {p.relative_to(folder).as_posix(): (p.read_bytes() if p.is_file() else None) for p in folder.rglob("*")}
+
+
+def _previous_build(site, tmp_path) -> tuple[Path, Path]:
+    out, reports = tmp_path / "public", tmp_path / "reports"
+    shutil.copytree(site.out, out)
+    shutil.copytree(site.reports, reports)
+    return out, reports
+
+
+def test_a_build_that_fails_before_its_swap_leaves_the_previous_one(site, tmp_path, monkeypatch):
+    out, reports = _previous_build(site, tmp_path)
+    before, export = _snapshot(out), (reports / "export.json").read_bytes()
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("ONNX angle parity 1 deg exceeds 0.0005 deg on 208 frame stacks")
+
+    monkeypatch.setattr(site_data, "export_onnx", refuse)
+    with pytest.raises(RuntimeError, match="parity"):
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
+    assert _snapshot(out) == before and (reports / "export.json").read_bytes() == export
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".public-")] == []
+
+
+def test_a_build_that_fails_while_swapping_in_puts_the_previous_one_back(site, tmp_path):
+    out, reports = _previous_build(site, tmp_path)
+    # a file where the models folder belongs: the swap fails after the data files were replaced
+    shutil.rmtree(out / "models")
+    (out / "models").write_bytes(b"not a folder")
+    # files and a folder the previous build lacked: the failed swap must take the new ones away
+    shutil.rmtree(out / "data" / "selftest")
+    next((out / "data" / "leakage").glob("frame-*.jpg")).unlink()
+    before, export = _snapshot(out), (reports / "export.json").read_bytes()
+    with pytest.raises(OSError):
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
+    assert _snapshot(out) == before and (reports / "export.json").read_bytes() == export
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".public-")] == []
+
+
 def test_a_missing_ffmpeg_is_named_before_anything_is_written(site, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
     with pytest.raises(MissingDataError, match="ffmpeg"):
@@ -712,10 +880,66 @@ def test_ties_go_to_the_earliest_window_and_a_stretch_too_short_is_an_error():
         site_data.choose_window(flat, [(0, 21), (40, 50)], n=20, lead_in=2, step=10)
 
 
+def test_a_clip_window_keeps_every_label_within_90_degrees_lead_in_included():
+    angles = np.zeros(80)
+    angles[10:20] = np.linspace(-80, 80, 10)  # varied, within the limit
+    angles[40:50] = np.linspace(-150, 150, 10)  # more varied, past it
+    spans = [(0, 80)]
+    assert site_data.choose_window(angles, spans, n=10, lead_in=2, step=10, max_abs_deg=1e9)["first_frame"] == 42
+    capped = site_data.choose_window(angles, spans, n=10, lead_in=2, step=10)
+    # 32 and 42 hold labels past 90 deg, in their windows or their lead-in (frames 40 and 41)
+    assert capped["first_frame"] == 12 and capped["windows"] == 5
+    # frame 11 past the limit: the window at 12 keeps its scored frames 12..21 within it, but
+    # its lead-in (frames 10 and 11) is not, so it goes too (and the window at 2, which holds
+    # frame 11); the flat windows that are left tie, and the earliest wins
+    angles[11] = 91.0
+    assert site_data.choose_window(angles, spans, n=10, lead_in=2, step=10)["first_frame"] == 22
+
+
 # --- the committed site data --------------------------------------------------------------
 
-needs_published = pytest.mark.skipif(not (PUBLISHED / "data" / "results.json").is_file(),
+def published_skip_reason(repo: Path) -> str | None:
+    """Why the committed-site-data tests skip, or None when they run: they run once
+    web/public/data/results.json is tracked by git, and then fail if it is missing or
+    unreadable."""
+    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "web/public/data/results.json"],
+                             cwd=repo, capture_output=True).returncode == 0
+    return None if tracked else "no site data is committed in web/public yet"
+
+
+needs_published = pytest.mark.skipif(published_skip_reason(REPO) is not None,
                                      reason="no site data is committed in web/public yet")
+
+
+def test_the_committed_site_data_tests_run_once_results_json_is_tracked(tmp_path):
+    repo = tmp_path / "clone"
+    results = repo / "web" / "public" / "data" / "results.json"
+    results.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    results.write_text("{}")
+    assert published_skip_reason(repo) == "no site data is committed in web/public yet"  # there, not tracked
+    subprocess.run(["git", "add", "web/public/data/results.json"], cwd=repo, check=True, capture_output=True)
+    results.unlink()
+    assert published_skip_reason(repo) is None  # tracked: the tests run, and fail on the missing file
+
+
+def clip_prediction_gaps(clip_dir: Path, models: dict) -> dict:
+    """For each model, the largest |onnxruntime - expected| over a clip's scored frames, with
+    onnxruntime's CPU provider running the model file on the clip's sprites as Pillow decodes
+    them, stacked with the clip's frame lags from its lead-in."""
+    clip = json.loads((clip_dir / "clip.json").read_text())
+    frames = _decode([clip_dir / name for name in clip["sprite"]["files"]])
+    inputs = _stacks(frames, clip["lead_in"], clip["n"], clip["frame_lags"])
+    return {key: float(np.abs(_ort(path, inputs)[0] - np.asarray(clip["expected"][key], dtype=np.float32)).max())
+            for key, path in models.items()}
+
+
+def test_the_clip_check_runs_each_model_file_on_the_sprites(site):
+    models = {key: site.out / path for key, path in site.results["assets"]["models"].items()}
+    for cid in TITLES:
+        assert clip_prediction_gaps(_clip_dir(site, cid), models) == {"sightline": 0.0, "shuffled": 0.0}
+    swapped = {"sightline": models["shuffled"], "shuffled": models["sightline"]}
+    assert min(clip_prediction_gaps(_clip_dir(site, "c2018"), swapped).values()) > 1e-3
 
 
 @needs_published
@@ -739,6 +963,18 @@ def test_the_committed_2018_clip_is_as_far_from_training_as_the_firewall_promise
     firewall = json.loads((REPO / "reports" / "runs" / f"{shipped}.json").read_text())["splits"]["firewall"]
     assert export["models"]["sightline"]["run"] == shipped
     assert export["clips"]["c2018"]["min_frames_from_training"] >= 2 * firewall + 1
+
+
+@needs_published
+def test_the_committed_models_reproduce_each_committed_clip_from_its_sprites():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    models = {key: PUBLISHED / path for key, path in results["assets"]["models"].items()}
+    assert sorted(results["assets"]["clips"]) == ["c2017", "c2018"]
+    for cid, path in results["assets"]["clips"].items():
+        clip_dir = (PUBLISHED / path).parent
+        tolerance = json.loads((clip_dir / "clip.json").read_text())["tolerance"]["angle_deg"]
+        gaps = clip_prediction_gaps(clip_dir, models)
+        assert max(gaps.values()) <= tolerance, (cid, gaps)
 
 
 @needs_published

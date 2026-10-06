@@ -75,7 +75,8 @@ __all__ = [
     "to_model_input",
 ]
 
-RECIPE = "PilotNet, TF1, shuffled 80/20 split, MSE in radians + L2, 2·atan head"
+RECIPE = ("PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, "
+          "atan output head limited to ±180°")
 #: the drive the model was trained on, and the drive it never saw
 TRAINED_ON, OTHER_DAY = "drive2017", "drive2018"
 #: the environment variable the ``legacy`` command reads the weights path from

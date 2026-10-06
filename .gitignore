@@ -23,6 +23,8 @@ dist/
 # node
 node_modules/
 /web/dist/
+# a site-data build stages its files here and always removes the folder
+/web/.public-*/
 
 # OS noise
 .DS_Store

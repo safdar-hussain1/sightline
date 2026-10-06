@@ -287,7 +287,10 @@ def evaluated(tmp_path_factory):
 def test_the_report_names_the_recipe_and_has_the_contract_keys(evaluated):
     r = evaluated.report
     assert {"recipe", "trained_on", "port_parity", "eval", "atan_cap"} <= r.keys()
-    assert r["recipe"] == "PilotNet, TF1, shuffled 80/20 split, MSE in radians + L2, 2·atan head" == RECIPE
+    assert r["recipe"] == RECIPE == (
+        "PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, atan output head limited "
+        "to ±180°")
+    assert "\u00b7" not in RECIPE  # the page shows it: no middle dot
     assert r["trained_on"] == "drive2017"
     assert r["eval"].keys() == {"drive2018_blocked_test", "drive2018_forward_test", "drive2017_all_seen"}
     for key, score in r["eval"].items():

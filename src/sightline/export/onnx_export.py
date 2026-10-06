@@ -31,6 +31,7 @@ from sightline.paths import MissingDataError, Workspace
 from sightline.saliency import SteeringWithSaliency
 
 __all__ = [
+    "ADAPTER_CHECK_WARNING",
     "ANGLE_TOLERANCE_DEG",
     "INPUT_NAME",
     "OPSET",
@@ -48,6 +49,11 @@ SALIENCY_TOLERANCE = 1e-3
 OPSET = 17
 INPUT_NAME = "frames"
 OUTPUT_NAMES = ("steering_deg", "saliency")
+#: the tracer's warning about the input adapter's channel-count check, which runs once while
+#: tracing on the example's fixed shape; the graph's channel count is fixed, so it does not
+#: apply. Every other tracer warning is left to show.
+ADAPTER_CHECK_WARNING = {"message": "Converting a tensor to a Python boolean",
+                         "category": torch.jit.TracerWarning, "module": r"sightline\.models\.adapter$"}
 
 
 def _sha256(path: Path) -> str:
@@ -81,20 +87,26 @@ def export_onnx(
     run: str | None = None,
     max_bytes: int | None = None,
     batch_size: int = 64,
+    angle_tolerance_deg: float | None = None,
+    saliency_tolerance: float | None = None,
 ) -> dict:
     """Export ``model`` (+saliency) to ONNX and verify it against onnxruntime on the CPU.
 
     ``check_inputs`` are uint8 frame stacks (N, 66, 200, 3·(1+len(frame_lags))); both
-    runtimes score all of them, ``batch_size`` at a time. The metadata records
-    ``frame_lags``, ``model`` (``model_name``, or the architecture's class name) and
-    ``run`` when given. The file is written next to ``out_path`` under a temporary name
-    and moved into place only after the parity check passes and, with ``max_bytes``, the
-    size is within it: a RuntimeError (parity) or ValueError (size) leaves no file.
+    runtimes score all of them, ``batch_size`` at a time, and must agree within
+    ``angle_tolerance_deg`` and ``saliency_tolerance`` (``ANGLE_TOLERANCE_DEG`` and
+    ``SALIENCY_TOLERANCE`` unless given). The metadata records ``frame_lags``, ``model``
+    (``model_name``, or the architecture's class name) and ``run`` when given. The file is
+    written next to ``out_path`` under a temporary name and moved into place only after the
+    parity check passes and, with ``max_bytes``, the size is within it: a RuntimeError
+    (parity) or ValueError (size) leaves no file.
     """
     import onnx
     import onnxruntime as ort
 
     out_path = Path(out_path)
+    angle_gate = ANGLE_TOLERANCE_DEG if angle_tolerance_deg is None else angle_tolerance_deg
+    saliency_gate = SALIENCY_TOLERANCE if saliency_tolerance is None else saliency_tolerance
     check_inputs = np.asarray(check_inputs)
     lags = [int(lag) for lag in getattr(model, "frame_lags", ())]
     channels = 3 * (1 + len(lags))
@@ -112,9 +124,7 @@ def export_onnx(
         # the example and the bytes depend on the weights alone
         example = torch.zeros((1, 66, 200, channels), dtype=torch.uint8)
         with warnings.catch_warnings():
-            # the input adapter checks the channel count once, while tracing; the graph's channel
-            # count is fixed, so the tracer's warning about that check does not apply
-            warnings.simplefilter("ignore", torch.jit.TracerWarning)
+            warnings.filterwarnings("ignore", **ADAPTER_CHECK_WARNING)
             torch.onnx.export(
                 wrapper,
                 (example,),
@@ -138,11 +148,11 @@ def export_onnx(
 
         session = ort.InferenceSession(str(partial), providers=["CPUExecutionProvider"])
         angle_diff, saliency_diff = _max_differences(wrapper, session, check_inputs, batch_size)
-        if not angle_diff <= ANGLE_TOLERANCE_DEG:  # a NaN fails too
-            raise RuntimeError(f"ONNX angle parity {angle_diff:.3g} deg exceeds {ANGLE_TOLERANCE_DEG:g} deg "
+        if not angle_diff <= angle_gate:  # a NaN fails too
+            raise RuntimeError(f"ONNX angle parity {angle_diff:.3g} deg exceeds {angle_gate:g} deg "
                                f"on {len(check_inputs)} frame stacks")
-        if not saliency_diff <= SALIENCY_TOLERANCE:
-            raise RuntimeError(f"ONNX saliency parity {saliency_diff:.3g} exceeds {SALIENCY_TOLERANCE:g} "
+        if not saliency_diff <= saliency_gate:
+            raise RuntimeError(f"ONNX saliency parity {saliency_diff:.3g} exceeds {saliency_gate:g} "
                                f"on {len(check_inputs)} frame stacks")
         size = partial.stat().st_size
         if max_bytes is not None and size > max_bytes:
@@ -164,6 +174,8 @@ def export_onnx(
         "check_frames": int(len(check_inputs)),
         "max_angle_diff_deg": angle_diff,
         "max_saliency_diff": saliency_diff,
+        "angle_tolerance_deg": angle_gate,
+        "saliency_tolerance": saliency_gate,
     }
 
 
