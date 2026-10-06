@@ -113,12 +113,12 @@
       "zero_mae_deg": 9.406421568820829
     }
   },
-  "eval_code_version": "d9af852085a27b814d89056f60cb7390649ebf92",
+  "eval_code_version": "26785bf69a5db3d6b7d56dfe877f02fbc13c8d2d",
   "port_parity": {
     "frames": 192,
     "max_abs_diff_deg": 0.0002212440630486867
   },
-  "recipe": "PilotNet, TF1, shuffled 80/20 split, MSE in radians + L2, 2\u00b7atan head",
+  "recipe": "PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, atan output head limited to \u00b1180\u00b0",
   "seen_first_frame": 2,
   "splits": {
     "block": 1500,
