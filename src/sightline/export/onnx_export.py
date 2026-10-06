@@ -86,7 +86,7 @@ def export_run(run_dir: Path, out_path: Path, workspace: Workspace, check_frames
     """Export a trained run, parity-checked on real test-split frames."""
     from sightline.data.cache import DriveCache
     from sightline.data.frames import stack_frames
-    from sightline.reporting import load_run_model
+    from sightline.reporting import load_run_model, load_split_indices
 
     model, history = load_run_model(run_dir)
     drive_name = history["config"]["notes"]["drive"]
@@ -97,7 +97,7 @@ def export_run(run_dir: Path, out_path: Path, workspace: Workspace, check_frames
             f"run `sightline cache --drive {drive_name}` first"
         )
     cache = DriveCache(cache_dir)
-    test_idx = np.load(run_dir / "test_idx.npy")
+    test_idx = load_split_indices(run_dir, "test")
     step = max(1, test_idx.size // check_frames)
     sample = stack_frames(cache.inputs, np.sort(test_idx)[::step][:check_frames], model.frame_lags)
 

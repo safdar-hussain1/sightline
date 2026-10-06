@@ -6,7 +6,10 @@ option, so nothing can shadow silently.
     sightline data verify [--drive drive2018 ...]
     sightline cache   --drive drive2018
     sightline train   --drive drive2018 --model sightlinenet --protocol blocked --seed 0
-    sightline eval    --run runs/drive2018_sightlinenet_blocked_s0 [--cross-drive drive2017]
+    sightline eval    --run drive2018_sightlinenet_blocked_s0 [--cross-drive drive2017|none] [--out PATH]
+    sightline eval    --all [--out-dir reports/runs] [--overwrite]
+    sightline report  [--in-dir reports/runs] [--out reports/summary.json]
+    sightline figures [--summary reports/summary.json] [--out-dir reports/figures]
     sightline export  --run runs/... --out web/public/models/sightline.onnx
     sightline demo    --drive drive2017 --run runs/... --out demo.mp4
 
@@ -15,7 +18,10 @@ option, so nothing can shadow silently.
 ``runs``). Both options belong to each subcommand.
 
 ``train`` writes ``<runs-dir>/<drive>_<model>_<protocol>_s<seed>`` and never
-touches an existing run unless given ``--overwrite``.
+touches an existing run unless given ``--overwrite``. ``eval`` scores runs on
+the CPU unless ``--device`` names another; ``eval --all`` writes one report per
+finished run and skips runs already reported unless given ``--overwrite``.
+``report`` summarises the run reports and ``figures`` draws the summary.
 """
 
 from __future__ import annotations
@@ -110,16 +116,107 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_eval(args: argparse.Namespace) -> int:
-    from sightline.reporting import evaluate_run
+def _run_path(ws: Workspace, text: str) -> Path:
+    """A bare run name is looked up under --runs-dir; anything with a slash is a path."""
+    path = Path(text)
+    return ws.runs_dir / text if len(path.parts) == 1 else path
 
-    report = evaluate_run(
-        run_dir=Path(args.run),
-        workspace=_workspace(args),
-        cross_drive=args.cross_drive,
-        out_path=Path(args.out) if args.out else None,
-    )
-    print(json.dumps(report["headline"], indent=2))
+
+def _headline(report: dict) -> dict:
+    line = {
+        "run": report["run"],
+        "val_mae_deg": report["val"]["model"]["mae_deg"],
+        "test_mae_deg": report["test"]["model"]["mae_deg"],
+        "test_zero_mae_deg": report["test"]["baselines"]["zero"]["mae_deg"],
+    }
+    if "paired" in report:
+        line["paired_mae_deg"] = report["paired"]["model"]["mae_deg"]
+    if "cross_drive" in report:
+        line["cross_drive_mae_deg"] = report["cross_drive"]["model"]["mae_deg"]
+    return line
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    from sightline.reporting import evaluate_run, finished_runs
+    from sightline.train import resolve_device
+
+    try:
+        resolve_device(args.device)
+    except ValueError as exc:
+        raise CommandError(str(exc)) from None
+    if args.all and args.out:
+        raise CommandError("--out goes with --run; --all writes one report per run into --out-dir")
+    ws = _workspace(args)
+    cross = None if args.cross_drive.lower() == "none" else args.cross_drive
+
+    if args.run is not None:
+        report = evaluate_run(_run_path(ws, args.run), ws, cross_drive=cross,
+                              out_path=Path(args.out) if args.out else None, device=args.device)
+        print(json.dumps(_headline(report), indent=2))
+        return 0
+
+    out_dir = Path(args.out_dir)
+    runs = finished_runs(ws.runs_dir)
+    if not runs:
+        raise MissingDataError(f"no finished runs under {ws.runs_dir}; train one with `sightline train`")
+    evaluated = 0
+    for run in runs:
+        out = out_dir / f"{run.name}.json"
+        if out.exists() and not args.overwrite:
+            print(f"skipped {run.name}: {out} exists (--overwrite replaces it)", flush=True)
+            continue
+        report = evaluate_run(run, ws, cross_drive=cross, out_path=out, device=args.device)
+        evaluated += 1
+        print(f"evaluated {run.name}: test MAE {report['test']['model']['mae_deg']:.3f} deg -> {out}",
+              flush=True)
+    print(f"{evaluated} of {len(runs)} runs evaluated into {out_dir}")
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from sightline.reporting import aggregate, write_report
+
+    in_dir = Path(args.in_dir)
+    paths = sorted(in_dir.glob("*.json")) if in_dir.is_dir() else []
+    if not paths:
+        raise MissingDataError(f"no run reports in {in_dir}; write them with `sightline eval --all`")
+    reports = []
+    for path in paths:
+        try:
+            report = json.loads(path.read_text())
+        except ValueError as exc:
+            raise CommandError(f"{path} is not a JSON report: {exc}") from None
+        if not isinstance(report, dict) or not {"run", "model", "protocol", "seed", "val", "test"} <= report.keys():
+            raise CommandError(f"{path} is not a run report (`sightline eval` writes those)")
+        reports.append(report)
+    try:
+        summary = aggregate(reports)
+    except ValueError as exc:
+        raise CommandError(f"cannot summarise {in_dir}: {exc}") from None
+    write_report(Path(args.out), summary)
+    print(f"summarised {len(reports)} run reports into {args.out}; shipped {summary['shipped']['run']}")
+    for model, entry in summary["paired_leakage"].items():
+        print(f"{model}: paired blocked/shuffled MAE ratio {entry['ratio']['mean']:.2f} "
+              f"over seeds {[p['seed'] for p in entry['per_seed']]}")
+    return 0
+
+
+def cmd_figures(args: argparse.Namespace) -> int:
+    summary_path = Path(args.summary)
+    if not summary_path.is_file():
+        raise MissingDataError(f"no summary at {summary_path}; write it with `sightline report`")
+    try:
+        from sightline.figures import write_figures
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] != "matplotlib":
+            raise
+        raise CommandError("figures need matplotlib: pip install -e '.[figures]'") from None
+    try:
+        written = write_figures(json.loads(summary_path.read_text()), Path(args.out_dir))
+    except ValueError as exc:
+        raise CommandError(f"cannot draw {summary_path}: {exc}") from None
+    for path in written:
+        print(f"wrote {path}")
     return 0
 
 
@@ -224,12 +321,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_locations(p)
     p.set_defaults(fn=cmd_train)
 
-    p = sub.add_parser("eval", help="evaluate a trained run against the baselines")
-    p.add_argument("--run", required=True)
-    p.add_argument("--cross-drive", default=None, help="drive name to evaluate as held-out cross-drive test")
-    p.add_argument("--out", default=None, help="write the full report JSON here")
+    p = sub.add_parser("eval", help="evaluate trained runs against the baselines")
+    which = p.add_mutually_exclusive_group(required=True)
+    which.add_argument("--run", help="run name under --runs-dir, or a path to a run folder")
+    which.add_argument("--all", action="store_true",
+                       help="every finished run under --runs-dir, one report each in --out-dir")
+    p.add_argument("--cross-drive", default="drive2017",
+                   help="drive scored whole as 'another day', or 'none' (default: drive2017)")
+    p.add_argument("--out", default=None, help="with --run: write the report JSON here")
+    p.add_argument("--out-dir", default="reports/runs", help="with --all: folder for the reports")
+    p.add_argument("--overwrite", action="store_true", help="with --all: evaluate runs already reported")
+    p.add_argument("--device", default="cpu", choices=[d for d in DEVICES if d != "auto"],
+                   help="device to evaluate on (default: cpu, the device published numbers come from)")
     _add_locations(p)
     p.set_defaults(fn=cmd_eval)
+
+    p = sub.add_parser("report", help="summarise the run reports over seeds")
+    p.add_argument("--in-dir", default="reports/runs", help="folder of run reports")
+    p.add_argument("--out", default="reports/summary.json", help="where to write the summary")
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("figures", help="draw the summary's figures")
+    p.add_argument("--summary", default="reports/summary.json", help="the summary to draw")
+    p.add_argument("--out-dir", default="reports/figures", help="folder for the PNG figures")
+    p.set_defaults(fn=cmd_figures)
 
     p = sub.add_parser("export", help="export a run to ONNX with saliency output")
     p.add_argument("--run", required=True)

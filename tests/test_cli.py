@@ -56,10 +56,11 @@ def test_help_runs_as_a_module():
                          env={**os.environ, "PYTHONPATH": "src"}).stdout
     listed = re.search(r"usage: sightline \[-h\] \{([^}]*)\}", out)
     assert listed, out
-    assert {"data", "cache", "train", "eval", "export", "demo"} <= set(listed.group(1).split(","))
+    assert {"data", "cache", "train", "eval", "report", "figures", "export", "demo"} <= set(listed.group(1).split(","))
 
 
-@pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["export"], ["demo"]])
+@pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["report"], ["figures"],
+                                  ["export"], ["demo"]])
 def test_every_subcommand_has_its_own_help(argv, capsys):
     with pytest.raises(SystemExit) as exc:
         main([*argv, "--help"])
@@ -99,7 +100,7 @@ def test_a_run_without_frame_lags_is_a_one_line_error(tmp_path, capsys):
 
     from sightline.models import build_model
 
-    run = tmp_path / "runs" / "drivetest_sightlinenet_honest_s0"
+    run = tmp_path / "runs" / "drivetest_sightlinenet_blocked_s0"
     run.mkdir(parents=True)
     (run / "history.json").write_text(json.dumps({"config": {
         "model": "sightlinenet", "augment": True, "notes": {"drive": "drivetest"}}}))
@@ -107,7 +108,8 @@ def test_a_run_without_frame_lags_is_a_one_line_error(tmp_path, capsys):
     for argv in _run_commands(tmp_path, run):
         code = main(argv)
         line = _error_line(capsys.readouterr().err)
-        assert code == 2 and "predates multi-frame support" in line, argv[0]
+        assert code == 2 and f"run {run.name!r} records no frame_lags" in line, argv[0]
+        assert "train it again" in line, argv[0]
 
 
 def test_data_verify_of_a_missing_drive_points_at_the_download_steps(tmp_path, capsys):

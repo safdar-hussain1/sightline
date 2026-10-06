@@ -100,7 +100,7 @@ def test_a_run_without_frame_lags_is_refused(tmp_path):
 
     config = {"model": "sightlinenet", "augment": True, "notes": {}}
     _write_run(tmp_path / "old", config, build_model("sightlinenet-1f"))
-    with pytest.raises(ValueError, match="predates multi-frame support"):
+    with pytest.raises(ValueError, match="^run 'old' records no frame_lags"):
         load_run_model(tmp_path / "old")
 
 

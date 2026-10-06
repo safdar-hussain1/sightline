@@ -1,14 +1,29 @@
 """Run evaluation and report assembly.
 
-``evaluate_run`` loads a trained run, scores it on its own validation and
-test splits plus (optionally) an entire held-out cross-drive, always beside
-the baselines, and writes one JSON report. Published documents read their
-numbers from these reports — nowhere else.
+``evaluate_run`` loads a trained run and scores it, on the CPU unless told
+otherwise, on its own validation and test splits and on a whole second drive
+("another day"), always beside the baselines. Shuffled and blocked runs are
+also scored on their seed's paired frames: the frames BOTH protocols hold out
+for testing, so the two models of a seed are compared on identical frames.
+One JSON report per run.
+
+``aggregate`` combines the run reports into the summary: statistics over
+seeds per model and protocol, the paired leakage measurement, the
+generalisation ladder (shuffled, blocked, later in the drive, another day)
+and the shipped model, chosen on validation MAE alone. Published documents
+read their numbers from these reports, nowhere else.
+
+Reports are written as sorted, indented JSON of plain Python values with a
+trailing newline, so evaluating the same run again yields the same text.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import platform
+import re
 from pathlib import Path
 
 import numpy as np
@@ -16,17 +31,53 @@ import torch
 
 from sightline.data.cache import build_cache
 from sightline.data.labels import load_labels, repair_dropouts
-from sightline.evaluate import (
-    baseline_predictions,
-    regime_breakdown,
-    regression_metrics,
-    smoothness,
-)
-from sightline.models import build_model
+from sightline.data.splits import PROTOCOLS, PUBLIC_NAMES, make_split, paired_frames
+from sightline.evaluate import regression_metrics, score_split
+from sightline.models import MODEL_SPECS, build_model
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
-from sightline.train import pick_device, predict
+from sightline.train import code_version, predict
 
-__all__ = ["evaluate_run", "load_run_model"]
+__all__ = [
+    "CROSS_FIRST_FRAME",
+    "LADDER",
+    "SELECTED_BY",
+    "aggregate",
+    "evaluate_run",
+    "finished_runs",
+    "frames_sha256",
+    "load_run_model",
+    "load_split_indices",
+    "seed_stats",
+    "select_shipped",
+    "write_report",
+]
+
+#: the cross drive is scored from this frame on, so every model (history lag up
+#: to 2 frames) and every baseline (two labels of history) sees the same frames
+CROSS_FIRST_FRAME = 2
+
+#: protocols scored on the paired frames
+PAIRED_PROTOCOLS = ("leaky", "blocked")
+
+#: the generalisation ladder, in order: (rung, protocol, split)
+LADDER = (
+    (PUBLIC_NAMES["leaky"], "leaky", "test"),
+    (PUBLIC_NAMES["blocked"], "blocked", "test"),
+    (PUBLIC_NAMES["forward"], "forward", "test"),
+    ("another day", "blocked", "cross_drive"),
+)
+
+#: the shipped model is the seed of this group with the lowest validation MAE;
+#: test and cross-drive scores never take part in the choice
+SHIPPED_MODEL, SHIPPED_PROTOCOL = "sightlinenet", "blocked"
+SELECTED_BY = "val_mae_deg"
+
+_RUN_NAME = re.compile(
+    r"(?P<drive>.+)_(?P<model>{})_(?P<protocol>{})_s(?P<seed>\d+)".format(
+        "|".join(re.escape(m) for m in sorted(MODEL_SPECS, key=len, reverse=True)),
+        "|".join(PROTOCOLS),
+    )
+)
 
 
 def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
@@ -38,8 +89,8 @@ def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
     config = history["config"]
     if "frame_lags" not in config:
         raise UnusableRunError(
-            f"run predates multi-frame support: {run_dir.name!r} records no frame_lags "
-            "in history.json, so the input its model expects is unknown; train it again"
+            f"run {run_dir.name!r} records no frame_lags in its history.json, so the input "
+            "its model expects is unknown; train it again"
         )
     model = build_model(
         config["model"], frame_lags=tuple(config["frame_lags"]), dropout=config["dropout"]
@@ -50,94 +101,366 @@ def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
     return model, history
 
 
-def _is_contiguous(indices: np.ndarray) -> bool:
-    return bool(np.all(np.diff(indices) == 1))
+def load_split_indices(run_dir: Path, split: str) -> np.ndarray:
+    """The frame indices a run saved for ``split`` (train, val or test)."""
+    path = Path(run_dir) / f"{split}_idx.npy"
+    if not path.is_file():
+        raise MissingDataError(f"run {Path(run_dir).name!r} is incomplete: expected {path}")
+    return np.load(path)
 
 
-def _score_split(
-    model: torch.nn.Module,
-    cache,
-    labels,
-    indices: np.ndarray,
-    train_mean: float,
-    device: torch.device,
-) -> dict:
-    angles = cache.angles_deg.astype(np.float64)
-    target = angles[indices]
-    pred = predict(model, cache, indices, device).astype(np.float64)
+def finished_runs(runs_dir: Path) -> list[Path]:
+    """Every ``<drive>_<model>_<protocol>_s<seed>`` folder of ``runs_dir`` holding a history.json."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        raise MissingDataError(f"no runs folder at {runs_dir}")
+    return sorted(
+        p for p in runs_dir.iterdir()
+        if p.is_dir() and _RUN_NAME.fullmatch(p.name) and (p / "history.json").is_file()
+    )
 
-    entry = {
-        "model": regression_metrics(pred, target),
-        "regimes": regime_breakdown(pred, target),
-        "baselines": {},
+
+def frames_sha256(indices: np.ndarray) -> str:
+    """sha256 of frame indices as little-endian int64: equal digests mean identical frames."""
+    return hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()
+
+
+def write_report(path: Path, data: dict) -> None:
+    """Write sorted, indented JSON with a trailing newline; replace the file atomically,
+    so an interrupted write never leaves a half report that looks finished."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(data, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    partial = path.with_name(path.name + ".partial")
+    partial.write_text(text)
+    os.replace(partial, path)
+
+
+def _versions() -> dict:
+    return {"torch": torch.__version__, "numpy": np.__version__, "python": platform.python_version()}
+
+
+def _load_drive(workspace: Workspace, name: str):
+    labels = repair_dropouts(load_labels(workspace.drive(name)))
+    cache = build_cache(labels, workspace.cache_dir(name))
+    dt_s = labels.median_dt_s() if labels.has_timestamps else None
+    info = {
+        "frames": len(cache),
+        "repaired_labels": int(labels.repaired_indices.size),
+        "median_dt_s": dt_s,
+        "label_sha256": cache.meta.get("label_sha256"),
     }
-    usable = indices >= 2
-    for name, base_pred in baseline_predictions(angles, indices[usable], train_mean).items():
-        entry["baselines"][name] = regression_metrics(base_pred, target[usable])
+    return cache, dt_s, info
 
-    if _is_contiguous(indices):
-        dt = labels.median_dt_s() if labels.has_timestamps else None
-        entry["smoothness"] = {
-            "model": smoothness(pred, dt),
-            "human": smoothness(target, dt),
-        }
-        if dt is not None:
-            entry["median_dt_s"] = dt
-    return entry
+
+def _score(model, cache, indices: np.ndarray, train_mean: float, dt_s, device) -> dict:
+    indices = np.sort(np.asarray(indices, dtype=np.int64))
+    angles = cache.angles_deg.astype(np.float64)
+    pred = predict(model, cache, indices, device).astype(np.float64)
+    return score_split(pred, angles[indices], angles, indices, train_mean, dt_s)
+
+
+def _check_split(run_name: str, saved: dict, protocol: str, n: int, seed: int, notes: dict) -> None:
+    """Refuse a run whose saved split is not the split its protocol makes: its paired
+    frames could then include frames it trained on."""
+    if "firewall" not in notes or "block" not in notes:
+        raise UnusableRunError(
+            f"run {run_name!r} records no firewall/block in its history.json, so its split "
+            "cannot be checked; train it again"
+        )
+    try:
+        expected = make_split(protocol, n, seed=seed, firewall=notes["firewall"], block=notes["block"])
+    except ValueError as exc:
+        raise UnusableRunError(f"run {run_name!r}: cannot make its {protocol} split again: {exc}") from None
+    for split, indices in saved.items():
+        if not np.array_equal(indices, getattr(expected, split)):
+            raise UnusableRunError(
+                f"run {run_name!r}: {split}_idx.npy is not the {protocol} split of its drive "
+                f"({n} frames, seed {seed}, firewall {notes['firewall']}, block {notes['block']})"
+            )
 
 
 def evaluate_run(
     run_dir: Path,
     workspace: Workspace,
-    cross_drive: str | None = None,
+    cross_drive: str | None = "drive2017",
     out_path: Path | None = None,
+    device: str = "cpu",
 ) -> dict:
+    """Score one run and return (and with ``out_path``, write) its report.
+
+    ``device`` is used as given; evaluation never picks one on its own, so
+    published numbers come from the CPU unless a device is named.
+    """
+    run_dir = Path(run_dir)
     model, history = load_run_model(run_dir)
-    device = pick_device()
-    model.to(device)
+    saved = {split: load_split_indices(run_dir, split) for split in ("train", "val", "test")}
+    if cross_drive is not None:
+        workspace.drive(cross_drive)  # a missing cross drive fails before any scoring
+    config = history["config"]
+    notes = config["notes"]
+    protocol, seed = notes["protocol"], int(config["seed"])
 
-    drive_name = history["config"]["notes"]["drive"]
-    labels = repair_dropouts(load_labels(workspace.drive(drive_name)))
-    cache = build_cache(labels, workspace.cache_dir(drive_name))
+    cache, dt_s, drive_info = _load_drive(workspace, notes["drive"])
+    n = len(cache)
+    _check_split(run_dir.name, saved, protocol, n, seed, notes)
+    recorded = notes.get("repaired_labels")
+    if recorded is not None and recorded != drive_info["repaired_labels"]:
+        raise UnusableRunError(
+            f"run {run_dir.name!r} trained on {recorded} repaired labels, but drive "
+            f"{notes['drive']!r} now has {drive_info['repaired_labels']}; its labels have changed"
+        )
 
-    train_idx = np.load(run_dir / "train_idx.npy")
-    val_idx = np.load(run_dir / "val_idx.npy")
-    test_idx = np.load(run_dir / "test_idx.npy")
-    train_mean = float(cache.angles_deg[train_idx].mean())
+    torch_device = torch.device(device)
+    model.to(torch_device)
+    angles = cache.angles_deg.astype(np.float64)
+    train_mean = float(angles[saved["train"]].mean())
 
     report: dict = {
         "run": run_dir.name,
-        "config": history["config"],
-        "n_params": history["n_params"],
-        "train_mean_deg": train_mean,
+        "model": config["model"],
+        "protocol": protocol,
+        "seed": seed,
+        "frame_lags": [int(lag) for lag in config["frame_lags"]],
+        "n_params": int(history["n_params"]),
+        "best_epoch": int(history["best_epoch"]),
+        "epochs_run": len(history["history"]),
+        "code_version": history.get("code_version"),
+        "eval_code_version": code_version(),
+        "train_device": history.get("device"),
+        "device": str(torch_device),
+        "versions": _versions(),
+        "drive": notes["drive"],
+        "drives": {notes["drive"]: drive_info},
         "splits": {
-            "train_n": int(train_idx.size),
-            "val_n": int(val_idx.size),
-            "test_n": int(test_idx.size),
+            "train_n": int(saved["train"].size),
+            "val_n": int(saved["val"].size),
+            "test_n": int(saved["test"].size),
+            "firewall": int(notes["firewall"]),
+            "block": int(notes["block"]),
         },
-        "val": _score_split(model, cache, labels, np.sort(val_idx), train_mean, device),
-        "test": _score_split(model, cache, labels, np.sort(test_idx), train_mean, device),
+        "train_mean_deg": train_mean,
+        "val": _score(model, cache, saved["val"], train_mean, dt_s, torch_device),
+        "test": _score(model, cache, saved["test"], train_mean, dt_s, torch_device),
     }
 
-    if cross_drive is not None:
-        c_labels = repair_dropouts(load_labels(workspace.drive(cross_drive)))
-        c_cache = build_cache(c_labels, workspace.cache_dir(cross_drive))
-        all_idx = np.arange(2, len(c_cache), dtype=np.int64)
-        report["cross_drive"] = {
-            "drive": cross_drive,
-            **_score_split(model, c_cache, c_labels, all_idx, train_mean, device),
+    if protocol in PAIRED_PROTOCOLS:
+        frames = paired_frames(
+            make_split("blocked", n, firewall=notes["firewall"], block=notes["block"]),
+            make_split("leaky", n, seed=seed),
+        )
+        if frames.size == 0:
+            raise UnusableRunError(f"run {run_dir.name!r}: the blocked and shuffled test sets share no frame")
+        pred = predict(model, cache, frames, torch_device).astype(np.float64)
+        report["paired"] = {
+            "seed": seed,
+            "n": int(frames.size),
+            "frames_sha256": frames_sha256(frames),
+            "model": regression_metrics(pred, angles[frames]),
+            "zero_mae_deg": float(np.abs(angles[frames]).mean()),
         }
 
-    report["headline"] = {
-        "val_mae_deg": report["val"]["model"]["mae_deg"],
-        "test_mae_deg": report["test"]["model"]["mae_deg"],
-        "test_balanced_mae_deg": report["test"]["regimes"]["balanced_mae_deg"],
-        "cross_drive_mae_deg": (
-            report["cross_drive"]["model"]["mae_deg"] if cross_drive is not None else None
-        ),
-    }
+    if cross_drive is not None:
+        c_cache, c_dt_s, c_info = _load_drive(workspace, cross_drive)
+        report["drives"][cross_drive] = c_info
+        everything = np.arange(CROSS_FIRST_FRAME, len(c_cache), dtype=np.int64)
+        report["cross_drive"] = {
+            "drive": cross_drive,
+            **_score(model, c_cache, everything, train_mean, c_dt_s, torch_device),
+        }
 
     if out_path is not None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(report, indent=2))
+        write_report(out_path, report)
     return report
+
+
+# --- the summary ------------------------------------------------------------------------
+
+def seed_stats(values) -> dict:
+    """``{"mean", "sd", "values"}`` over seeds; ``sd`` is the sample standard deviation
+    (ddof=1), ``None`` for a single seed. Any undefined value makes mean and sd ``None``."""
+    vals = [None if v is None else float(v) for v in values]
+    if not vals:
+        raise ValueError("no values to summarise")
+    if any(v is None for v in vals):
+        return {"mean": None, "sd": None, "values": vals}
+    sd = float(np.std(vals, ddof=1)) if len(vals) > 1 else None
+    return {"mean": float(np.mean(vals)), "sd": sd, "values": vals}
+
+
+def _best_on_validation(group: dict) -> int:
+    values = group[SELECTED_BY]["values"]
+    if any(v is None for v in values):
+        raise ValueError(f"a {SELECTED_BY} value is missing; cannot choose a seed")
+    return int(np.argmin(values))  # ties go to the first, i.e. the lowest seed
+
+
+def select_shipped(groups: dict) -> dict:
+    """The ``sightlinenet/blocked`` seed with the lowest validation MAE."""
+    key = f"{SHIPPED_MODEL}/{SHIPPED_PROTOCOL}"
+    if key not in groups:
+        raise ValueError(f"no {key} runs to choose the shipped model from")
+    group = groups[key]
+    best = _best_on_validation(group)
+    return {
+        "model": SHIPPED_MODEL,
+        "protocol": SHIPPED_PROTOCOL,
+        "seed": group["seeds"][best],
+        "run": group["runs"][best],
+        "selected_by": SELECTED_BY,
+    }
+
+
+def _one_value(values: list, what: str):
+    distinct = {json.dumps(v, sort_keys=True) for v in values}
+    if len(distinct) != 1:
+        raise ValueError(f"the reports disagree on {what}: {sorted(distinct)}")
+    return values[0]
+
+
+def _group(members: list[dict]) -> dict:
+    first = members[0]
+    group = {
+        "model": first["model"],
+        "protocol": first["protocol"],
+        "seeds": [r["seed"] for r in members],
+        "runs": [r["run"] for r in members],
+        "val_mae_deg": seed_stats(r["val"]["model"]["mae_deg"] for r in members),
+        "test_mae_deg": seed_stats(r["test"]["model"]["mae_deg"] for r in members),
+        "test_r": seed_stats(r["test"]["pearson_r"] for r in members),
+        "test_skill": seed_stats(r["test"]["skill_vs_zero"] for r in members),
+        # the same frames for every seed except shuffled splits, whose test set is the seed's
+        "test_zero_mae_deg": float(np.mean([r["test"]["baselines"]["zero"]["mae_deg"] for r in members])),
+    }
+    crossed = ["cross_drive" in r for r in members]
+    if any(crossed) and not all(crossed):
+        raise ValueError(f"{first['model']}/{first['protocol']}: only some seeds were scored on a cross drive")
+    if all(crossed):
+        group["cross_mae_deg"] = seed_stats(r["cross_drive"]["model"]["mae_deg"] for r in members)
+        group["cross_r"] = seed_stats(r["cross_drive"]["pearson_r"] for r in members)
+        group["cross_skill"] = seed_stats(r["cross_drive"]["skill_vs_zero"] for r in members)
+        group["cross_zero_mae_deg"] = float(
+            np.mean([r["cross_drive"]["baselines"]["zero"]["mae_deg"] for r in members]))
+    return group
+
+
+def _paired_leakage(model: str, by_key: dict, groups: dict) -> dict | None:
+    leaky, blocked = groups.get(f"{model}/leaky"), groups.get(f"{model}/blocked")
+    if leaky is None or blocked is None:
+        return None
+    seeds = sorted(set(leaky["seeds"]) & set(blocked["seeds"]))
+    if not seeds:
+        return None
+    per_seed = []
+    for seed in seeds:
+        shuffled_score = by_key[(model, "leaky", seed)].get("paired")
+        blocked_score = by_key[(model, "blocked", seed)].get("paired")
+        if shuffled_score is None or blocked_score is None:
+            raise ValueError(f"{model} seed {seed}: a shuffled or blocked report has no paired score")
+        same = ("seed", "n", "frames_sha256")
+        if any(shuffled_score[k] != blocked_score[k] for k in same):
+            raise ValueError(f"{model} seed {seed}: the paired scores were taken on different frames")
+        s_mae, b_mae = shuffled_score["model"]["mae_deg"], blocked_score["model"]["mae_deg"]
+        per_seed.append({
+            "seed": seed,
+            "n": shuffled_score["n"],
+            "shuffled_mae_deg": s_mae,
+            "blocked_mae_deg": b_mae,
+            "ratio": b_mae / s_mae,
+            "difference_deg": b_mae - s_mae,
+            "zero_mae_deg": shuffled_score["zero_mae_deg"],
+        })
+    return {
+        "per_seed": per_seed,
+        "ratio": seed_stats(p["ratio"] for p in per_seed),
+        "difference_deg": seed_stats(p["difference_deg"] for p in per_seed),
+        "shuffled_mae_deg": seed_stats(p["shuffled_mae_deg"] for p in per_seed),
+        "blocked_mae_deg": seed_stats(p["blocked_mae_deg"] for p in per_seed),
+    }
+
+
+def _ladder(model: str, groups: dict, train_drive: str, cross_drive: str | None) -> list[dict]:
+    rungs = []
+    for rung, protocol, split in LADDER:
+        group = groups.get(f"{model}/{protocol}")
+        if group is None:
+            continue
+        if split == "test":
+            mae, zero, drive = group["test_mae_deg"], group["test_zero_mae_deg"], train_drive
+        elif "cross_mae_deg" in group:
+            mae, zero, drive = group["cross_mae_deg"], group["cross_zero_mae_deg"], cross_drive
+        else:
+            continue
+        rungs.append({"rung": rung, "protocol": protocol, "split": split, "drive": drive,
+                      "seeds": group["seeds"], "mae_deg": mae, "zero_mae_deg": zero})
+    return rungs
+
+
+def aggregate(run_reports: list[dict]) -> dict:
+    """The summary of a set of run reports (one per model, protocol and seed)."""
+    reports = sorted(run_reports, key=lambda r: (r["model"], r["protocol"], r["seed"]))
+    if not reports:
+        raise ValueError("no run reports to summarise")
+    by_key: dict = {}
+    for r in reports:
+        key = (r["model"], r["protocol"], r["seed"])
+        if key in by_key:
+            raise ValueError(f"{r['model']}/{r['protocol']} seed {r['seed']} is reported twice "
+                             f"({by_key[key]['run']!r} and {r['run']!r})")
+        by_key[key] = r
+
+    versions = _one_value([r["versions"] for r in reports], "library versions")
+    train_drive = _one_value([r["drive"] for r in reports], "the training drive")
+    cross_drives = sorted({r["cross_drive"]["drive"] for r in reports if "cross_drive" in r})
+    if len(cross_drives) > 1:
+        raise ValueError(f"the reports disagree on the cross drive: {cross_drives}")
+    cross_drive = cross_drives[0] if cross_drives else None
+    drives: dict = {}
+    for r in reports:
+        for name, info in r["drives"].items():
+            if drives.setdefault(name, info) != info:
+                raise ValueError(f"the reports disagree on drive {name!r}: {drives[name]} vs {info}")
+
+    groups: dict = {}
+    for (model, protocol, _seed), r in by_key.items():
+        groups.setdefault(f"{model}/{protocol}", []).append(r)
+    groups = {key: _group(members) for key, members in groups.items()}
+    models = sorted({r["model"] for r in reports})
+
+    shipped = select_shipped(groups)
+    twin_key = (SHIPPED_MODEL, "leaky", shipped["seed"])
+    if twin_key not in by_key:
+        raise ValueError(f"the shipped run {shipped['run']!r} has no shuffled-split twin "
+                         f"({SHIPPED_MODEL}/leaky seed {shipped['seed']})")
+    twin = by_key[twin_key]
+
+    regimes: dict = {"protocol": SHIPPED_PROTOCOL, "split": "test", "selected_by": SELECTED_BY,
+                     "zero": by_key[(SHIPPED_MODEL, SHIPPED_PROTOCOL, shipped["seed"])]["test"]["zero_regimes"],
+                     "models": {}}
+    for model in models:
+        group = groups.get(f"{model}/{SHIPPED_PROTOCOL}")
+        if group is not None:
+            seed = group["seeds"][_best_on_validation(group)]
+            chosen = by_key[(model, SHIPPED_PROTOCOL, seed)]
+            regimes["models"][model] = {"run": chosen["run"], "seed": seed, "regimes": chosen["test"]["regimes"]}
+
+    paired = {m: p for m in models if (p := _paired_leakage(m, by_key, groups)) is not None}
+
+    def ordered_unique(values):
+        return sorted(set(values), key=lambda v: (v is None, v or ""))
+
+    return {
+        "versions": versions,
+        "code_versions": {
+            "train": ordered_unique(r["code_version"] for r in reports),
+            "eval": ordered_unique(r.get("eval_code_version") for r in reports),
+        },
+        "runs": sorted(r["run"] for r in reports),
+        "groups": groups,
+        "paired_leakage": paired,
+        "ladder": {m: _ladder(m, groups, train_drive, cross_drive) for m in models},
+        "shipped": shipped,
+        "twin": {"run": twin["run"], "model": twin["model"], "protocol": twin["protocol"], "seed": twin["seed"]},
+        "regimes": regimes,
+        "drives": drives,
+    }
