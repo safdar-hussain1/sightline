@@ -1,0 +1,135 @@
+{
+  "atan_cap": {
+    "labels_beyond_180": {
+      "drive2017": {
+        "frac": 0.004911245209884156,
+        "n": 223
+      },
+      "drive2018": {
+        "frac": 0.003681942812377595,
+        "n": 235
+      }
+    },
+    "max_abs_pred_deg": 169.84153747558594
+  },
+  "device": "cpu",
+  "drives": {
+    "drive2017": {
+      "frames": 45406,
+      "label_sha256": "235c70454d460b86edf1ddb4afba4354529687ad9ca08cb5d7ddfd8f8d4a8bb7",
+      "median_dt_s": null,
+      "repaired_labels": 268
+    },
+    "drive2018": {
+      "frames": 63825,
+      "label_sha256": "f7804a17185534831be517dccad1f24a1fbcf34ff5d961f03f83c5b9b8e57434",
+      "median_dt_s": 0.056999921798706055,
+      "repaired_labels": 368
+    }
+  },
+  "eval": {
+    "drive2017_all_seen": {
+      "model": {
+        "mae_deg": 4.480583195894129,
+        "medae_deg": 2.6977699398994446,
+        "n": 45404,
+        "rmse_deg": 10.882000749821684,
+        "within_15_deg": 0.9679323407629283,
+        "within_1p5_deg": 0.29327812527530617,
+        "within_5_deg": 0.7505946612633249
+      },
+      "pearson_r": 0.948342605242717,
+      "regimes": {
+        "balanced_mae_deg": 6.797393022082894,
+        "gentle": {
+          "mae_deg": 3.6080617055407447,
+          "n": 21127
+        },
+        "sharp": {
+          "mae_deg": 14.128145091382796,
+          "n": 5468
+        },
+        "straight": {
+          "mae_deg": 2.655972269325142,
+          "n": 18809
+        }
+      },
+      "zero_mae_deg": 15.52269723393061
+    },
+    "drive2018_blocked_test": {
+      "model": {
+        "mae_deg": 21.97078830103064,
+        "medae_deg": 14.158719062805176,
+        "n": 6000,
+        "rmse_deg": 35.464228116919756,
+        "within_15_deg": 0.5261666666666667,
+        "within_1p5_deg": 0.05383333333333333,
+        "within_5_deg": 0.17033333333333334
+      },
+      "pearson_r": 0.21666028651615177,
+      "regimes": {
+        "balanced_mae_deg": 31.751471951344787,
+        "gentle": {
+          "mae_deg": 15.731527522931396,
+          "n": 2416
+        },
+        "sharp": {
+          "mae_deg": 65.68671390919096,
+          "n": 853
+        },
+        "straight": {
+          "mae_deg": 13.836174421912009,
+          "n": 2731
+        }
+      },
+      "zero_mae_deg": 17.479270016382138
+    },
+    "drive2018_forward_test": {
+      "model": {
+        "mae_deg": 19.394295458684024,
+        "medae_deg": 12.720029711723328,
+        "n": 9324,
+        "rmse_deg": 30.216049890296613,
+        "within_15_deg": 0.5694980694980695,
+        "within_1p5_deg": 0.051587301587301584,
+        "within_5_deg": 0.20398970398970398
+      },
+      "pearson_r": 0.13816958599883372,
+      "regimes": {
+        "balanced_mae_deg": 43.02193019340791,
+        "gentle": {
+          "mae_deg": 21.47048507132594,
+          "n": 4227
+        },
+        "sharp": {
+          "mae_deg": 93.28509981195498,
+          "n": 217
+        },
+        "straight": {
+          "mae_deg": 14.310205696942798,
+          "n": 4880
+        }
+      },
+      "zero_mae_deg": 9.406421568820829
+    }
+  },
+  "eval_code_version": "d9af852085a27b814d89056f60cb7390649ebf92",
+  "port_parity": {
+    "frames": 192,
+    "max_abs_diff_deg": 0.0002212440630486867
+  },
+  "recipe": "PilotNet, TF1, shuffled 80/20 split, MSE in radians + L2, 2\u00b7atan head",
+  "seen_first_frame": 2,
+  "splits": {
+    "block": 1500,
+    "firewall": 250
+  },
+  "trained_on": "drive2017",
+  "versions": {
+    "numpy": "2.5.1",
+    "opencv": "4.13.0",
+    "python": "3.12.13",
+    "torch": "2.13.0"
+  },
+  "weights_sha256": "05fa472de9929986380c294dc3a9035a2f2577467fa479467538c58ae2753a3c"
+}
