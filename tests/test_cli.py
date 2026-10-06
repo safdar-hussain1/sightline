@@ -52,3 +52,35 @@ def test_help_runs_as_a_module():
                          env={**os.environ, "PYTHONPATH": "src"}).stdout
     for sub in ("data", "cache", "train", "eval", "export"):
         assert sub in out
+
+
+def test_eval_and_export_of_a_missing_run_are_clear_errors(tmp_path, capsys):
+    runs = str(tmp_path / "runs")
+    for argv in (
+        ["eval", "--run", str(tmp_path / "runs" / "nope"), "--runs-dir", runs],
+        ["export", "--run", str(tmp_path / "runs" / "nope"), "--out", str(tmp_path / "x.onnx"),
+         "--runs-dir", runs],
+        ["demo", "--drive", "drivetest", "--run", str(tmp_path / "runs" / "nope"),
+         "--out", str(tmp_path / "d.mp4"), "--data-dir", str(tmp_path / "data"), "--runs-dir", runs],
+    ):
+        code = main(argv)
+        err = capsys.readouterr().err
+        assert code == 2 and "not found" in err and "Traceback" not in err
+
+
+def test_export_without_a_drive_cache_names_the_cache_command(tmp_path, capsys):
+    import json
+
+    import torch
+
+    from sightline.models import build_model
+
+    run = tmp_path / "runs" / "r"
+    run.mkdir(parents=True)
+    (run / "history.json").write_text(
+        json.dumps({"config": {"model": "sightlinenet", "notes": {"drive": "drivetest"}}}))
+    torch.save(build_model("sightlinenet").state_dict(), run / "best.pt")
+    code = main(["export", "--run", str(run), "--out", str(tmp_path / "x.onnx"),
+                 "--runs-dir", str(tmp_path / "runs")])
+    err = capsys.readouterr().err
+    assert code == 2 and "sightline cache --drive drivetest" in err and "Traceback" not in err

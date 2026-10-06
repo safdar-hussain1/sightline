@@ -23,13 +23,16 @@ from sightline.evaluate import (
     smoothness,
 )
 from sightline.models import build_model
-from sightline.paths import Workspace
+from sightline.paths import MissingDataError, Workspace
 from sightline.train import pick_device, predict
 
 __all__ = ["evaluate_run", "load_run_model"]
 
 
 def load_run_model(run_dir: Path) -> tuple[torch.nn.Module, dict]:
+    for name in ("history.json", "best.pt"):
+        if not (run_dir / name).is_file():
+            raise MissingDataError(f"run {run_dir.name!r} not found: expected {run_dir / name}")
     history = json.loads((run_dir / "history.json").read_text())
     model = build_model(history["config"]["model"])
     state = torch.load(run_dir / "best.pt", map_location="cpu", weights_only=True)

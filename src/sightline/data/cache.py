@@ -3,8 +3,8 @@
 Decoding 45k+ JPEGs per epoch is the training bottleneck, so the whole drive
 is preprocessed once into a uint8 memmap (N x 66 x 200 x 3 RGB) plus a
 float32 angle array. The cache is fingerprinted by the preprocessing
-constants and the label file's size and mtime; a stale cache is regenerated
-automatically.
+constants, the number of dropout repairs and the sha256 of the label file; a
+cache whose fingerprint differs is regenerated automatically.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import numpy as np
 from tqdm import tqdm
 
 from sightline.data.labels import DriveLabels
+from sightline.data.verify import label_sha256
 from sightline.data.preprocess import (
     CROP_BOTTOM,
     INPUT_HEIGHT,
@@ -27,7 +28,7 @@ from sightline.data.preprocess import (
 
 __all__ = ["DriveCache", "build_cache"]
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2
 
 
 class DriveCache:
@@ -56,12 +57,12 @@ class DriveCache:
 
 def _fingerprint(labels: DriveLabels) -> dict:
     label_file = labels.root / "data.txt"
-    stat = label_file.stat() if label_file.is_file() else None
+    digest = label_sha256(label_file) if label_file.is_file() else None
     return {
         "cache_version": _CACHE_VERSION,
         "input": [INPUT_HEIGHT, INPUT_WIDTH, CROP_BOTTOM],
         "num_frames": len(labels),
-        "label_bytes": stat.st_size if stat else None,
+        "label_sha256": digest,
         "repaired": int(labels.repaired_indices.size),
     }
 
@@ -76,7 +77,6 @@ def build_cache(
     cache_dir = Path(cache_dir)
     meta_path = cache_dir / "meta.json"
     fingerprint = _fingerprint(labels)
-    fingerprint["num_frames"] = len(labels)
 
     if not force and meta_path.is_file():
         existing = json.loads(meta_path.read_text())

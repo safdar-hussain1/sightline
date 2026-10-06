@@ -12,9 +12,14 @@ KNOWN_DRIVES = {
 }
 
 
+def label_sha256(label_file: Path) -> str:
+    """Hex sha256 of a label file's bytes."""
+    return hashlib.sha256(Path(label_file).read_bytes()).hexdigest()
+
+
 def verify_drive(path: Path, name: str) -> dict:
     label_file = Path(path) / "data.txt"
-    digest = hashlib.sha256(label_file.read_bytes()).hexdigest()
+    digest = label_sha256(label_file)
     rows = [ln.split()[0] for ln in label_file.read_text().splitlines() if ln.strip()]
     missing = [r for r in rows if not (Path(path) / r).is_file()]
     expected = KNOWN_DRIVES.get(name)

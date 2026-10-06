@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from sightline.paths import Workspace
+from sightline.paths import MissingDataError, Workspace
 from sightline.saliency import SteeringWithSaliency
 
 __all__ = ["export_onnx", "export_run"]
@@ -86,7 +86,13 @@ def export_run(run_dir: Path, out_path: Path, workspace: Workspace, check_frames
 
     model, history = load_run_model(run_dir)
     drive_name = history["config"]["notes"]["drive"]
-    cache = DriveCache(workspace.cache_dir(drive_name))
+    cache_dir = workspace.cache_dir(drive_name)
+    if not (cache_dir / "meta.json").is_file():
+        raise MissingDataError(
+            f"no cache for drive {drive_name!r} at {cache_dir}; "
+            f"run `sightline cache --drive {drive_name}` first"
+        )
+    cache = DriveCache(cache_dir)
     test_idx = np.load(run_dir / "test_idx.npy")
     step = max(1, test_idx.size // check_frames)
     sample = np.ascontiguousarray(cache.inputs[np.sort(test_idx)[::step][:check_frames]])
