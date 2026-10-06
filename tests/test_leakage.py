@@ -5,6 +5,7 @@ background drifts slowly from frame to frame, so neighbouring frames look almost
 distant ones do not, as on a real drive. (Without scenery, every frame showing the same bar
 position is pixel-identical, so a lookup finds an exact copy under any split.)
 """
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ import pytest
 from conftest import make_drive
 from sightline.cli import main
 from sightline.data.cache import DriveCache
+from sightline.data.labels import load_labels
 from sightline.data.splits import SplitIndices, make_split, paired_frames
 from sightline.leakage import downsample, nearest_neighbours, pair_positions, temporal_gaps
 
@@ -22,9 +24,14 @@ GAPS = {"min_frames", "median_frames", "p95_frames", "frac_within_1", "median_s"
 SIDE = {"nn_frame", "gap_frames", "gap_s", "pixel_rmse", "nn_angle_deg"}
 
 
-def _args(drive, out, *extra):
-    return ["leakage", "--drive", drive.name, "--seed", str(SEED), "--block", str(BLOCK),
-            "--firewall", str(FIREWALL), "--out", str(out), *drive.loc, *extra]
+def _args(drive, out, seed=SEED):
+    return ["leakage", "--drive", drive.name, "--seed", str(seed), "--block", str(BLOCK),
+            "--firewall", str(FIREWALL), "--out", str(out), *drive.loc]
+
+
+def _digest(frames):
+    """The run reports' frame digest, written out: sha256 of little-endian int64 indices."""
+    return hashlib.sha256(np.asarray(frames).astype("<i8").tobytes()).hexdigest()
 
 
 @pytest.fixture(scope="module")
@@ -38,6 +45,7 @@ def drive(tmp_path_factory):
     ctx.text = ctx.out.read_text()
     ctx.report = json.loads(ctx.text)
     ctx.cache = DriveCache(root / "runs" / "cache" / "drivetest")
+    ctx.timestamps = load_labels(root / "data" / "drivetest").timestamps_s
     ctx.splits = {p: make_split(p, N, seed=SEED, firewall=FIREWALL, block=BLOCK)
                   for p in ("leaky", "blocked", "forward")}
     ctx.paired = paired_frames(ctx.splits["blocked"], ctx.splits["leaky"])
@@ -114,7 +122,7 @@ def test_example_frames_sit_at_angle_quantiles_then_the_largest_angle():
 
 def test_the_report_has_the_contract_keys(drive):
     r = drive.report
-    assert {"drive", "seed", "dt_s", "gaps", "memoriser", "pairs"} <= r.keys()
+    assert {"drive", "seed", "dt_s", "paired", "gaps", "memoriser", "pairs"} <= r.keys()
     assert (r["drive"], r["seed"], r["splits"]) == ("drivetest", SEED, {"firewall": FIREWALL, "block": BLOCK})
     assert r["dt_s"] == pytest.approx(0.057, abs=1e-6)
     assert r["gaps"].keys() == {"leaky", "blocked", "forward"}
@@ -152,14 +160,14 @@ def test_six_distinct_example_pairs_each_matched_to_a_training_frame(drive):
     frames = [p["frame"] for p in pairs]
     assert len(pairs) == 6 and len(set(frames)) == 6
     assert set(frames) <= set(drive.paired.tolist())
-    angles = drive.cache.angles_deg
+    angles, ts = drive.cache.angles_deg, drive.timestamps
     for protocol in ("leaky", "blocked"):
         train = set(drive.splits[protocol].train.tolist())
         for p in pairs:
             side = p[protocol]
             assert side["nn_frame"] in train, (protocol, p)
             assert side["gap_frames"] == abs(side["nn_frame"] - p["frame"])
-            assert side["gap_s"] == pytest.approx(side["gap_frames"] * drive.report["dt_s"])
+            assert side["gap_s"] == pytest.approx(abs(ts[side["nn_frame"]] - ts[p["frame"]]), rel=1e-12)
             assert side["nn_angle_deg"] == float(angles[side["nn_frame"]])
             assert p["angle_deg"] == float(angles[p["frame"]])
     assert [p["frame"] for p in pairs] == drive.paired[pair_positions(angles[drive.paired])].tolist()
@@ -204,6 +212,52 @@ def test_the_report_is_the_same_every_time_as_plain_sorted_json(drive, tmp_path)
     again = tmp_path / "again.json"
     assert main(_args(drive, again)) == 0
     assert again.read_text() == drive.text
+
+
+def test_pair_gaps_in_seconds_follow_the_timestamps_not_the_median_interval(tmp_path):
+    # frame intervals alternate 40 and 74 ms: 300 of 40 ms and 299 of 74 ms, so the median
+    # interval is 40 ms while the frames are 57 ms apart on average
+    make_drive(tmp_path / "data", "driveuneven", n=600, intervals_ms=(40, 74))
+    out = tmp_path / "leakage.json"
+    ctx = SimpleNamespace(name="driveuneven", loc=["--data-dir", str(tmp_path / "data"),
+                                                   "--runs-dir", str(tmp_path / "runs")])
+    assert main(_args(ctx, out)) == 0
+    report = json.loads(out.read_text())
+    ts = load_labels(tmp_path / "data" / "driveuneven").timestamps_s
+    assert report["dt_s"] == pytest.approx(0.040, abs=1e-6)
+    sides = [(p["frame"], p[protocol]) for p in report["pairs"] for protocol in ("leaky", "blocked")]
+    for frame, side in sides:
+        assert side["gap_s"] == pytest.approx(abs(ts[side["nn_frame"]] - ts[frame]), rel=1e-12)
+    # over two frames or more the median interval would understate every gap by 34 ms or more
+    longer = [side for _, side in sides if side["gap_frames"] >= 2]
+    assert longer and all(side["gap_s"] - side["gap_frames"] * report["dt_s"] > 0.030 for side in longer)
+    # the gap summaries stay in frames, and their median_s is the median in frames times dt_s
+    for gaps in report["gaps"].values():
+        for g in gaps.values():
+            assert g["median_s"] == pytest.approx(g["median_frames"] * report["dt_s"], rel=1e-12)
+
+
+def test_the_seed_picks_the_shuffled_split_and_so_the_paired_frames(drive, tmp_path):
+    out = tmp_path / "seed1.json"
+    assert main(_args(drive, out, seed=1)) == 0
+    report = json.loads(out.read_text())
+    leaky = make_split("leaky", N, seed=1)
+    paired = paired_frames(drive.splits["blocked"], leaky)
+    assert paired.size != drive.paired.size  # seed 1's paired frames are not seed 0's
+    assert report["seed"] == 1
+    assert report["paired"] == {"n": int(paired.size), "frames_sha256": _digest(paired)}
+    assert all(lookup["n"] == paired.size for lookup in report["memoriser"].values())
+    assert {p["frame"] for p in report["pairs"]} <= set(paired.tolist())
+    assert all(p["leaky"]["nn_frame"] in set(leaky.train.tolist()) for p in report["pairs"])
+
+
+def test_the_paired_frames_carry_the_digest_the_run_reports_use(drive):
+    from sightline import reporting
+    from sightline.data import splits
+
+    assert reporting.frames_sha256 is splits.frames_sha256  # one digest function for every report
+    assert drive.report["paired"] == {"n": int(drive.paired.size), "frames_sha256": _digest(drive.paired)}
+    assert drive.report["paired"]["frames_sha256"] == reporting.frames_sha256(drive.paired)
 
 
 def test_a_drive_without_timestamps_reports_gaps_in_frames_only(tmp_path):

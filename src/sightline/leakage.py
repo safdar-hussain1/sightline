@@ -19,7 +19,8 @@ the lookup table the shuffled split rewards (``memoriser`` in the report)
 
 ``leakage_report`` assembles both, plus up to six example frames with the
 most similar training frame under each split: how far apart they are in
-frames and seconds, how alike they look, and what each was steering.
+frames and in seconds (from the drive's timestamps), how alike they look,
+and what each was steering.
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from sightline.data.splits import PROTOCOLS, SplitIndices, make_split, paired_frames
+from sightline.data.labels import median_interval_s
+from sightline.data.splits import PROTOCOLS, SplitIndices, frames_sha256, make_split, paired_frames
 from sightline.evaluate import regression_metrics
 
 __all__ = [
@@ -70,9 +72,12 @@ def frame_gaps(train: np.ndarray, frames: np.ndarray) -> np.ndarray:
 def temporal_gaps(split: SplitIndices, which: str, dt_s: float | None) -> dict:
     """How far the ``which`` frames (``"val"`` or ``"test"``) of ``split`` sit from its
     training frames: the minimum, median and 95th percentile of each frame's
-    distance to the nearest training frame, the share of frames with a training
-    frame right next to them (``frac_within_1``), and the median in seconds at
-    ``dt_s`` seconds per frame (``None`` when the drive has no timestamps)."""
+    distance in frames to the nearest training frame, and the share of frames
+    with a training frame right next to them (``frac_within_1``).
+
+    ``median_s`` is ``median_frames`` multiplied by ``dt_s``, the drive's median
+    frame interval: the median distance in frames expressed in seconds, not an
+    elapsed time read from the timestamps (``None`` when ``dt_s`` is ``None``)."""
     if which not in ("val", "test"):
         raise ValueError(f"which must be 'val' or 'test', got {which!r}")
     gaps = frame_gaps(split.train, getattr(split, which))
@@ -185,17 +190,24 @@ def pair_positions(angles_deg: np.ndarray) -> list[int]:
     return list(dict.fromkeys(picks))
 
 
-def leakage_report(cache, drive: str, seed: int, dt_s: float | None,
+def leakage_report(cache, drive: str, seed: int, timestamps_s: np.ndarray | None,
                    firewall: int = 250, block: int = 1500) -> dict:
     """The leakage report of a cached drive (see the module docstring).
 
     ``cache`` is a drive cache (``inputs`` and ``angles_deg``); ``seed`` picks the
     shuffled split, ``firewall`` and ``block`` the blocked and forward splits,
-    exactly as in training. ``dt_s`` is the drive's median frame interval, or
-    ``None`` when it has no timestamps. Every value is a plain int, float, str
-    or None.
+    exactly as in training. ``timestamps_s`` holds each frame's time in seconds,
+    or is ``None`` for a drive without timestamps. ``dt_s`` in the report is
+    their median interval; each example pair's ``gap_s`` is the time between its
+    two frames' timestamps. ``paired`` names the frames the lookup table is
+    scored on with the digest the run reports use. Every value is a plain int,
+    float, str or None.
     """
     n = len(cache)
+    ts = None if timestamps_s is None else np.asarray(timestamps_s, dtype=np.float64)
+    if ts is not None and ts.shape != (n,):
+        raise ValueError(f"{ts.size} timestamps for {n} frames")
+    dt_s = None if ts is None else median_interval_s(ts)
     splits = {p: make_split(p, n, seed=seed, firewall=firewall, block=block) for p in PROTOCOLS}
     frames = paired_frames(splits["blocked"], splits["leaky"])
     if frames.size == 0:
@@ -224,7 +236,7 @@ def leakage_report(cache, drive: str, seed: int, dt_s: float | None,
             pair[protocol] = {
                 "nn_frame": int(nn[i]),
                 "gap_frames": int(gaps[i]),
-                "gap_s": None if dt_s is None else int(gaps[i]) * float(dt_s),
+                "gap_s": None if ts is None else float(abs(ts[nn[i]] - ts[frames[i]])),
                 "pixel_rmse": float(rmse[i]),
                 "nn_angle_deg": float(angles[nn[i]]),
             }
@@ -233,8 +245,9 @@ def leakage_report(cache, drive: str, seed: int, dt_s: float | None,
     return {
         "drive": drive,
         "seed": int(seed),
-        "dt_s": None if dt_s is None else float(dt_s),
+        "dt_s": dt_s,
         "splits": {"firewall": int(firewall), "block": int(block)},
+        "paired": {"n": int(frames.size), "frames_sha256": frames_sha256(frames)},
         "gaps": {p: {which: temporal_gaps(s, which, dt_s) for which in ("val", "test")}
                  for p, s in splits.items()},
         "memoriser": memoriser,

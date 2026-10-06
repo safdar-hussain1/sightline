@@ -24,6 +24,7 @@ of generalization. Three protocols are provided:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -34,6 +35,7 @@ __all__ = [
     "SplitIndices",
     "blocked_split",
     "chronological_split",
+    "frames_sha256",
     "make_split",
     "paired_frames",
     "random_split",
@@ -179,3 +181,8 @@ def make_split(protocol: str, n: int, seed: int = 0, firewall: int = 250,
 def paired_frames(blocked: SplitIndices, leaky: SplitIndices) -> np.ndarray:
     """Frames held out by BOTH protocols: the paired leakage measurement's set."""
     return np.intersect1d(blocked.test, leaky.test).astype(np.int64)
+
+
+def frames_sha256(indices: np.ndarray) -> str:
+    """sha256 of frame indices as little-endian int64: equal digests mean identical frames."""
+    return hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()

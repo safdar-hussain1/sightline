@@ -36,7 +36,7 @@ import torch
 
 from sightline.data.cache import build_cache
 from sightline.data.labels import load_labels, repair_dropouts
-from sightline.data.splits import PROTOCOLS, PUBLIC_NAMES, make_split, paired_frames
+from sightline.data.splits import PROTOCOLS, PUBLIC_NAMES, frames_sha256, make_split, paired_frames
 from sightline.evaluate import regression_metrics, score_split
 from sightline.models import MODEL_SPECS, build_model
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
@@ -155,11 +155,6 @@ def stale_reason(report_path: Path, run_dir: Path) -> str | None:
     if "train_config" not in report:
         return "its report records no training recipe"
     return None
-
-
-def frames_sha256(indices: np.ndarray) -> str:
-    """sha256 of frame indices as little-endian int64: equal digests mean identical frames."""
-    return hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()
 
 
 def write_report(path: Path, data: dict) -> None:

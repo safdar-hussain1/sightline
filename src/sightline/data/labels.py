@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["DriveLabels", "load_labels", "repair_dropouts"]
+__all__ = ["DriveLabels", "load_labels", "median_interval_s", "repair_dropouts"]
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -31,6 +31,15 @@ def _parse_timestamp(ts: str) -> float:
     if not 0 <= ms <= 999:
         raise ValueError(f"millisecond field out of range in {ts!r}")
     return datetime.strptime(base, "%Y-%m-%d %H:%M:%S").timestamp() + ms / 1000.0
+
+
+def median_interval_s(timestamps_s: np.ndarray) -> float:
+    """Median of the positive intervals between consecutive timestamps, in seconds."""
+    deltas = np.diff(np.asarray(timestamps_s, dtype=np.float64))
+    deltas = deltas[deltas > 0]
+    if deltas.size == 0:
+        raise ValueError("timestamps are not increasing anywhere")
+    return float(np.median(deltas))
 
 
 @dataclass
@@ -65,11 +74,7 @@ class DriveLabels:
         """Median inter-frame interval in seconds (timestamped drives only)."""
         if self.timestamps_s is None:
             raise ValueError("drive has no timestamps")
-        deltas = np.diff(self.timestamps_s)
-        deltas = deltas[deltas > 0]
-        if deltas.size == 0:
-            raise ValueError("timestamps are not increasing anywhere")
-        return float(np.median(deltas))
+        return median_interval_s(self.timestamps_s)
 
 
 def load_labels(root: str | Path, filename: str = "data.txt") -> DriveLabels:

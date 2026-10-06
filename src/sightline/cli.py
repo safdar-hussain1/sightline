@@ -248,9 +248,8 @@ def cmd_leakage(args: argparse.Namespace) -> int:
 
     drive = _drive_name(args.drive)
     labels, cache = _load_drive(_workspace(args), drive)
-    dt_s = labels.median_dt_s() if labels.has_timestamps else None
     try:
-        report = leakage_report(cache, drive=drive, seed=args.seed, dt_s=dt_s,
+        report = leakage_report(cache, drive=drive, seed=args.seed, timestamps_s=labels.timestamps_s,
                                 firewall=args.firewall, block=args.block)
     except ValueError as exc:
         raise CommandError(f"cannot analyse {drive!r} with --block {args.block} "

@@ -34,7 +34,9 @@ def _scenery(seed: int, grid: tuple[int, int] = (6, 16), rho: float = 0.99):
 
 
 def make_drive(root: Path, name: str, n: int, timestamps: bool = True,
-               dropouts: tuple[int, ...] = (), scenery: bool = False) -> Path:
+               dropouts: tuple[int, ...] = (), scenery: bool = False,
+               intervals_ms: tuple[int, ...] = (57,)) -> Path:
+    """``intervals_ms`` are the gaps between consecutive timestamps, repeated in turn."""
     drive = root / name
     drive.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(len(name) * 1000 + n)
@@ -43,6 +45,7 @@ def make_drive(root: Path, name: str, n: int, timestamps: bool = True,
     for i in dropouts:
         angles[i] = 0.0
     backgrounds = _scenery(len(name) * 1000 + n + 1) if scenery else None
+    offsets_ms = np.concatenate([[0], np.cumsum(np.resize(np.asarray(intervals_ms), max(n - 1, 0)))])
     start = datetime(2018, 7, 1, 17, 0, 0)
     lines = []
     for i in range(n):
@@ -51,7 +54,7 @@ def make_drive(root: Path, name: str, n: int, timestamps: bool = True,
         cv2.rectangle(img, (max(0, x - 6), 120), (min(W - 1, x + 6), H - 1), (220, 220, 220), -1)
         cv2.imwrite(str(drive / f"{i}.jpg"), img)
         if timestamps:
-            ts = start + timedelta(milliseconds=57 * i)
+            ts = start + timedelta(milliseconds=int(offsets_ms[i]))
             lines.append(f"{i}.jpg {angles[i]:.6f},{ts:%Y-%m-%d %H:%M:%S}:{ts.microsecond // 1000}")
         else:
             lines.append(f"{i}.jpg {angles[i]:.6f}")
