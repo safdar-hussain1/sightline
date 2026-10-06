@@ -8,6 +8,7 @@ Run-report tests use only the first, so a broken report fails its own test.
 import copy
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,7 +68,7 @@ def ctx(tmp_path_factory):
 def summary(ctx):
     """The summary of the fixture's reports, with its figures drawn."""
     assert main(["report", "--in-dir", str(ctx.reports_dir / "runs"),
-                 "--out", str(ctx.reports_dir / "summary.json")]) == 0
+                 "--out", str(ctx.reports_dir / "summary.json"), "--runs-dir", str(ctx.root / "runs")]) == 0
     assert main(["figures", "--summary", str(ctx.reports_dir / "summary.json"),
                  "--out-dir", str(ctx.reports_dir / "figures")]) == 0
     return json.loads((ctx.reports_dir / "summary.json").read_text())
@@ -229,14 +230,15 @@ def test_eval_all_skips_existing_reports(ctx, tmp_path, capsys):
         shutil.copytree(ctx.root / "runs" / name, runs / name)
     out = tmp_path / "reports"
     out.mkdir()
-    (out / f"{kept}.json").write_text("sentinel\n")
+    marked = {**ctx.reports[kept], "marker": "kept"}  # still a valid report of the same checkpoint
+    (out / f"{kept}.json").write_text(json.dumps(marked))
     capsys.readouterr()
 
     args = ["eval", "--all", "--cross-drive", "drivecross", "--out-dir", str(out),
             "--data-dir", str(ctx.root / "data"), "--runs-dir", str(runs)]
     assert main(args) == 0
     printed = capsys.readouterr().out.splitlines()
-    assert (out / f"{kept}.json").read_text() == "sentinel\n"
+    assert json.loads((out / f"{kept}.json").read_text()) == marked
     assert printed[0].startswith(f"skipped {kept}: ") and printed[1].startswith(f"evaluated {missing}: ")
     # evaluating again reproduces the report byte for byte
     assert (out / f"{missing}.json").read_text() == (ctx.reports_dir / "runs" / f"{missing}.json").read_text()
@@ -351,7 +353,96 @@ def test_summary_refuses_two_reports_of_one_run(ctx):
         aggregate([*reports, reports[0]])
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _with_change(ctx, run, change):
+    reports = copy.deepcopy(list(ctx.reports.values()))
+    for r in reports:
+        if r["run"] == run:
+            change(r)
+    return reports
+
+
+@pytest.mark.parametrize("what, run, change", [
+    ("split settings", _name("sightlinenet", "blocked", 1), lambda r: r["splits"].update(block=99)),
+    ("split settings", _name("pilotnet", "leaky", 0), lambda r: r["splits"].update(firewall=7)),
+    ("evaluation device", _name("pilotnet", "leaky", 0), lambda r: r.update(device="mps")),
+    ("frame_lags of sightlinenet", _name("sightlinenet", "leaky", 1), lambda r: r.update(frame_lags=[])),
+    ("zero baseline on the sightlinenet/blocked test split", _name("sightlinenet", "blocked", 1),
+     lambda r: r["test"]["baselines"]["zero"].update(mae_deg=1.0)),
+    ("zero baseline on the cross drive", _name("pilotnet", "blocked", 0),
+     lambda r: r["cross_drive"]["baselines"]["zero"].update(mae_deg=1.0)),
+    ("library versions", _name("pilotnet", "blocked", 0), lambda r: r["versions"].update(torch="0.0")),
+    ("training drive", _name("sightlinenet", "forward", 0), lambda r: r.update(drive="driveother")),
+    ("drive 'drivetest'", _name("sightlinenet", "forward", 0),
+     lambda r: r["drives"]["drivetest"].update(label_sha256="0" * 64)),
+    ("cross drive", _name("sightlinenet", "forward", 0), lambda r: r.pop("cross_drive")),
+])
+def test_summary_refuses_runs_made_or_scored_differently(ctx, what, run, change):
+    from sightline.reporting import aggregate
+
+    with pytest.raises(ValueError, match=re.escape(what)) as exc:
+        aggregate(_with_change(ctx, run, change))
+    message = str(exc.value)
+    assert run in message and "\n" not in message
+
+
+def test_summary_refuses_a_report_whose_run_has_another_checkpoint(ctx, tmp_path):
+    from sightline.reporting import aggregate
+
+    name = _name("sightlinenet", "blocked", 0)
+    runs = tmp_path / "runs"
+    shutil.copytree(ctx.root / "runs" / name, runs / name)
+    reports = list(ctx.reports.values())
+    aggregate(reports, runs_dir=runs)  # the same checkpoint: accepted
+    # the run is trained again: another checkpoint of the same model replaces best.pt
+    shutil.copy2(ctx.root / "runs" / _name("sightlinenet", "blocked", 1) / "best.pt", runs / name / "best.pt")
+    with pytest.raises(ValueError, match="checkpoint") as exc:
+        aggregate(reports, runs_dir=runs)
+    assert name in str(exc.value)
+
+
+def test_a_summary_without_run_folders_is_the_same_summary(ctx, summary, tmp_path, capsys):
+    out = tmp_path / "summary.json"
+    capsys.readouterr()
+    assert main(["report", "--in-dir", str(ctx.reports_dir / "runs"), "--out", str(out),
+                 "--runs-dir", str(tmp_path / "no-runs")]) == 0
+    assert "checked the checkpoints of 0 of 7 runs" in capsys.readouterr().out
+    assert out.read_text() == (ctx.reports_dir / "summary.json").read_text()
+
+
+def test_every_report_names_its_checkpoint(ctx):
+    for name, r in ctx.reports.items():
+        assert r["checkpoint_sha256"] == _sha256(ctx.root / "runs" / name / "best.pt"), name
+
+
+def test_eval_all_re_evaluates_a_report_made_from_another_checkpoint(ctx, tmp_path, capsys):
+    name = _name("sightlinenet", "blocked", 0)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "cache").symlink_to(ctx.root / "runs" / "cache")
+    shutil.copytree(ctx.root / "runs" / name, runs / name)
+    out = tmp_path / "reports"
+    out.mkdir()
+    old = json.loads((ctx.reports_dir / "runs" / f"{name}.json").read_text())
+    shutil.copy2(ctx.reports_dir / "runs" / f"{name}.json", out / f"{name}.json")
+    # the run is trained again: another checkpoint of the same model replaces best.pt
+    shutil.copy2(ctx.root / "runs" / _name("sightlinenet", "blocked", 1) / "best.pt", runs / name / "best.pt")
+    capsys.readouterr()
+
+    assert main(["eval", "--all", "--cross-drive", "drivecross", "--out-dir", str(out),
+                 "--data-dir", str(ctx.root / "data"), "--runs-dir", str(runs)]) == 0
+    printed = capsys.readouterr().out
+    new = json.loads((out / f"{name}.json").read_text())
+    assert f"re-evaluating {name}: its report was made from another checkpoint" in printed
+    assert new["checkpoint_sha256"] == _sha256(runs / name / "best.pt") != old["checkpoint_sha256"]
+    assert new["test"]["model"]["mae_deg"] != old["test"]["model"]["mae_deg"]
+
+
 def test_summary_records_the_drives_and_the_shipped_regimes(ctx, summary):
+    assert summary["device"] == "cpu"
     drives = summary["drives"]
     assert drives["drivetest"]["frames"] == N and drives["drivecross"]["frames"] == N_CROSS
     assert drives["drivetest"]["median_dt_s"] == pytest.approx(0.057, abs=1e-6)  # epoch-second timestamps
@@ -385,3 +476,54 @@ def test_figures_are_written(ctx, summary):
         assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", name
         with Image.open(path) as img:
             assert img.size == size, name
+
+
+def _stat(*values):
+    from sightline.reporting import seed_stats
+
+    return seed_stats(values)
+
+
+def test_each_ladder_bar_gets_the_zero_tick_of_its_own_frames():
+    from sightline.figures import draw
+
+    def rung(name, protocol, split, mae, zero):
+        return {"rung": name, "protocol": protocol, "split": split, "mae_deg": _stat(*mae), "zero_mae_deg": zero}
+
+    summary = {"ladder": {
+        "sightlinenet": [rung("shuffled", "leaky", "test", (5.0, 6.0), 10.0),
+                         rung("another day", "blocked", "cross_drive", (9.0, 9.5), 20.0)],
+        "pilotnet": [rung("shuffled", "leaky", "test", (7.0,), 12.0)],  # other seeds, other frames
+    }}
+    ax = draw(summary, "ladder.png").axes[0]
+    ticks = [c for c in ax.collections if c.get_gid() == "zero-baseline"]
+    bars = sorted(ax.patches, key=lambda b: b.get_x())
+    assert len(ticks) == len(bars) == 3
+    spans = sorted((seg[0][0], seg[1][0], seg[0][1]) for c in ticks for seg in c.get_segments())
+    for bar, (x0, x1, y) in zip(bars, spans):
+        assert x0 <= bar.get_x() and bar.get_x() + bar.get_width() <= x1  # the tick sits on its bar
+    assert [y for _, _, y in spans] == [10.0, 12.0, 20.0]
+    subtitle = ax.get_title(loc="left")
+    assert "test split" in subtitle and "another day" in subtitle  # every rung's frames are named
+
+
+def test_the_paired_ratio_is_printed_to_two_decimals():
+    from sightline.figures import draw
+
+    per_seed = [{"seed": 0, "n": 10, "shuffled_mae_deg": 2.0, "blocked_mae_deg": 2.08, "ratio": 1.04}]
+    summary = {"paired_leakage": {"sightlinenet": {"per_seed": per_seed, "ratio": _stat(1.04)}}}
+    legend = draw(summary, "paired-leakage.png").axes[0].get_legend()
+    assert any("1.04×" in t.get_text() for t in legend.get_texts())
+
+
+def test_a_report_is_current_only_for_the_checkpoint_it_describes(ctx, tmp_path):
+    from sightline.reporting import stale_reason
+
+    name = _name("pilotnet", "blocked", 0)
+    report = ctx.reports_dir / "runs" / f"{name}.json"
+    assert stale_reason(report, ctx.root / "runs" / name) is None
+    unreadable = tmp_path / "bad.json"
+    unreadable.write_text("not json")
+    assert stale_reason(unreadable, ctx.root / "runs" / name) == "its report cannot be read"
+    no_weights = _copy_run(ctx, tmp_path, name, skip=("best.pt",))
+    assert stale_reason(report, no_weights) == "its run has no best.pt"

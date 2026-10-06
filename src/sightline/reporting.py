@@ -10,8 +10,11 @@ One JSON report per run.
 ``aggregate`` combines the run reports into the summary: statistics over
 seeds per model and protocol, the paired leakage measurement, the
 generalisation ladder (shuffled, blocked, later in the drive, another day)
-and the shipped model, chosen on validation MAE alone. Published documents
-read their numbers from these reports, nowhere else.
+and the shipped model, chosen on validation MAE alone. It refuses reports
+that were not made and scored alike: different library versions, drives,
+split settings, evaluation device, frame history per model, frames behind a
+shared baseline, or a checkpoint that is no longer the run's best.pt.
+Published documents read their numbers from these reports, nowhere else.
 
 Reports are written as sorted, indented JSON of plain Python values with a
 trailing newline, so evaluating the same run again yields the same text.
@@ -42,6 +45,7 @@ __all__ = [
     "LADDER",
     "SELECTED_BY",
     "aggregate",
+    "checkpoint_sha256",
     "evaluate_run",
     "finished_runs",
     "frames_sha256",
@@ -49,6 +53,7 @@ __all__ = [
     "load_split_indices",
     "seed_stats",
     "select_shipped",
+    "stale_reason",
     "write_report",
 ]
 
@@ -118,6 +123,29 @@ def finished_runs(runs_dir: Path) -> list[Path]:
         p for p in runs_dir.iterdir()
         if p.is_dir() and _RUN_NAME.fullmatch(p.name) and (p / "history.json").is_file()
     )
+
+
+def checkpoint_sha256(run_dir: Path) -> str:
+    """sha256 of a run's best.pt: the weights a report describes."""
+    digest = hashlib.sha256()
+    with open(Path(run_dir) / "best.pt", "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stale_reason(report_path: Path, run_dir: Path) -> str | None:
+    """Why the report at ``report_path`` no longer describes ``run_dir``, or ``None``
+    when it does (same checkpoint). A report that cannot be read is stale too."""
+    try:
+        report = json.loads(Path(report_path).read_text())
+    except (OSError, ValueError):
+        return "its report cannot be read"
+    if not (Path(run_dir) / "best.pt").is_file():
+        return "its run has no best.pt"  # evaluating it names the missing file
+    if not isinstance(report, dict) or report.get("checkpoint_sha256") != checkpoint_sha256(run_dir):
+        return "its report was made from another checkpoint"
+    return None
 
 
 def frames_sha256(indices: np.ndarray) -> str:
@@ -225,6 +253,7 @@ def evaluate_run(
         "n_params": int(history["n_params"]),
         "best_epoch": int(history["best_epoch"]),
         "epochs_run": len(history["history"]),
+        "checkpoint_sha256": checkpoint_sha256(run_dir),
         "code_version": history.get("code_version"),
         "eval_code_version": code_version(),
         "train_device": history.get("device"),
@@ -311,11 +340,22 @@ def select_shipped(groups: dict) -> dict:
     }
 
 
-def _one_value(values: list, what: str):
-    distinct = {json.dumps(v, sort_keys=True) for v in values}
-    if len(distinct) != 1:
-        raise ValueError(f"the reports disagree on {what}: {sorted(distinct)}")
-    return values[0]
+def _runs_text(runs: list[str]) -> str:
+    shown = ", ".join(runs[:3])
+    return shown + (f" and {len(runs) - 3} more" if len(runs) > 3 else "")
+
+
+def _require_one(reports: list[dict], value_of, what: str):
+    """The one value ``value_of`` gives for every report, or a one-line ValueError
+    naming each differing value with its runs (the rarest value first)."""
+    runs_by_value: dict[str, list[str]] = {}
+    for r in reports:
+        runs_by_value.setdefault(json.dumps(value_of(r), sort_keys=True), []).append(r["run"])
+    if len(runs_by_value) > 1:
+        parts = sorted(runs_by_value.items(), key=lambda item: (len(item[1]), item[0]))
+        raise ValueError(f"the reports disagree on the {what}: "
+                         + "; ".join(f"{value} in {_runs_text(runs)}" for value, runs in parts))
+    return value_of(reports[0])
 
 
 def _group(members: list[dict]) -> dict:
@@ -329,18 +369,22 @@ def _group(members: list[dict]) -> dict:
         "test_mae_deg": seed_stats(r["test"]["model"]["mae_deg"] for r in members),
         "test_r": seed_stats(r["test"]["pearson_r"] for r in members),
         "test_skill": seed_stats(r["test"]["skill_vs_zero"] for r in members),
-        # the same frames for every seed except shuffled splits, whose test set is the seed's
-        "test_zero_mae_deg": float(np.mean([r["test"]["baselines"]["zero"]["mae_deg"] for r in members])),
     }
-    crossed = ["cross_drive" in r for r in members]
-    if any(crossed) and not all(crossed):
-        raise ValueError(f"{first['model']}/{first['protocol']}: only some seeds were scored on a cross drive")
-    if all(crossed):
+    key = f"{first['model']}/{first['protocol']}"
+    zero = [r["test"]["baselines"]["zero"]["mae_deg"] for r in members]
+    if first["protocol"] == "leaky":
+        # a shuffled split's test set is the seed's own, so its zero baseline is too
+        group["test_zero_mae_deg"] = float(np.mean(zero))
+    else:
+        # every seed of a blocked or forward split is tested on the same frames
+        group["test_zero_mae_deg"] = _require_one(
+            members, lambda r: r["test"]["baselines"]["zero"]["mae_deg"],
+            f"zero baseline on the {key} test split (the same frames for every seed)")
+    if "cross_drive" in first:
         group["cross_mae_deg"] = seed_stats(r["cross_drive"]["model"]["mae_deg"] for r in members)
         group["cross_r"] = seed_stats(r["cross_drive"]["pearson_r"] for r in members)
         group["cross_skill"] = seed_stats(r["cross_drive"]["skill_vs_zero"] for r in members)
-        group["cross_zero_mae_deg"] = float(
-            np.mean([r["cross_drive"]["baselines"]["zero"]["mae_deg"] for r in members]))
+        group["cross_zero_mae_deg"] = first["cross_drive"]["baselines"]["zero"]["mae_deg"]
     return group
 
 
@@ -396,8 +440,22 @@ def _ladder(model: str, groups: dict, train_drive: str, cross_drive: str | None)
     return rungs
 
 
-def aggregate(run_reports: list[dict]) -> dict:
-    """The summary of a set of run reports (one per model, protocol and seed)."""
+def _check_checkpoints(reports: list[dict], runs_dir: Path) -> None:
+    stale = [r["run"] for r in reports
+             if (Path(runs_dir) / r["run"] / "best.pt").is_file()
+             and r.get("checkpoint_sha256") != checkpoint_sha256(Path(runs_dir) / r["run"])]
+    if stale:
+        raise ValueError(f"the reports of {_runs_text(stale)} were made from another checkpoint than "
+                         f"the best.pt now in {runs_dir}; evaluate them again")
+
+
+def aggregate(run_reports: list[dict], runs_dir: Path | None = None) -> dict:
+    """The summary of a set of run reports (one per model, protocol and seed).
+
+    With ``runs_dir``, every report whose run folder is there must describe the
+    best.pt in it. A run folder that is absent (``runs/`` is not part of a
+    clone) cannot be checked, and its report is taken as written.
+    """
     reports = sorted(run_reports, key=lambda r: (r["model"], r["protocol"], r["seed"]))
     if not reports:
         raise ValueError("no run reports to summarise")
@@ -409,17 +467,25 @@ def aggregate(run_reports: list[dict]) -> dict:
                              f"({by_key[key]['run']!r} and {r['run']!r})")
         by_key[key] = r
 
-    versions = _one_value([r["versions"] for r in reports], "library versions")
-    train_drive = _one_value([r["drive"] for r in reports], "the training drive")
-    cross_drives = sorted({r["cross_drive"]["drive"] for r in reports if "cross_drive" in r})
-    if len(cross_drives) > 1:
-        raise ValueError(f"the reports disagree on the cross drive: {cross_drives}")
-    cross_drive = cross_drives[0] if cross_drives else None
-    drives: dict = {}
-    for r in reports:
-        for name, info in r["drives"].items():
-            if drives.setdefault(name, info) != info:
-                raise ValueError(f"the reports disagree on drive {name!r}: {drives[name]} vs {info}")
+    if runs_dir is not None:
+        _check_checkpoints(reports, runs_dir)
+    versions = _require_one(reports, lambda r: r["versions"], "library versions")
+    train_drive = _require_one(reports, lambda r: r["drive"], "training drive")
+    device = _require_one(reports, lambda r: r["device"], "evaluation device")
+    _require_one(reports, lambda r: {"firewall": r["splits"]["firewall"], "block": r["splits"]["block"]},
+                 "split settings (firewall, block)")
+    cross_drive = _require_one(reports, lambda r: r.get("cross_drive", {}).get("drive"), "cross drive")
+    if cross_drive is not None:
+        _require_one(reports, lambda r: r["cross_drive"]["baselines"]["zero"]["mae_deg"],
+                     "zero baseline on the cross drive (the same frames for every run)")
+    for model in sorted({r["model"] for r in reports}):
+        _require_one([r for r in reports if r["model"] == model], lambda r: r["frame_lags"],
+                     f"frame_lags of {model}")
+    drives = {
+        name: _require_one([r for r in reports if name in r["drives"]], lambda r: r["drives"][name],
+                           f"drive {name!r}")
+        for name in sorted({name for r in reports for name in r["drives"]})
+    }
 
     groups: dict = {}
     for (model, protocol, _seed), r in by_key.items():
@@ -451,6 +517,7 @@ def aggregate(run_reports: list[dict]) -> dict:
 
     return {
         "versions": versions,
+        "device": device,
         "code_versions": {
             "train": ordered_unique(r["code_version"] for r in reports),
             "eval": ordered_unique(r.get("eval_code_version") for r in reports),

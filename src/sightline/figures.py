@@ -1,8 +1,9 @@
 """Figures drawn from the summary.
 
-* ``ladder.png`` -- test MAE on each rung of the generalisation ladder per
-  model, error bars one seed standard deviation, a black tick at what always
-  predicting 0 deg scores on the same frames.
+* ``ladder.png`` -- MAE on each rung of the generalisation ladder per model
+  (the test split; for "another day" all of the other drive), error bars one
+  seed standard deviation, and on every bar a black tick at what always
+  predicting 0 deg scores on that bar's own frames (its model's seeds).
 * ``paired-leakage.png`` -- the paired measurement: per seed, the MAE of the
   shuffled-split model and of the blocked-split model on identical frames.
 * ``regimes.png`` -- MAE on straight, gentle and sharp frames of the blocked
@@ -23,7 +24,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-__all__ = ["DPI", "FIGURE_SIZES", "MODEL_COLOURS", "write_figures"]
+__all__ = ["DPI", "FIGURE_SIZES", "MODEL_COLOURS", "draw", "write_figures"]
 
 DPI = 144
 _INCHES = {"ladder.png": (8.0, 4.5), "paired-leakage.png": (8.0, 4.5), "regimes.png": (7.0, 4.0)}
@@ -99,11 +100,10 @@ def _ladder(summary: dict, name: str) -> Figure:
     if not models:
         raise ValueError("the summary has no ladder")
     fig, ax = _figure(name, "Steering error on each rung of the generalisation ladder",
-                      "test MAE, mean over seeds; bars ±1 sd over seeds; "
-                      "black tick: always predicting 0° on the same frames")
+                      "MAE, mean over seeds (±1 sd); on the test split, "
+                      "or for another day on all of the other drive")
     width, gap = 0.2, 0.03
     offsets = {m: (j - (len(models) - 1) / 2) * (width + gap) for j, m in enumerate(models)}
-    zeros: dict[str, list[float]] = {}
     for model in models:
         entries = {e["rung"]: e for e in ladder[model]}
         for i, rung in enumerate(RUNGS):
@@ -115,18 +115,17 @@ def _ladder(summary: dict, name: str) -> Figure:
             if sd is not None:
                 ax.errorbar(x, mean, yerr=sd, fmt="none", ecolor=INK_SECONDARY, elinewidth=1,
                             capsize=3, zorder=3)
-            zeros.setdefault(rung, []).append(entry["zero_mae_deg"])
-    span = len(models) * (width + gap)
-    for i, rung in enumerate(RUNGS):
-        if rung in zeros:
-            zero = sum(zeros[rung]) / len(zeros[rung])
-            ax.hlines(zero, i - span / 2, i + span / 2, colors=INK, linewidth=2, zorder=4)
+            # the zero baseline of this bar's own frames: a shuffled rung's test
+            # frames depend on the seed, so models with other seeds get other ticks
+            half = (width + gap) / 2
+            ax.hlines(entry["zero_mae_deg"], x - half, x + half, colors=INK, linewidth=2, zorder=4,
+                      gid="zero-baseline")
     ax.set_xticks(range(len(RUNGS)), labels=list(RUNGS))
     ax.set_xlim(-0.6, len(RUNGS) - 0.4)
     ax.set_ylim(bottom=0)
     ax.set_ylabel("mean absolute error (degrees)")
     handles = [Patch(color=MODEL_COLOURS[m], label=MODEL_LABELS[m]) for m in models]
-    handles.append(Line2D([0], [0], color=INK, linewidth=2, label=ZERO_LABEL))
+    handles.append(Line2D([0], [0], color=INK, linewidth=2, label=f"{ZERO_LABEL}, same frames"))
     _legend(ax, handles)
     return fig
 
@@ -148,7 +147,7 @@ def _paired(summary: dict, name: str) -> Figure:
         ratio = paired[model]["ratio"]["mean"]
         handles.append(Line2D([0], [0], color=colour, linewidth=2, marker="o", markersize=7,
                               markeredgecolor=SURFACE, markeredgewidth=2,
-                              label=f"{MODEL_LABELS[model]}: blocked error {ratio:.1f}× the shuffled one"))
+                              label=f"{MODEL_LABELS[model]}: blocked error {ratio:.2f}× the shuffled one"))
     ax.set_xticks([0, 1], labels=["trained on a shuffled split", "trained on a blocked split"])
     ax.set_xlim(-0.35, 1.35)
     ax.set_ylim(bottom=0)
@@ -188,14 +187,23 @@ def _regimes(summary: dict, name: str) -> Figure:
 _DRAW = {"ladder.png": _ladder, "paired-leakage.png": _paired, "regimes.png": _regimes}
 
 
+def draw(summary: dict, name: str) -> Figure:
+    """The figure ``name`` (a key of ``FIGURE_SIZES``) drawn from ``summary``."""
+    if name not in _DRAW:
+        raise ValueError(f"unknown figure {name!r}; expected one of {sorted(_DRAW)}")
+    with matplotlib.rc_context(_RC):
+        return _DRAW[name](summary, name)
+
+
 def write_figures(summary: dict, out_dir: Path) -> list[Path]:
     """Draw every figure of ``summary`` into ``out_dir``; return the paths written."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    with matplotlib.rc_context(_RC):
-        for name, draw in _DRAW.items():
-            path = out_dir / name
-            draw(summary, name).savefig(path, dpi=DPI, facecolor=SURFACE, metadata={"Software": None})
-            written.append(path)
+    for name in _DRAW:
+        path = out_dir / name
+        fig = draw(summary, name)
+        with matplotlib.rc_context(_RC):
+            fig.savefig(path, dpi=DPI, facecolor=SURFACE, metadata={"Software": None})
+        written.append(path)
     return written

@@ -20,8 +20,9 @@ option, so nothing can shadow silently.
 ``train`` writes ``<runs-dir>/<drive>_<model>_<protocol>_s<seed>`` and never
 touches an existing run unless given ``--overwrite``. ``eval`` scores runs on
 the CPU unless ``--device`` names another; ``eval --all`` writes one report per
-finished run and skips runs already reported unless given ``--overwrite``.
-``report`` summarises the run reports and ``figures`` draws the summary.
+finished run and skips a run whose report describes its current best.pt
+(``--overwrite`` evaluates every run again). ``report`` summarises the run
+reports and ``figures`` draws the summary.
 """
 
 from __future__ import annotations
@@ -137,7 +138,7 @@ def _headline(report: dict) -> dict:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from sightline.reporting import evaluate_run, finished_runs
+    from sightline.reporting import evaluate_run, finished_runs, stale_reason
     from sightline.train import resolve_device
 
     try:
@@ -163,8 +164,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
     for run in runs:
         out = out_dir / f"{run.name}.json"
         if out.exists() and not args.overwrite:
-            print(f"skipped {run.name}: {out} exists (--overwrite replaces it)", flush=True)
-            continue
+            # a run trained again since its report gets a new report: the old one
+            # describes weights that are gone and could no longer be reproduced
+            reason = stale_reason(out, run)
+            if reason is None:
+                print(f"skipped {run.name}: {out} describes its best.pt (--overwrite replaces it)", flush=True)
+                continue
+            print(f"re-evaluating {run.name}: {reason}", flush=True)
         report = evaluate_run(run, ws, cross_drive=cross, out_path=out, device=args.device)
         evaluated += 1
         print(f"evaluated {run.name}: test MAE {report['test']['model']['mae_deg']:.3f} deg -> {out}",
@@ -189,12 +195,16 @@ def cmd_report(args: argparse.Namespace) -> int:
         if not isinstance(report, dict) or not {"run", "model", "protocol", "seed", "val", "test"} <= report.keys():
             raise CommandError(f"{path} is not a run report (`sightline eval` writes those)")
         reports.append(report)
+    runs_dir = Path(args.runs_dir)
     try:
-        summary = aggregate(reports)
+        summary = aggregate(reports, runs_dir=runs_dir)
     except ValueError as exc:
         raise CommandError(f"cannot summarise {in_dir}: {exc}") from None
     write_report(Path(args.out), summary)
+    checked = sum((runs_dir / r["run"] / "best.pt").is_file() for r in reports)
     print(f"summarised {len(reports)} run reports into {args.out}; shipped {summary['shipped']['run']}")
+    print(f"checked the checkpoints of {checked} of {len(reports)} runs against {runs_dir}"
+          + ("" if checked == len(reports) else " (the others have no run folder here)"))
     for model, entry in summary["paired_leakage"].items():
         print(f"{model}: paired blocked/shuffled MAE ratio {entry['ratio']['mean']:.2f} "
               f"over seeds {[p['seed'] for p in entry['per_seed']]}")
@@ -339,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="summarise the run reports over seeds")
     p.add_argument("--in-dir", default="reports/runs", help="folder of run reports")
     p.add_argument("--out", default="reports/summary.json", help="where to write the summary")
+    p.add_argument("--runs-dir", default="runs",
+                   help="training runs, to check each report still describes its run's best.pt")
     p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("figures", help="draw the summary's figures")
