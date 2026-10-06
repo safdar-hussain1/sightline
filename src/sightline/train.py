@@ -44,7 +44,8 @@ DEVICES = ("auto", "cpu", "mps", "cuda")
 @dataclass
 class TrainConfig:
     model: str = "sightlinenet"
-    epochs: int = 30
+    #: length of the cosine learning-rate schedule; it only reaches low rates in its last epochs
+    epochs: int = 20
     batch_size: int = 128
     lr: float = 3e-4
     weight_decay: float = 1e-4
@@ -52,7 +53,9 @@ class TrainConfig:
     #: augmentation recipe and dropout; None means the model's registry default
     augment: str | None = None
     dropout: float | None = None
-    patience: int = 8
+    #: epochs without a new best validation MAE before stopping; 0 (default) trains
+    #: all ``epochs``. The best-validation checkpoint is kept either way.
+    patience: int = 0
     notes: dict = field(default_factory=dict)
 
 
@@ -221,7 +224,7 @@ def train_model(
             bad_epochs = 0
         else:
             bad_epochs += 1
-            if bad_epochs >= cfg.patience:
+            if cfg.patience > 0 and bad_epochs >= cfg.patience:
                 print(f"[{cfg.model}] early stop at epoch {epoch + 1}", flush=True)
                 break
 

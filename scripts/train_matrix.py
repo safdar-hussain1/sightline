@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Train the published matrix of runs, a few at a time, each in its own process.
 
-    python scripts/train_matrix.py --runs-dir runs --parallel 3 --epochs 30 [--only REGEX] [--dry-run]
+    python scripts/train_matrix.py --runs-dir runs --parallel 3 --epochs 20 --patience 0 [--only REGEX] [--dry-run]
 
 Twenty-one runs on drive2018: PilotNet and SightlineNet under each split
 protocol (leaky, blocked, forward) and the single-frame SightlineNet under the
@@ -9,13 +9,17 @@ blocked protocol, each for seeds 0, 1 and 2. All seed-0 runs start first, then
 seed 1, then seed 2, so a matrix stopped part-way still holds a complete
 single-seed result.
 
+Every run trains the full cosine schedule (``--epochs``, default 20) with no early
+stopping (``--patience 0``, passed explicitly to each run): the schedule only reaches
+low learning rates in its last epochs, and the best-validation checkpoint is kept.
+
 Each run is ``python -m sightline.cli train ...`` with this checkout's ``src``
 first on PYTHONPATH, logging to ``<runs-dir>/logs/<run>.log``. Before any run
 starts, ``sightline cache`` builds (or checks) the drive's cache once, so
 parallel runs never write it at the same time.
 
 No run is ever trained twice. A run whose ``history.json`` exists is skipped;
-if it was trained with other settings (epochs, firewall, block, ...) it is
+if it was trained with other settings (epochs, patience, firewall, block, ...) it is
 reported as a conflict, left untouched, and the matrix exits non-zero. A run
 directory without ``history.json`` is an interrupted run: it is trained again
 from scratch with ``--overwrite``, and both the log and the output say so.
@@ -81,6 +85,7 @@ def train_command(job: Job, opts: argparse.Namespace, overwrite: bool) -> list[s
     cmd = [sys.executable, "-m", "sightline.cli", "train",
            "--drive", job.drive, "--model", job.model, "--protocol", job.protocol,
            "--seed", str(job.seed), "--epochs", str(opts.epochs),
+           "--patience", str(opts.patience),
            "--firewall", str(opts.firewall), "--block", str(opts.block), "--device", opts.device,
            "--data-dir", opts.data_dir, "--runs-dir", opts.runs_dir]
     return [*cmd, "--overwrite"] if overwrite else cmd
@@ -95,12 +100,12 @@ def run_state(job: Job, opts: argparse.Namespace) -> tuple[str, str]:
             recorded = json.loads(history.read_text())
             config, notes = recorded["config"], recorded["config"]["notes"]
             got = {"model": config.get("model"), "seed": config.get("seed"),
-                   "epochs": config.get("epochs"), "drive": notes.get("drive"),
+                   "epochs": config.get("epochs"), "patience": config.get("patience"), "drive": notes.get("drive"),
                    "protocol": notes.get("protocol"), "firewall": notes.get("firewall"),
                    "block": notes.get("block")}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             return "conflict", f"has an unreadable history.json ({type(exc).__name__}: {exc})"
-        wanted = {"model": job.model, "seed": job.seed, "epochs": opts.epochs, "drive": job.drive,
+        wanted = {"model": job.model, "seed": job.seed, "epochs": opts.epochs, "patience": opts.patience, "drive": job.drive,
                   "protocol": job.protocol, "firewall": opts.firewall, "block": opts.block}
         differ = [f"{key}={got[key]!r} (matrix: {wanted[key]!r})" for key in wanted if got[key] != wanted[key]]
         if differ:
@@ -287,7 +292,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--data-dir", default="data", help="folder holding the drive folders")
     p.add_argument("--drive", default="drive2018")
     p.add_argument("--parallel", type=_int_from(1), default=3, help="runs trained at the same time")
-    p.add_argument("--epochs", type=_int_from(1), default=30)
+    p.add_argument("--epochs", type=_int_from(1), default=20)
+    p.add_argument("--patience", type=_int_from(0), default=0,
+                   help="early-stopping patience passed to every run; 0 trains every epoch")
     p.add_argument("--firewall", type=_int_from(0), default=250)
     p.add_argument("--block", type=_int_from(1), default=1500)
     p.add_argument("--device", default="auto", choices=DEVICES)

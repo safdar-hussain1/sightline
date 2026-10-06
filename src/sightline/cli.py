@@ -319,9 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--protocol", default="blocked", choices=PROTOCOLS,
                    help="leaky = shuffled frames, blocked = interleaved blocks, forward = later in the drive")
     p.add_argument("--seed", type=_int_from(0), default=0)
-    p.add_argument("--epochs", type=_int_from(1), default=30)
-    p.add_argument("--patience", type=_int_from(1), default=8,
-                   help="stop after this many epochs without a better validation MAE")
+    p.add_argument("--epochs", type=_int_from(1), default=20,
+                   help="length of the cosine learning-rate schedule")
+    p.add_argument("--patience", type=_int_from(0), default=0,
+                   help="stop after this many epochs without a better validation MAE; "
+                        "0 trains every epoch (the best-validation checkpoint is kept either way)")
     p.add_argument("--firewall", type=_int_from(0), default=250,
                    help="frames dropped on each side of every train/evaluation boundary")
     p.add_argument("--block", type=_int_from(1), default=1500,

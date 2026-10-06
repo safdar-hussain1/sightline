@@ -169,7 +169,7 @@ def test_drive_must_be_a_name_not_a_path(tmp_path, capsys, value):
     assert "drive name" in _one_error_line(capsys.readouterr().err)
 
 
-@pytest.mark.parametrize("flag, value", [("--epochs", "0"), ("--patience", "0"), ("--seed", "-1"),
+@pytest.mark.parametrize("flag, value", [("--epochs", "0"), ("--patience", "-1"), ("--seed", "-1"),
                                          ("--firewall", "-1"), ("--block", "0")])
 def test_out_of_range_numbers_are_rejected_by_the_parser(tmp_path, capsys, flag, value):
     with pytest.raises(SystemExit) as exc:
@@ -209,6 +209,42 @@ def test_a_run_that_never_scores_a_finite_validation_mae_is_not_finished(short_d
     assert not (run / "history.json").exists() and not (run / "best.pt").exists()
 
 
+# --- full cosine schedule ---------------------------------------------------------------
+
+def test_train_defaults_are_the_full_twenty_epoch_schedule_without_early_stopping():
+    from sightline.cli import build_parser
+    from sightline.train import TrainConfig
+
+    args = build_parser().parse_args(["train", "--drive", "d"])
+    assert (args.epochs, args.patience) == (20, 0)
+    assert TrainConfig().patience == 0
+
+
+def test_patience_zero_runs_every_epoch(short_drive):
+    argv = ARGS(short_drive, "--model", "pilotnet", "--protocol", "blocked", "--firewall", "20",
+                "--epochs", "3", "--patience", "0")
+    assert main(argv) == 0
+    h = json.loads((short_drive / "runs" / "drivetest_pilotnet_blocked_s0" / "history.json").read_text())
+    assert len(h["history"]) == 3 and h["config"]["epochs"] == 3 and h["config"]["patience"] == 0
+
+
+def test_positive_patience_still_stops_early(short_drive, monkeypatch):
+    import sightline.train
+
+    calls = []
+
+    def worsening(model, cache, indices, device, batch_size=256):
+        calls.append(1)
+        return cache.angles_deg[indices] + 5.0 * len(calls)
+
+    monkeypatch.setattr(sightline.train, "predict", worsening)
+    argv = ARGS(short_drive, "--model", "pilotnet", "--protocol", "blocked", "--firewall", "20",
+                "--epochs", "5", "--patience", "1")
+    assert main(argv) == 0
+    h = json.loads((short_drive / "runs" / "drivetest_pilotnet_blocked_s0" / "history.json").read_text())
+    assert len(h["history"]) == 2 and h["best_epoch"] == 0
+
+
 # --- the training matrix --------------------------------------------------------------
 
 MATRIX = [sys.executable, "scripts/train_matrix.py"]
@@ -234,8 +270,9 @@ def test_every_matrix_command_is_a_valid_train_command(tmp_path):
             argv = shlex.split(line)
             assert argv[1:4] == ["-m", "sightline.cli", "train"] and "--overwrite" not in argv
             parsed.append(build_parser().parse_args(argv[3:]))
-    assert {(a.drive, a.epochs, a.firewall, a.block, a.device) for a in parsed} == {
-        ("drive2018", 30, 250, 1500, "auto")}
+    assert {(a.drive, a.epochs, a.patience, a.firewall, a.block, a.device) for a in parsed} == {
+        ("drive2018", 20, 0, 250, 1500, "auto")}
+    assert all("--epochs 20 --patience 0" in l for l in out if " train " in l)
     seeds = [a.seed for a in parsed]
     assert seeds == sorted(seeds)
     expected = {(m, p, s) for m in ("pilotnet", "sightlinenet") for p in ("leaky", "blocked", "forward")
@@ -295,8 +332,8 @@ def matrix(monkeypatch):
     return module
 
 
-def _history(job, epochs=30, firewall=250, block=1500, **extra):
-    return {"config": {"model": job.model, "epochs": epochs, "seed": job.seed,
+def _history(job, epochs=20, firewall=250, block=1500, patience=0, **extra):
+    return {"config": {"model": job.model, "epochs": epochs, "seed": job.seed, "patience": patience,
                        "notes": {"drive": job.drive, "protocol": job.protocol,
                                  "firewall": firewall, "block": block}}, **extra}
 
@@ -364,6 +401,18 @@ def test_matrix_leaves_a_finished_run_with_another_configuration_alone_and_fails
     assert re.search(rf"CONFLICT +{job.name} .*epochs=1", out)
     assert (runs / job.name / "history.json").read_text() == smoke
     assert not (runs / "logs" / f"{job.name}.log").exists()
+
+
+def test_a_finished_run_trained_with_another_patience_is_a_conflict(matrix, tmp_path):
+    job = matrix.matrix_jobs("drive2018")[0]
+    opts = matrix.parse_args(["--runs-dir", str(tmp_path)])
+    assert opts.patience == 0
+    (tmp_path / job.name).mkdir()
+    (tmp_path / job.name / "history.json").write_text(json.dumps(_history(job, patience=8)))
+    state, note = matrix.run_state(job, opts)
+    assert state == "conflict" and "patience=8" in note
+    (tmp_path / job.name / "history.json").write_text(json.dumps(_history(job)))
+    assert matrix.run_state(job, opts)[0] == "finished"
 
 
 def test_matrix_survives_a_failing_job_and_exits_nonzero(matrix, monkeypatch, tmp_path, capsys):
