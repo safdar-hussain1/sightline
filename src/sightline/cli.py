@@ -5,14 +5,17 @@ option, so nothing can shadow silently.
 
     sightline data verify [--drive drive2018 ...]
     sightline cache   --drive drive2018
-    sightline train   --drive drive2018 --model sightlinenet --protocol honest
-    sightline eval    --run runs/drive2018_sightlinenet_honest_s0 [--cross-drive drive2017]
+    sightline train   --drive drive2018 --model sightlinenet --protocol blocked --seed 0
+    sightline eval    --run runs/drive2018_sightlinenet_blocked_s0 [--cross-drive drive2017]
     sightline export  --run runs/... --out web/public/models/sightline.onnx
     sightline demo    --drive drive2017 --run runs/... --out demo.mp4
 
 ``--drive`` takes a drive name, looked up under ``--data-dir`` (default
 ``data``); caches and training runs live under ``--runs-dir`` (default
 ``runs``). Both options belong to each subcommand.
+
+``train`` writes ``<runs-dir>/<drive>_<model>_<protocol>_s<seed>`` and never
+touches an existing run unless given ``--overwrite``.
 """
 
 from __future__ import annotations
@@ -23,6 +26,15 @@ import sys
 from pathlib import Path
 
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
+
+#: what ``train`` writes into a run directory; history.json is listed first
+#: because a run without it reads as unfinished
+RUN_FILES = ("history.json", "history.json.partial", "best.pt",
+             "train_idx.npy", "val_idx.npy", "test_idx.npy")
+
+
+class CommandError(Exception):
+    """A request the command cannot carry out; reported as one line, exit 2."""
 
 
 def _workspace(args: argparse.Namespace) -> Workspace:
@@ -50,37 +62,51 @@ def cmd_cache(args: argparse.Namespace) -> int:
 def cmd_train(args: argparse.Namespace) -> int:
     import numpy as np
 
-    from sightline.data.splits import chronological_split, random_split
-    from sightline.train import TrainConfig, train_model
+    from sightline.data.splits import make_split
+    from sightline.train import TrainConfig, resolve_device, train_model
+
+    if args.drive in ("", ".", "..") or Path(args.drive).name != args.drive:
+        raise CommandError(f"--drive takes a drive name under --data-dir, not a path: {args.drive!r}")
+    try:
+        device = resolve_device(args.device)
+    except ValueError as exc:
+        raise CommandError(str(exc)) from None
 
     ws = _workspace(args)
+    name = f"{args.drive}_{args.model}_{args.protocol}_s{args.seed}"
+    run_dir = ws.runs_dir / name
+    if run_dir.exists() and not args.overwrite:
+        raise CommandError(f"run {name!r} already exists at {run_dir}; pass --overwrite to replace it")
+
     labels, cache = _load_drive(ws, args.drive)
     n = len(cache)
-    if args.protocol == "honest":
-        splits = chronological_split(n, firewall=args.firewall)
-    elif args.protocol == "leaky":
-        splits = random_split(n, seed=args.seed)
-    else:
-        raise ValueError(f"unknown protocol {args.protocol}")
+    try:
+        splits = make_split(args.protocol, n, seed=args.seed, firewall=args.firewall, block=args.block)
+    except ValueError as exc:
+        raise CommandError(f"cannot split {args.drive!r} for --protocol {args.protocol}: {exc}") from None
 
     cfg = TrainConfig(
         model=args.model,
         epochs=args.epochs,
         seed=args.seed,
+        patience=args.patience,
         notes={
             "drive": args.drive,
             "protocol": args.protocol,
-            "firewall": args.firewall if args.protocol == "honest" else None,
+            "firewall": args.firewall,
+            "block": args.block,
             "repaired_labels": int(labels.repaired_indices.size),
         },
     )
-    run_dir = ws.runs_dir / f"{args.drive}_{args.model}_{args.protocol}_s{args.seed}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    for stale in RUN_FILES:
+        (run_dir / stale).unlink(missing_ok=True)
     np.save(run_dir / "train_idx.npy", splits.train)
     np.save(run_dir / "val_idx.npy", splits.val)
     np.save(run_dir / "test_idx.npy", splits.test)
-    summary = train_model(cache, splits, cfg, run_dir)
-    print(json.dumps({k: summary[k] for k in ("best_val_mae_deg", "best_epoch", "n_params")}, indent=2))
+    summary = train_model(cache, splits, cfg, run_dir, device=device)
+    print(json.dumps({k: summary[k] for k in ("best_val_mae_deg", "best_epoch", "n_params", "code_version")},
+                     indent=2))
     return 0
 
 
@@ -146,7 +172,24 @@ def _add_locations(p: argparse.ArgumentParser) -> None:
     p.add_argument("--runs-dir", default="runs", help="folder for caches and training runs")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _int_from(minimum: int):
+    def parse(text: str) -> int:
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"must be at least {minimum}, got {value}")
+        return value
+
+    return parse
+
+
+def build_parser() -> argparse.ArgumentParser:
+    from sightline.data.splits import PROTOCOLS
+    from sightline.models import MODEL_SPECS
+    from sightline.train import DEVICES
+
     parser = argparse.ArgumentParser(prog="sightline", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -164,12 +207,20 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_cache)
 
     p = sub.add_parser("train", help="train a steering model")
-    p.add_argument("--drive", required=True)
-    p.add_argument("--model", default="sightlinenet", choices=["sightlinenet", "pilotnet"])
-    p.add_argument("--protocol", default="honest", choices=["honest", "leaky"])
-    p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--firewall", type=int, default=250)
+    p.add_argument("--drive", required=True, help="drive name under --data-dir")
+    p.add_argument("--model", default="sightlinenet", choices=list(MODEL_SPECS))
+    p.add_argument("--protocol", default="blocked", choices=PROTOCOLS,
+                   help="leaky = shuffled frames, blocked = interleaved blocks, forward = later in the drive")
+    p.add_argument("--seed", type=_int_from(0), default=0)
+    p.add_argument("--epochs", type=_int_from(1), default=30)
+    p.add_argument("--patience", type=_int_from(1), default=8,
+                   help="stop after this many epochs without a better validation MAE")
+    p.add_argument("--firewall", type=_int_from(0), default=250,
+                   help="frames dropped on each side of every train/evaluation boundary")
+    p.add_argument("--block", type=_int_from(1), default=1500,
+                   help="block length of the blocked split (recorded for every protocol)")
+    p.add_argument("--device", default="auto", choices=DEVICES)
+    p.add_argument("--overwrite", action="store_true", help="replace an existing run of the same name")
     _add_locations(p)
     p.set_defaults(fn=cmd_train)
 
@@ -196,11 +247,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fps", type=float, default=17.5)
     _add_locations(p)
     p.set_defaults(fn=cmd_demo)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return args.fn(args)
-    except (MissingDataError, UnusableRunError) as exc:
+    except (MissingDataError, UnusableRunError, CommandError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

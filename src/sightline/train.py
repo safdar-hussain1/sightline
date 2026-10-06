@@ -8,12 +8,18 @@ MAE, not last checkpoint.
 
 The augmentation recipe and dropout default to the model's registry entry
 (``MODEL_SPECS``); ``history.json`` records the resolved values and the
-model's ``frame_lags``, which is everything needed to construct the model again.
+model's ``frame_lags``, which is everything needed to construct the model again,
+plus the commit the training code came from (``code_version``).
+
+``history.json`` is written last and atomically, so its presence means the run
+finished: a run directory without it is an interrupted run.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -28,9 +34,11 @@ from sightline.data.frames import stack_frames
 from sightline.data.splits import SplitIndices
 from sightline.models import MODEL_SPECS, build_model
 
-__all__ = ["TrainConfig", "train_model", "pick_device", "predict"]
+__all__ = ["DEVICES", "TrainConfig", "code_version", "pick_device", "predict", "resolve_device",
+           "train_model"]
 
 HUBER_SCALE_DEG = 30.0
+DEVICES = ("auto", "cpu", "mps", "cuda")
 
 
 @dataclass
@@ -54,6 +62,47 @@ def pick_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def resolve_device(name: str = "auto") -> torch.device:
+    """``auto`` picks the fastest device present; a named device must be present."""
+    if name == "auto":
+        return pick_device()
+    available = {"cpu": True, "mps": torch.backends.mps.is_available(), "cuda": torch.cuda.is_available()}
+    if name not in available:
+        raise ValueError(f"unknown device {name!r}; expected one of {DEVICES}")
+    if not available[name]:
+        raise ValueError(f"device {name!r} is not available on this machine")
+    return torch.device(name)
+
+
+def code_version(repo: str | Path | None = None) -> str | None:
+    """The commit the training code came from: ``git rev-parse HEAD``, plus
+    ``+dirty`` when ``git status --porcelain -- src`` lists anything (modified or
+    untracked source). ``None`` outside a git checkout.
+
+    ``repo`` defaults to the checkout holding this package (``<repo>/src/sightline``);
+    an installed copy has no checkout and gets ``None``.
+    """
+    if repo is None:
+        package = Path(__file__).resolve().parent
+        if package.parent.name != "src":
+            return None
+        repo = package.parent.parent
+    repo = Path(repo).resolve()
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    try:
+        if Path(git("rev-parse", "--show-toplevel")).resolve() != repo:
+            return None  # inside some other checkout, not one of its own
+        head = git("rev-parse", "HEAD")
+        dirty = git("status", "--porcelain", "--", "src")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return head + ("+dirty" if dirty else "")
 
 
 def _resolve_recipe(cfg: TrainConfig) -> TrainConfig:
@@ -109,15 +158,20 @@ def train_model(
     splits: SplitIndices,
     cfg: TrainConfig,
     run_dir: str | Path,
+    device: torch.device | str | None = None,
 ) -> dict:
-    """Train, select on validation MAE, save best weights + history."""
+    """Train, select on validation MAE, save best weights + history.
+
+    ``device`` defaults to ``pick_device()``.
+    """
     cfg = _resolve_recipe(cfg)
+    version = code_version()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
-    device = pick_device()
+    device = pick_device() if device is None else torch.device(device)
 
     model = build_model(cfg.model, dropout=cfg.dropout).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -171,13 +225,21 @@ def train_model(
                 print(f"[{cfg.model}] early stop at epoch {epoch + 1}", flush=True)
                 break
 
+    if best["epoch"] < 0:
+        raise RuntimeError(
+            f"[{cfg.model}] no finite validation MAE in {len(history)} epochs; no checkpoint saved"
+        )
+
     summary = {
         "config": {**asdict(cfg), "frame_lags": list(model.frame_lags)},
+        "code_version": version,
         "device": str(device),
         "n_params": n_params,
         "best_val_mae_deg": best["val_mae"],
         "best_epoch": best["epoch"],
         "history": history,
     }
-    (run_dir / "history.json").write_text(json.dumps(summary, indent=2))
+    partial = run_dir / "history.json.partial"
+    partial.write_text(json.dumps(summary, indent=2))
+    os.replace(partial, run_dir / "history.json")
     return summary
