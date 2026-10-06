@@ -14,7 +14,7 @@ option, so nothing can shadow silently.
     sightline legacy  --weights PATH [--out reports/legacy.json]
     sightline export  --run drive2018_sightlinenet_blocked_s0 --out PATH.onnx
     sightline site-data [--summary reports/summary.json] [--out-dir web/public] [--reports-dir reports]
-    sightline demo    --drive drive2017 --run runs/... --out demo.mp4
+    sightline demo    --drive drive2018 --run drive2018_sightlinenet_blocked_s2 --out demo.mp4 [--start N]
 
 ``--drive`` takes a drive name, looked up under ``--data-dir`` (default
 ``data``); caches and training runs live under ``--runs-dir`` (default
@@ -35,12 +35,15 @@ names their .npz. ``export`` writes one run as an ONNX graph (steering angle and
 after checking it against PyTorch; ``site-data`` writes everything the browser page loads
 (both models, the demo clips, results.json, the self-test fixture and the leakage pairs)
 from the summary, the reports and the checkpoints, and records it in reports/export.json.
+``demo`` renders a stretch of a drive as an mp4 video: the camera, where the model looks, and
+its steering wheel with the human's angle beside it, scored on the CPU from the drive's cache.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -354,16 +357,23 @@ def cmd_site_data(args: argparse.Namespace) -> int:
 def cmd_demo(args: argparse.Namespace) -> int:
     from sightline.demo import render_demo
 
-    out = render_demo(
-        drive_name=args.drive,
-        run_dir=Path(args.run),
-        out_path=Path(args.out),
-        workspace=_workspace(args),
-        start=args.start,
-        num_frames=args.frames,
-        fps=args.fps,
-    )
-    print(f"wrote {out}")
+    drive = _drive_name(args.drive)
+    out = Path(args.out)
+    if out.suffix.lower() != ".mp4":
+        raise CommandError(f"--out names the .mp4 file to write, got {args.out!r}")
+    ws = _workspace(args)
+    try:
+        result = render_demo(drive, _run_path(ws, args.run), out, ws,
+                             start=args.start, num_frames=args.frames, fps=args.fps)
+    except (MissingDataError, UnusableRunError):
+        raise
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise CommandError(f"cannot render the demo: {exc}") from None
+    width, height = result.size
+    print(f"wrote {result.path}: {result.frames} frames of {drive} from frame {result.first_frame} "
+          f"at {result.fps:g} fps ({width}x{height}), model {result.run} on the {result.device}")
+    print(f"MAE on these frames: model {result.mae_deg:.2f} deg, "
+          f"always straight ahead {result.zero_mae_deg:.2f} deg")
     return 0
 
 
@@ -401,6 +411,16 @@ def _int_from(minimum: int):
         return value
 
     return parse
+
+
+def _positive_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f"must be a positive number, got {text}")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -512,12 +532,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_site_data)
 
     p = sub.add_parser("demo", help="render the cockpit demo video")
-    p.add_argument("--drive", required=True)
-    p.add_argument("--run", required=True)
-    p.add_argument("--out", default="demo.mp4")
-    p.add_argument("--start", type=int, default=0)
-    p.add_argument("--frames", type=int, default=600)
-    p.add_argument("--fps", type=float, default=17.5)
+    p.add_argument("--drive", required=True, help="drive name under --data-dir (its cache must exist)")
+    p.add_argument("--run", required=True, help="run name under --runs-dir, or a path to a run folder")
+    p.add_argument("--out", default="demo.mp4", help="the .mp4 file to write")
+    p.add_argument("--start", type=_int_from(0), default=0, help="first frame of the drive to render")
+    p.add_argument("--frames", type=_int_from(1), default=600, help="number of frames to render")
+    p.add_argument("--fps", type=_positive_float, default=17.5,
+                   help="frame rate of the video (the drives were recorded at about 17.5 frames a second)")
     _add_locations(p)
     p.set_defaults(fn=cmd_demo)
     return parser

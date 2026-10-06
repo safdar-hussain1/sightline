@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 TEXT_SUFFIXES = {
     ".py", ".md", ".toml", ".json", ".txt", ".html", ".css", ".ts", ".tsx",
-    ".js", ".svg", ".yml", ".yaml", ".xml", ".cfg", ".ini",
+    ".js", ".svg", ".yml", ".yaml", ".xml", ".cfg", ".ini", ".ipynb",
 }
 
 
