@@ -27,6 +27,7 @@ from sightline.data.verify import label_sha256
 from sightline.evaluate import pearson_r, regime_breakdown, regression_metrics
 from sightline.legacy import (
     PARITY_FRAMES_PER_SET,
+    PARITY_LIMIT_DEG,
     RECIPE,
     TENSOR_SHAPES,
     WEIGHTS_ENV,
@@ -37,6 +38,7 @@ from sightline.legacy import (
     to_model_input,
 )
 from sightline.models.pilotnet import PilotNet
+from sightline.reporting import CROSS_FIRST_FRAME
 
 #: the port must agree with the TF1 graph to this many degrees on every frame
 TOL_DEG = 1e-3
@@ -155,6 +157,24 @@ def test_the_head_is_twice_atan_in_radians_reported_in_degrees(bias):
     np.testing.assert_allclose(out, np.full(3, 2.0 * math.atan(z) * 180.0 / math.pi), rtol=1e-12, atol=1e-12)
 
 
+def test_the_tf1_graph_flattens_row_then_column_then_channel(tmp_path):
+    # conv5's bias alone sets its 1x18x64 output: channel c holds c + 1 everywhere. The first
+    # fully-connected unit reads flat element 1 and every later layer passes it on, so the
+    # head's z is that element: 2 (row 0, column 0, channel 1) in TF's NHWC order, where a
+    # channel-first flatten would read 1 (channel 0, column 1)
+    weights = {name: np.zeros(shape, np.float32) for name, shape in TENSOR_SHAPES.items()}
+    weights["Variable_9"] = np.arange(1, 65, dtype=np.float32)
+    weights["Variable_10"][1, 0] = 1.0
+    for name in ("Variable_12", "Variable_14", "Variable_16", "Variable_18"):
+        weights[name][0, 0] = 1.0
+    expected = 2.0 * math.atan(2.0) * 180.0 / math.pi
+    np.testing.assert_allclose(reference_forward(weights, np.zeros((2, 66, 200, 3), np.float32)),
+                               [expected, expected], rtol=1e-12)
+    np.savez(tmp_path / "weights.npz", **weights)  # the port reads the same element
+    np.testing.assert_allclose(port_predict(port_from(tmp_path / "weights.npz"), random_frames(n=2)),
+                               [expected, expected], rtol=1e-6)
+
+
 @pytest.mark.parametrize("stride", [1, 2])
 def test_conv2d_valid_is_tf_valid_convolution(stride):
     rng = np.random.default_rng(3)
@@ -206,11 +226,23 @@ def test_weights_missing_a_tensor_or_of_the_wrong_shape_are_refused(tmp_path):
 
 # --- the evaluation on synthetic drives ---------------------------------------------------
 
-N2018, N2017, BLOCK, FIREWALL = 800, 300, 100, 20
-#: a single-frame sensor dropout inside the 2018 blocked test frames (520..579)
+N2018, N2017, BLOCK, FIREWALL = 1300, 300, 100, 20
+#: a single-frame sensor dropout inside the 2018 blocked test frames (520..579 and 1220..1299;
+#: the forward test frames are 1125..1299, so the two sets share 80 frames, as on the real drive)
 DROPOUT = 525
 #: 2017 labels at and past half a turn; exactly 180 is not beyond it
 EXTREME_LABELS = {10: 250.0, 11: -200.5, 12: 180.0}
+
+
+def cached(angles: np.ndarray) -> np.ndarray:
+    """Angles as the drive cache stores them (float32), read back as float64 as the run reports do."""
+    return np.asarray(angles).astype(np.float32).astype(np.float64)
+
+
+def spread(frames: np.ndarray) -> np.ndarray:
+    """The parity sample of a set: PARITY_FRAMES_PER_SET frames spread evenly over it (all, if fewer)."""
+    take = min(PARITY_FRAMES_PER_SET, frames.size)
+    return frames[np.unique(np.linspace(0, frames.size - 1, take).round().astype(int))]
 
 
 def set_angles(drive, angles: dict[int, float]) -> None:
@@ -249,7 +281,7 @@ def evaluated(tmp_path_factory):
     ctx.sets = {
         "drive2018_blocked_test": ("drive2018", make_split("blocked", N2018, firewall=FIREWALL, block=BLOCK).test),
         "drive2018_forward_test": ("drive2018", make_split("forward", N2018, firewall=FIREWALL, block=BLOCK).test),
-        "drive2017_all_seen": ("drive2017", np.arange(N2017)),
+        "drive2017_all_seen": ("drive2017", np.arange(CROSS_FIRST_FRAME, N2017)),
     }
     # the TF1 graph on every scored frame, decoded and preprocessed exactly as the recipe did
     ctx.reference = {
@@ -271,6 +303,7 @@ def test_the_report_names_the_recipe_and_has_the_contract_keys(evaluated):
     assert r["port_parity"].keys() == {"frames", "max_abs_diff_deg"}
     assert r["atan_cap"].keys() == {"max_abs_pred_deg", "labels_beyond_180"}
     assert (r["device"], r["splits"]) == ("cpu", {"firewall": FIREWALL, "block": BLOCK})
+    assert r["seen_first_frame"] == CROSS_FIRST_FRAME  # the first drive2017 frame the run reports score
     dt_2018 = evaluated.labels["drive2018"].median_dt_s()
     assert dt_2018 == pytest.approx(0.057, abs=1e-6)
     for name, n, dt_s in (("drive2018", N2018, dt_2018), ("drive2017", N2017, None)):
@@ -287,7 +320,8 @@ def test_each_set_is_scored_on_its_frames_against_the_repaired_labels(evaluated)
     assert DROPOUT in evaluated.sets["drive2018_blocked_test"][1]
     assert raw[DROPOUT] == 0.0 and abs(repaired[DROPOUT]) > 15.0  # the repair moves the zero baseline
     for key, (drive, frames) in evaluated.sets.items():
-        target = evaluated.labels[drive].angles_deg[frames]
+        labels = evaluated.labels[drive].angles_deg[frames]
+        target = cached(labels)  # what the run reports score against on the same frames
         ref = evaluated.reference[key]
         score = evaluated.report["eval"][key]
         expected = regression_metrics(ref, target)
@@ -295,6 +329,7 @@ def test_each_set_is_scored_on_its_frames_against_the_repaired_labels(evaluated)
         for metric in ("mae_deg", "rmse_deg", "medae_deg"):
             assert score["model"][metric] == pytest.approx(expected[metric], abs=TOL_DEG), (key, metric)
         assert score["zero_mae_deg"] == float(np.abs(target).mean()), key
+        assert score["zero_mae_deg"] != float(np.abs(labels).mean()), key  # the rounding shows here
         regimes = regime_breakdown(ref, target)
         for regime in ("straight", "gentle", "sharp"):
             assert score["regimes"][regime]["n"] == regimes[regime]["n"], (key, regime)
@@ -303,10 +338,13 @@ def test_each_set_is_scored_on_its_frames_against_the_repaired_labels(evaluated)
 
 
 def test_the_port_is_checked_against_the_tf1_graph_on_frames_of_every_set(evaluated):
+    blocked, forward = (evaluated.sets[f"drive2018_{protocol}_test"][1] for protocol in ("blocked", "forward"))
+    assert np.intersect1d(blocked, forward).size == 80  # as on the real drive, the test sets overlap
+    sampled = {drive: np.unique(np.concatenate([spread(frames) for d, frames in evaluated.sets.values() if d == drive]))
+               for drive in ("drive2018", "drive2017")}
+    assert sampled["drive2018"].size < 2 * PARITY_FRAMES_PER_SET  # some sampled frames are in both sets
     parity = evaluated.report["port_parity"]
-    sizes = [frames.size for _, frames in evaluated.sets.values()]
-    assert sizes == [60, 100, N2017]  # the sets share no frame, so none is counted twice
-    assert parity["frames"] == sum(min(size, PARITY_FRAMES_PER_SET) for size in sizes)
+    assert parity["frames"] == sum(frames.size for frames in sampled.values())
     # the port runs in float32 and the graph in float64, so frames compared are never all equal
     assert 0.0 < parity["max_abs_diff_deg"] < TOL_DEG
 
@@ -375,6 +413,21 @@ def test_unusable_weights_are_a_one_line_error(tmp_path, capsys, damage, phrase)
     code = run_legacy(tmp_path, "--weights", str(path))
     line = error_line(capsys.readouterr().err)
     assert code == 2 and phrase in line, damage
+
+
+@pytest.mark.parametrize("offset", [1.0, float("nan")])
+def test_a_port_that_disagrees_with_the_tf1_graph_writes_no_report(tmp_path, capsys, monkeypatch, weights_file,
+                                                                   offset):
+    import sightline.legacy
+
+    make_drive(tmp_path / "data", "drive2018", n=100)
+    make_drive(tmp_path / "data", "drive2017", n=10, timestamps=False)
+    graph = sightline.legacy.reference_forward
+    monkeypatch.setattr(sightline.legacy, "reference_forward", lambda weights, x: graph(weights, x) + offset)
+    code = run_legacy(tmp_path, "--weights", str(weights_file), "--block", "10", "--firewall", "2")
+    line = error_line(capsys.readouterr().err)
+    assert code == 2 and "differs from the TF1 graph" in line and f"limit {PARITY_LIMIT_DEG:g} deg" in line
+    assert not (tmp_path / "legacy.json").exists()
 
 
 def test_a_missing_drive_is_a_one_line_error(tmp_path, capsys, weights_file):

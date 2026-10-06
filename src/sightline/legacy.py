@@ -22,11 +22,12 @@ their path from ``--weights`` or ``SIGHTLINE_LEGACY_WEIGHTS``.
 ``evaluate_legacy``
     Scores the port on the 2018 drive's blocked and forward test frames, the
     frames Sightline's own models are tested on (for this model, another
-    day), and on the whole 2017 drive, its own training drive: frames it has
-    seen, the kind its shuffled split scored it on. Frames are decoded
-    from the JPEGs, because Sightline's cache resizes with INTER_AREA, which
-    this model never saw; targets are the repaired labels, as in every other
-    report.
+    day), and on the 2017 drive, its own training drive, from frame
+    ``CROSS_FIRST_FRAME`` on, the frames the run reports score as another
+    day: frames it has seen, the kind its shuffled split scored it on. Frames
+    are decoded from the JPEGs, because Sightline's cache resizes with
+    INTER_AREA, which this model never saw; targets are the repaired labels
+    as the cache stores them (float32), as in every run report.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from sightline.data.verify import label_sha256
 from sightline.evaluate import pearson_r, regime_breakdown, regression_metrics
 from sightline.models.pilotnet import PilotNet
 from sightline.paths import MissingDataError, Workspace
+from sightline.reporting import CROSS_FIRST_FRAME
 from sightline.train import code_version
 
 __all__ = [
@@ -58,6 +60,7 @@ __all__ = [
     "CONV_STRIDES",
     "OTHER_DAY",
     "PARITY_FRAMES_PER_SET",
+    "PARITY_LIMIT_DEG",
     "RECIPE",
     "TENSOR_SHAPES",
     "TRAINED_ON",
@@ -82,6 +85,8 @@ CAP_DEG = 180.0
 #: the port is checked against the TF1 graph on this many frames of every
 #: evaluation set, spread evenly over it (all of a smaller set)
 PARITY_FRAMES_PER_SET = 64
+#: the evaluation stops, writing no report, when the port and the TF1 graph differ by more
+PARITY_LIMIT_DEG = 1e-2
 
 #: the TF1 tensors in creation order: five conv layers, then the four
 #: fully-connected layers and the head, each a kernel followed by its bias
@@ -270,13 +275,21 @@ def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str 
 
     The evaluation sets are the blocked and forward test frames of ``OTHER_DAY``,
     made with ``make_split`` from the drive's length, ``firewall`` and ``block``
-    (Sightline's training settings by default), and every frame of
-    ``TRAINED_ON``. ``port_parity`` compares the port's scored predictions with
-    ``reference_forward`` on ``PARITY_FRAMES_PER_SET`` frames of every set.
-    ``atan_cap`` gives the largest predicted |angle| and, per drive, the labels
-    steered more than ``CAP_DEG`` either way, which the head can never reach.
-    The report names the weights by their sha256, never by their path; ``device``
-    is used as given. Every value is a plain int, float, str or None.
+    (Sightline's training settings by default), which share frames, and the
+    frames of ``TRAINED_ON`` from ``CROSS_FIRST_FRAME`` on (``seen_first_frame``
+    in the report), the frames the run reports score as another day. Every
+    frame is predicted once. Targets are the repaired labels rounded to float32,
+    as the drive cache stores them, so this report and a run report score a
+    shared frame against the same number.
+
+    ``port_parity`` compares the port's scored predictions with
+    ``reference_forward`` on ``PARITY_FRAMES_PER_SET`` frames of every set, each
+    frame once; a difference above ``PARITY_LIMIT_DEG`` raises ValueError and no
+    report is made. ``atan_cap`` gives the largest predicted |angle| and, per
+    drive, the labels of the whole drive steered more than ``CAP_DEG`` either
+    way, which the head can never reach. The report names the weights by their
+    sha256, never by their path; ``device`` is used as given. Every value is a
+    plain int, float, str or None.
     """
     weights_path = Path(weights_path)
     weights = load_weights(weights_path)
@@ -287,11 +300,16 @@ def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str 
         forward = make_split("forward", n, firewall=firewall, block=block)
     except ValueError as exc:
         raise ValueError(f"cannot split {OTHER_DAY!r}: {exc}") from None
+    seen = np.arange(CROSS_FIRST_FRAME, len(labels[TRAINED_ON]), dtype=np.int64)
+    if seen.size == 0:
+        raise ValueError(f"{TRAINED_ON!r} has no frames from frame {CROSS_FIRST_FRAME} on")
     sets = {
         f"{OTHER_DAY}_blocked_test": (OTHER_DAY, blocked.test),
         f"{OTHER_DAY}_forward_test": (OTHER_DAY, forward.test),
-        f"{TRAINED_ON}_all_seen": (TRAINED_ON, np.arange(len(labels[TRAINED_ON]), dtype=np.int64)),
+        f"{TRAINED_ON}_all_seen": (TRAINED_ON, seen),
     }
+    # the cache stores the angles as float32, and the run reports score against those
+    targets = {drive: lab.angles_deg.astype(np.float32).astype(np.float64) for drive, lab in labels.items()}
 
     torch_device = torch.device(device)
     model = PilotNet()
@@ -306,7 +324,10 @@ def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str 
 
     def predictions(drive: str, idx: np.ndarray) -> np.ndarray:
         frames, values = predicted[drive]
-        return values[np.searchsorted(frames, idx)]
+        pos = np.minimum(np.searchsorted(frames, idx), frames.size - 1)
+        if not np.array_equal(frames[pos], idx):
+            raise RuntimeError(f"frames of {drive} were looked up that were never predicted")
+        return values[pos]
 
     diffs = []
     for drive in labels:
@@ -315,11 +336,15 @@ def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str 
         x = np.stack([preprocess_legacy(read_frame(labels[drive], int(i))) for i in frames])
         diffs.append(np.abs(predictions(drive, frames) - reference_forward(weights, x)))
     diffs = np.concatenate(diffs)
+    worst = float(diffs.max())
+    if not worst <= PARITY_LIMIT_DEG:  # a NaN fails too
+        raise ValueError(f"the PyTorch port differs from the TF1 graph by up to {worst:.3g} deg "
+                         f"on {diffs.size} frames (limit {PARITY_LIMIT_DEG:g} deg)")
 
     beyond = {}
-    for drive, drive_labels in labels.items():
-        count = int((np.abs(drive_labels.angles_deg) > CAP_DEG).sum())
-        beyond[drive] = {"n": count, "frac": count / len(drive_labels)}
+    for drive, angles in targets.items():
+        count = int((np.abs(angles) > CAP_DEG).sum())
+        beyond[drive] = {"n": count, "frac": count / angles.size}
     every_prediction = np.concatenate([values for _, values in predicted.values()])
 
     return {
@@ -331,9 +356,9 @@ def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str 
                      "python": platform.python_version()},
         "eval_code_version": code_version(),
         "splits": {"firewall": int(firewall), "block": int(block)},
+        "seen_first_frame": int(CROSS_FIRST_FRAME),
         "drives": {drive: _drive_info(drive_labels) for drive, drive_labels in labels.items()},
-        "port_parity": {"frames": int(diffs.size), "max_abs_diff_deg": float(diffs.max())},
-        "eval": {key: _split_score(predictions(drive, idx), labels[drive].angles_deg[idx])
-                 for key, (drive, idx) in sets.items()},
+        "port_parity": {"frames": int(diffs.size), "max_abs_diff_deg": worst},
+        "eval": {key: _split_score(predictions(drive, idx), targets[drive][idx]) for key, (drive, idx) in sets.items()},
         "atan_cap": {"max_abs_pred_deg": float(np.abs(every_prediction).max()), "labels_beyond_180": beyond},
     }
