@@ -13,21 +13,25 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: tracked files nobody writes by hand: the npm lock file and the bundles a web build emits
-NOT_AUTHORED = ("package-lock.json", "docs/assets/")
 #: formats that are never text, fonts among them
 BINARY_SUFFIXES = {
     ".bin", ".gif", ".ico", ".jpeg", ".jpg", ".mp4", ".npy", ".npz", ".onnx", ".otf", ".pdf", ".png",
     ".ttf", ".wasm", ".webm", ".webp", ".woff", ".woff2",
 }
-#: an inline base64 payload (``data:...;base64,...``): its letters are data, not words
-BASE64_PAYLOAD = re.compile(r";base64,[A-Za-z0-9+/=\s]+")
+#: tracked files without a binary suffix that may hold a NUL byte, each with the reason it may; a
+#: NUL byte in any other of them fails the guards, as the text scans could not read the file
+NUL_ALLOWED: dict[str, str] = {}
+#: an inline base64 payload (``data:...;base64,...``), up to the first character base64 never uses
+BASE64_PAYLOAD = re.compile(r";base64,[A-Za-z0-9+/]+=*")
+#: the keys of a JSON tree that hold base64 payloads: a name that ends in ``_b64``, and a notebook
+#: output's binary image types
+PAYLOAD_KEY = re.compile(r".*_b64|image/(?:png|jpeg|gif|webp)")
 
 
 def _tracked_files() -> list[Path]:
@@ -37,59 +41,85 @@ def _tracked_files() -> list[Path]:
     return [REPO / line for line in out.stdout.splitlines() if line]
 
 
-def _is_text(path: Path) -> bool:
-    """A file to read as text: not a binary format, and no NUL byte (git's own test)."""
-    return path.suffix.lower() not in BINARY_SUFFIXES and path.is_file() and b"\0" not in path.read_bytes()[:8000]
+def not_authored(rel: str) -> bool:
+    """Whether the tracked file at ``rel`` (from the repository root) is one nobody writes by hand,
+    matched exactly: an npm lock file, a bundle the web build emits into ``docs/assets/``, or a file
+    of an installed node module."""
+    path = PurePosixPath(rel)
+    return path.name == "package-lock.json" or rel.startswith("docs/assets/") or "node_modules" in path.parts
 
 
-def _authored_files() -> list[Path]:
-    """Every tracked text file written by hand or by this repository's own code."""
+def _scanned_files() -> list[Path]:
+    """Every tracked file the text scans read: all but the ones nobody writes by hand and the
+    binary formats."""
     return [path for path in _tracked_files()
-            if not any(part in path.relative_to(REPO).as_posix() for part in NOT_AUTHORED) and _is_text(path)]
+            if path.is_file() and not not_authored(path.relative_to(REPO).as_posix())
+            and path.suffix.lower() not in BINARY_SUFFIXES]
 
 
-def _strings(tree, where: str):
-    """Every key and string value of a parsed JSON file, with where it sits; a value under a key that
-    ends in ``_b64`` is a base64 payload and is left out."""
+def is_base64(text: str) -> bool:
+    """Whether ``text`` is base64 and nothing else (line breaks aside): its letters, then at most two
+    ``=``, in a whole number of four-character groups."""
+    packed = text.replace("\n", "")
+    return len(packed) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", packed) is not None
+
+
+def _strings(tree, where: str, payload: bool = False):
+    """Every key and every string of a parsed JSON tree, with where it sits. Under a key that names a
+    base64 payload (``PAYLOAD_KEY``) a string that is base64 and nothing else is left out; any other
+    string there is read, and the walk goes into every mapping and list whatever its key."""
     if isinstance(tree, dict):
         for key, value in tree.items():
             yield f"{where}.{key}", key
-            if not key.endswith("_b64"):
-                yield from _strings(value, f"{where}.{key}")
+            yield from _strings(value, f"{where}.{key}", payload or PAYLOAD_KEY.fullmatch(key) is not None)
     elif isinstance(tree, list):
         for i, value in enumerate(tree):
-            yield from _strings(value, f"{where}[{i}]")
-    elif isinstance(tree, str):
+            yield from _strings(value, f"{where}[{i}]", payload)
+    elif isinstance(tree, str) and not (payload and is_base64(tree)):
         yield where, tree
 
 
 def _readable_text(path: Path) -> list[tuple[str, str]]:
-    """What a reader of ``path`` reads, as ``(where, text)`` pieces: a notebook's cells and the text
-    its outputs show (never an image's base64 bytes), a JSON file's keys and strings (never a base64
-    payload), any other file whole with inline base64 payloads blanked."""
+    """What a reader of ``path`` can read, as ``(where, text)`` pieces: every key and string of a
+    notebook or a JSON file (a notebook's metadata, every output and every traceback included), but
+    no base64 payload; any other file whole, its inline base64 payloads blanked."""
     rel = path.relative_to(REPO).as_posix()
     text = path.read_text(errors="replace")
-    if path.suffix == ".ipynb":
-        pieces = []
-        for i, cell in enumerate(json.loads(text)["cells"]):
-            pieces.append((f"{rel} cell {i}", "".join(cell["source"])))
-            for output in cell.get("outputs", []):
-                if output.get("output_type") == "stream":
-                    pieces.append((f"{rel} cell {i} output", "".join(output["text"])))
-                for kind, value in output.get("data", {}).items():
-                    if kind.startswith("text/"):
-                        pieces.append((f"{rel} cell {i} {kind}", "".join(value)))
-        return pieces
-    if path.suffix == ".json":
+    if path.suffix in (".ipynb", ".json"):
         try:
             return list(_strings(json.loads(text), rel))
-        except ValueError:  # JSON with comments, say: read it as it stands
+        except ValueError:  # not JSON as it stands (JSON with comments, say): read as text below
             pass
     return [(rel, BASE64_PAYLOAD.sub(";base64,", text))]
 
 
 def _line(text: str, start: int) -> int:
     return text.count("\n", 0, start) + 1
+
+
+#: files every scan must read, so that a scan of nothing cannot pass
+SCANNED_FOR_SURE = {"LICENSE", ".gitignore", "pyproject.toml", "src/sightline/cli.py", "tests/test_guards.py",
+                    "notebooks/02-results.ipynb", "reports/summary.json", "web/public/data/results.json"}
+
+
+def test_the_scans_read_every_file_but_the_generated_ones_and_the_binary_formats():
+    assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in _scanned_files()}
+
+
+@pytest.mark.parametrize("rel, skipped", [
+    ("package-lock.json", True), ("web/package-lock.json", True),
+    ("notes/package-lock.json.md", False), ("web/package-lock.json.orig", False),
+    ("docs/assets/index-3f2a.js", True), ("web/docs/assets/index.js", False), ("docs/assets-notes.md", False),
+    ("web/node_modules/vite/index.js", True), ("web/my_node_modules.md", False), ("notes/node_modules.md", False),
+])
+def test_only_the_files_nobody_writes_are_left_out_and_exactly(rel, skipped):
+    assert not_authored(rel) is skipped
+
+
+def test_no_tracked_file_holds_a_nul_byte_unless_its_format_is_binary():
+    allowed = {rel for rel, reason in NUL_ALLOWED.items() if reason.strip()}
+    holding = [path.relative_to(REPO).as_posix() for path in _scanned_files() if b"\0" in path.read_bytes()]
+    assert [rel for rel in holding if rel not in allowed] == [], "files the text scans cannot read"
 
 
 # --- words that tell a history, and names that never ship ----------------------------------------
@@ -131,29 +161,66 @@ def test_the_rule_for_banned_words(text, found):
 
 
 def test_no_banned_words_in_tracked_files():
+    files = _scanned_files()
+    assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in files}
     offenders = []
-    for path in _authored_files():
+    for path in files:
         for where, text in _readable_text(path):
             offenders += [f"{where}:{_line(text, start)}:{word}" for start, word in banned_words(text)]
     assert offenders == [], f"banned words in tracked files: {offenders}"
 
 
-def test_the_scan_reads_notebooks_and_json_but_not_their_base64_payloads(tmp_path, monkeypatch):
+def _found_in(path: Path) -> list[str]:
+    return [word for _, text in _readable_text(path) for _, word in banned_words(text)]
+
+
+def test_the_scan_reads_everything_a_notebook_holds_but_its_images(tmp_path, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
-    payload = "AAAA+v" + "2/BBBB"  # the bytes of an image: a banned word by chance, between + and /
-    notebook = {"cells": [{"cell_type": "code", "source": ["print(1)"], "outputs": [
-        {"output_type": "display_data", "data": {"image/png": payload, "text/plain": ["the v" + "2 table"]}}]}]}
+    payload = "AAAA+v" + "2/BBBB"  # an image's bytes: a banned word by chance, between + and /
+    notebook = {"metadata": {"title": "the v" + "1 notes"}, "cells": [{
+        "cell_type": "code", "metadata": {"tags": ["re" + "build"]}, "source": ["print(1)"], "outputs": [
+            {"output_type": "display_data", "data": {"image/png": payload, "text/plain": ["the v" + "2 table"],
+                                                     "application/json": {"note": "an up" + "grade"}}},
+            {"output_type": "error", "ename": "ValueError", "evalue": "orig" + "inally",
+             "traceback": ["line one", "col" + "lege"]}]}]}
     (tmp_path / "n.ipynb").write_text(json.dumps(notebook))
-    (tmp_path / "r.json").write_text(json.dumps({"saliency_f32_b64": {"m": payload}, "title": "an up" + "grade"}))
-    (tmp_path / "p.html").write_text(f'<img src="data:image/png;base64,{payload}"> the original page')
-    found = {p.name: [word for where, text in _readable_text(p) for _, word in banned_words(text)]
-             for p in tmp_path.iterdir()}
-    assert found == {"n.ipynb": ["v" + "2"], "r.json": ["up" + "grade"], "p.html": []}
+    assert sorted(_found_in(tmp_path / "n.ipynb")) == sorted(
+        ["v" + "1", "re" + "build", "v" + "2", "up" + "grade", "orig" + "inally", "col" + "lege"])
+
+
+def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    payload = "AAAA+v" + "2/BBBB"
+    cases = {
+        "skipped.json": {"saliency_f32_b64": {"m": payload}, "frames_b64": payload},
+        "not-base64.json": {"saliency_f32_b64": "an up" + "grade, not a payload"},
+        "nested.json": {"saliency_f32_b64": {"note": ["an up" + "grade"]}},
+        "plain-key.json": {"title": payload},
+    }
+    for name, tree in cases.items():
+        (tmp_path / name).write_text(json.dumps(tree))
+    assert {name: _found_in(tmp_path / name) for name in cases} == {
+        "skipped.json": [], "not-base64.json": ["up" + "grade"], "nested.json": ["up" + "grade"],
+        "plain-key.json": ["v" + "2"]}
+    assert is_base64(payload) and is_base64("QUJD\nREVG") and not is_base64("up" + "grade") \
+        and not is_base64("QUJDRA=") and not is_base64("QU JD")
+
+
+def test_the_scan_blanks_an_inline_payload_and_reads_what_follows_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    payload = "AAAA+v" + "2/BBBB"
+    (tmp_path / "p.html").write_text(f'<img src="data:image/png;base64,{payload}">an up' + "grade")
+    (tmp_path / "q.md").write_text(f"data:text/plain;base64,{payload}\nthe v" + "1 page")
+    (tmp_path / "r.css").write_text(f"a {{ background: url(data:image/png;base64,{payload}) }} /* the original */")
+    assert {p.name: _found_in(p) for p in sorted(tmp_path.iterdir())} == \
+        {"p.html": ["up" + "grade"], "q.md": ["v" + "1"], "r.css": []}
 
 
 def test_no_absolute_user_paths_in_tracked_files():
     pattern = re.compile(r"/Use" + r"rs/[A-Za-z]")
-    offenders = [where for path in _authored_files() for where, text in _readable_text(path) if pattern.search(text)]
+    files = _scanned_files()
+    assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in files}
+    offenders = [where for path in files for where, text in _readable_text(path) if pattern.search(text)]
     assert offenders == [], f"absolute user paths leaked into: {offenders}"
 
 
@@ -175,10 +242,9 @@ def test_the_trace_pattern_is_the_hygiene_checks():
 
 
 def test_no_build_process_traces_in_tracked_files():
-    scanned = [path for path in _tracked_files()
-               if not any(part in path.relative_to(REPO).as_posix() for part in (*NOT_AUTHORED, "node_modules/"))
-               and _is_text(path)]
-    assert Path(__file__).resolve() in scanned  # this file is scanned too: no exclusion hides anything
+    scanned = _scanned_files()
+    # this file is scanned too, so no exclusion hides anything, and so is every file a scan must read
+    assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in scanned}
     offenders = []
     for path in scanned:
         text = path.read_text(errors="replace")

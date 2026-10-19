@@ -9,7 +9,9 @@ each test module is collected and after each test's setup, call and teardown: a 
 training processes have memory-mapped must never change under them. A change fails the
 collection of the module that made it, or the phase of the test it happened in; a change
 made while a module's or the session's fixtures were torn down is reported at the teardown
-of the test after which they were, and says so. Each change is reported once.
+of the test after which they were, and says so. Each change is reported once. Every check
+also compares with the record from the start of the session, which nothing changes, and a
+repository without caches is watched as well: a cache folder deleted or made is a change.
 
 Synthetic drives are tiny, deterministic stand-ins for the real dataset. Each frame is a
 455x256 BGR image with a bright vertical bar whose horizontal position follows the
@@ -79,49 +81,68 @@ def _watched_files(root: Path) -> dict[str, tuple[int, int, int]]:
     return state
 
 
-def workspace_state(root: Path) -> dict[str, tuple[int, int, int]] | None:
-    """The drive caches and label files of the repository at ``root`` (see ``_watched_files``);
-    None when ``root/runs/cache`` does not exist: a fresh clone has no cache to protect."""
-    return _watched_files(root) if (root / "runs" / "cache").is_dir() else None
+def workspace_state(root: Path) -> dict[str, tuple[int, int, int]]:
+    """The drive caches and label files of the repository at ``root`` (see ``_watched_files``).
+    A repository without them gives an empty record, never none: a cache folder deleted or made
+    later is a change like any other."""
+    return _watched_files(root)
 
 
-def workspace_changes(before: dict | None, root: Path) -> list[str]:
-    """Each file of ``before`` changed or deleted since, and each new one; nothing when
-    ``before`` is None."""
-    if before is None:
-        return []
-    after = _watched_files(root)
+def state_changes(before: dict, after: dict) -> list[str]:
+    """Each file of ``before`` changed in ``after`` or gone from it, and each file new in ``after``."""
     return sorted([f"{path} (deleted)" for path in before.keys() - after.keys()]
                   + [f"{path} (new)" for path in after.keys() - before.keys()]
                   + [f"{path} (changed)" for path in before.keys() & after.keys() if after[path] != before[path]])
 
 
-def check_workspace(before: dict | None, root: Path, when: str = "") -> None:
+def workspace_changes(before: dict, root: Path) -> list[str]:
+    """Each file of ``before`` changed or deleted since, and each new one."""
+    return state_changes(before, workspace_state(root))
+
+
+def _fail(changes: list[str], when: str) -> None:
+    pytest.fail(f"the repository's drive caches or label files changed{when}: {', '.join(changes)}; "
+                "a test writes only under its own tmp folder", pytrace=False)
+
+
+def check_workspace(before: dict, root: Path, when: str = "") -> None:
     """Fail, naming every changed file, when the workspace at ``root`` is not as ``before``;
     ``when`` says when it changed."""
     changes = workspace_changes(before, root)
     if changes:
-        pytest.fail(f"the repository's drive caches or label files changed{when}: {', '.join(changes)}; "
-                    "a test writes only under its own tmp folder", pytrace=False)
+        _fail(changes, when)
 
 
-#: the repository's drive caches and label files as the last check found them: recorded when the
-#: session starts, and again by every check, so each change is reported once, where it happened
+#: what the tripwire holds of the repository's drive caches and label files: ``origin``, recorded
+#: when the session starts and never changed; ``state``, as the last check found them; and
+#: ``reported``, every difference from the origin a check has reported. Each change is reported
+#: once, where it happened, and a difference from the origin that no check reported is reported too.
 TRIPWIRE = pytest.StashKey[dict]()
 
 
+def start_tripwire(session, root: Path = REPO) -> None:
+    state = workspace_state(root)
+    session.stash[TRIPWIRE] = {"origin": dict(state), "state": state, "reported": set()}
+
+
 def pytest_sessionstart(session):
-    session.stash[TRIPWIRE] = {"state": workspace_state(REPO)}
+    start_tripwire(session)
 
 
-def tripwire(session, when: str) -> None:
-    """Fail with every change since the last check; ``when`` says when it happened."""
+def tripwire(session, when: str, root: Path = REPO) -> None:
+    """Fail with every change since the last check, and every difference from the start of the
+    session that no check has reported yet; ``when`` says when it happened."""
     watched = session.stash.get(TRIPWIRE, None)
     if watched is None:
         pytest.fail("the tripwire has no record from the start of the session; run the tests from the "
                     "repository or its tests folder", pytrace=False)
-    before, watched["state"] = watched["state"], workspace_state(REPO)
-    check_workspace(before, REPO, when)
+    after = workspace_state(root)
+    from_origin = state_changes(watched["origin"], after)
+    found = sorted(set(state_changes(watched["state"], after)) | (set(from_origin) - watched["reported"]))
+    watched["state"] = after
+    watched["reported"] |= set(from_origin)
+    if found:
+        _fail(found, when)
 
 
 @pytest.hookimpl(wrapper=True)

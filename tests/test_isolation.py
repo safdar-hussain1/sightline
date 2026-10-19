@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,9 +45,11 @@ def test_a_relative_workspace_default_resolves_under_the_tests_folder(tmp_path):
 
 
 def test_the_tripwire_holds_this_repositorys_caches_and_labels_as_they_are(request):
-    watched = request.session.stash[conftest.TRIPWIRE]["state"]
-    assert (watched is None) == (not (REPO / "runs" / "cache").is_dir())
-    assert watched == conftest.workspace_state(REPO)
+    watched = request.session.stash[conftest.TRIPWIRE]
+    assert watched["state"] == watched["origin"] == conftest.workspace_state(REPO)
+    assert watched["reported"] == set()
+    if (REPO / "runs" / "cache").is_dir():  # a clone has none, and is watched all the same
+        assert any(path.startswith("runs/cache/") for path in watched["origin"])
 
 
 # --- the tripwire on stand-in repositories --------------------------------------------------
@@ -126,17 +129,53 @@ def test_a_removed_cache_folder_names_every_file_it_held(tmp_path):
         for f in ("angles.npy", "inputs.u8", "meta.json"))
 
 
-def test_without_a_cache_folder_the_tripwire_does_nothing(tmp_path):
+def test_a_repository_without_caches_is_watched_all_the_same(tmp_path):
     root = tmp_path / "fresh-clone"
     (root / "data" / "drive2018").mkdir(parents=True)
     (root / "data" / "drive2018" / "data.txt").write_text("0.jpg 1.5\n")
     before = conftest.workspace_state(root)
-    assert before is None
+    assert before.keys() == {"data/drive2018/data.txt"}
     (root / "data" / "drive2018" / "data.txt").unlink()
     (root / "runs" / "cache" / "drivetest").mkdir(parents=True)
     (root / "runs" / "cache" / "drivetest" / "inputs.u8").write_bytes(b"x")
-    assert conftest.workspace_changes(before, root) == []
-    conftest.check_workspace(before, root)
+    assert conftest.workspace_changes(before, root) == ["data/drive2018/data.txt (deleted)",
+                                                         "runs/cache/drivetest/inputs.u8 (new)"]
+
+
+def _session():
+    """A stand-in for a pytest session: the stash the tripwire keeps its records in."""
+    return SimpleNamespace(stash=pytest.Stash())
+
+
+def test_the_tripwire_reports_a_difference_from_the_session_start_that_no_check_saw(tmp_path):
+    root = stand_in(tmp_path / "repo")
+    session = _session()
+    conftest.start_tripwire(session, root)
+    conftest.tripwire(session, " while a test ran", root)  # nothing changed
+    meta = root / "runs" / "cache" / "drive2018" / "meta.json"
+    meta.write_bytes(b"other settings")
+    # the record of the last check takes the change in without reporting it, as a lost check would
+    session.stash[conftest.TRIPWIRE]["state"] = conftest.workspace_state(root)
+    with pytest.raises(pytest.fail.Exception, match=r"changed while a later test ran: "
+                                                    r"runs/cache/drive2018/meta\.json \(changed\);"):
+        conftest.tripwire(session, " while a later test ran", root)
+    conftest.tripwire(session, " while the next test ran", root)  # reported once
+
+
+def test_the_tripwire_keeps_watching_once_the_cache_folder_is_gone(tmp_path):
+    root = stand_in(tmp_path / "repo")
+    session = _session()
+    conftest.start_tripwire(session, root)
+    shutil.rmtree(root / "runs" / "cache")
+    with pytest.raises(pytest.fail.Exception, match=r"runs/cache/drive2018/inputs\.u8 \(deleted\)"):
+        conftest.tripwire(session, " while a test ran", root)
+    (root / "data" / "drive2018" / "data.txt").write_text("0.jpg 9.5\n")
+    with pytest.raises(pytest.fail.Exception, match=r"data/drive2018/data\.txt \(changed\)"):
+        conftest.tripwire(session, " while the next test ran", root)
+    (root / "runs" / "cache" / "drive2018").mkdir(parents=True)
+    (root / "runs" / "cache" / "drive2018" / "inputs.u8").write_bytes(b"other frames")
+    with pytest.raises(pytest.fail.Exception, match=r"runs/cache/drive2018/inputs\.u8 \(new\)"):
+        conftest.tripwire(session, " while a third test ran", root)
 
 
 # --- the tripwire's hooks, in a pytest session of their own ------------------------------------
@@ -216,3 +255,24 @@ def test_the_tripwire_fails_the_collection_of_a_module_that_writes_when_it_is_im
     assert result.ret != 0
     result.assert_outcomes(errors=1)
     assert _reported(result, "tests/test_b.py", " was imported", "runs/cache/drive2018/meta.json (deleted)")
+
+
+def test_the_tripwire_hooks_keep_watching_once_the_cache_folder_is_gone(pytester):
+    result = session_on_a_stand_in(pytester, {"test_a.py": (
+        "import shutil\n"
+        "def test_deletes_the_caches():\n"
+        "    shutil.rmtree(ROOT / 'runs' / 'cache')\n"
+        "def test_edits_a_label_file():\n"
+        "    (ROOT / 'data' / 'drive2018' / 'data.txt').write_text('0.jpg 9.5\\n')\n"
+        "def test_makes_a_cache_again():\n"
+        "    CACHE.mkdir(parents=True)\n"
+        "    (CACHE / 'inputs.u8').write_bytes(b'x')\n"
+        "def test_after_them():\n"
+        "    pass\n")})
+    result.assert_outcomes(passed=1, failed=3)
+    out = result.stdout.str()
+    for test, change in (("test_deletes_the_caches", "runs/cache/drive2018/inputs.u8 (deleted)"),
+                         ("test_edits_a_label_file", "data/drive2018/data.txt (changed)"),
+                         ("test_makes_a_cache_again", "runs/cache/drive2018/inputs.u8 (new)")):
+        line = next(line for line in out.splitlines() if f"changed while tests/test_a.py::{test} ran: " in line)
+        assert change in line, line
