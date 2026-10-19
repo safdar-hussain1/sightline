@@ -10,7 +10,9 @@ videos into a second folder, which must hold the same bytes otherwise.
 The 2018 stand-in keeps the image of frame ``i`` under the file name frame ``i + 7`` had:
 a drive's frames are its label rows, so code that assumes ``<i>.jpg`` shows the wrong frame.
 One of its labels is a 120 deg spike, so the clip window that would vary most is one a clip
-may not show (every label within 90 deg) and the rule must pick another.
+may not show (every label within 90 deg) and the rule must pick another. Each stand-in also
+logs one sensor dropout, a 0.0 between large angles of one sign, which the label repair
+interpolates, so the labels the drive profile describes must be the repaired ones.
 
 The tests at the end check the committed site data in ``web/public`` against the committed
 reports; they skip while ``web/public/data/results.json`` is not tracked by git, and fail
@@ -19,12 +21,14 @@ when it is tracked but missing or unreadable.
 import base64
 import copy
 import hashlib
+import itertools
 import json
 import math
 import os
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,8 +40,9 @@ from PIL import Image, JpegImagePlugin
 
 from conftest import REPO, make_drive
 from sightline.cli import main
+from sightline.data import splits
 from sightline.data.cache import DriveCache
-from sightline.data.labels import load_labels, repair_dropouts
+from sightline.data.labels import DriveLabels, load_labels, repair_dropouts
 from sightline.data.splits import make_split
 from sightline.export import site_data
 from sightline.legacy import TENSOR_SHAPES
@@ -47,6 +52,21 @@ from sightline.reporting import load_run_model
 N, N_CROSS, BLOCK, FIREWALL, CLIP, SHIFT = 1600, 300, 200, 20, 100, 7
 #: a label past the clips' 90 deg limit, inside the 2018 test stretch's most varied windows
 SPIKE_ROW, SPIKE_DEG = 1150, 120.0
+#: the row where each stand-in logs a sensor dropout; its neighbours are large angles of one sign
+DROPOUT_ROW = {"drive2018": 300, "drive2017": 100}
+#: the frames each protocol trains, validates and tests on in the 1,600-frame stand-in with 200-frame
+#: blocks and a 20-frame firewall, counted by hand:
+#:   shuffled: 70% of 1,600 train, the next 15% validate, the last 15% test, nothing is dropped;
+#:   blocked: the blocks run TTVTTETT (T train, V validation, E test) and 40 frames are dropped at each of
+#:     the four boundaries between a training block and another: 380 + 360 + 380 frames train, 160
+#:     validate, 160 test;
+#:   later in the drive: training ends at frame 1,120 and validation at frame 1,360, with 20 frames
+#:     dropped on each side of both
+HAND_COUNTS = {
+    "leaky": {"train": 1120, "val": 240, "test": 240},
+    "blocked": {"train": 1120, "val": 160, "test": 160},
+    "forward": {"train": 1100, "val": 200, "test": 220},
+}
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 needs_ffmpeg = pytest.mark.skipif(FFMPEG is None or FFPROBE is None,
                                   reason="ffmpeg and ffprobe are not installed, so no clip video was written")
@@ -98,9 +118,10 @@ def _files(folder: Path) -> list[str]:
 def site(tmp_path_factory):
     root = tmp_path_factory.mktemp("site")
     data, runs, reports = root / "data", root / "runs", root / "reports"
-    _store_frames_under_other_names(make_drive(data, "drive2018", n=N, scenery=True), SHIFT)
+    _store_frames_under_other_names(
+        make_drive(data, "drive2018", n=N, scenery=True, dropouts=(DROPOUT_ROW["drive2018"],)), SHIFT)
     _set_angle(data / "drive2018", SPIKE_ROW, SPIKE_DEG)
-    make_drive(data, "drive2017", n=N_CROSS, timestamps=False)
+    make_drive(data, "drive2017", n=N_CROSS, timestamps=False, dropouts=(DROPOUT_ROW["drive2017"],))
     loc = ["--data-dir", str(data), "--runs-dir", str(runs)]
     split = ["--block", str(BLOCK), "--firewall", str(FIREWALL)]
     for protocol in ("blocked", "leaky"):
@@ -139,7 +160,8 @@ def site(tmp_path_factory):
     ctx.pairs = load(out / "data" / "leakage" / "pairs.json")
     ctx.selftest = load(out / "data" / "selftest" / "expected.json")
     ctx.shipped, ctx.twin = ctx.summary["shipped"]["run"], ctx.summary["twin"]["run"]
-    ctx.labels = {d: repair_dropouts(load_labels(data / d)) for d in ("drive2018", "drive2017")}
+    ctx.raw_labels = {d: load_labels(data / d) for d in ("drive2018", "drive2017")}
+    ctx.labels = {d: repair_dropouts(labels) for d, labels in ctx.raw_labels.items()}
     ctx.caches = {d: DriveCache(runs / "cache" / d) for d in ("drive2018", "drive2017")}
     return ctx
 
@@ -538,6 +560,21 @@ COVERAGE = [
     ("baselines.cross_drive.n", "shipped_report", "cross_drive.n"),
     ("baselines.cross_drive.model", "shipped_report", "cross_drive.model"),
     ("baselines.cross_drive.baselines", "shipped_report", "cross_drive.baselines"),
+    # the settings and counts the run reports record (the rest of these fields is worked out from
+    # the splits module and the drive labels, and recomputed by the tests that follow)
+    ("split_rules.blocked.block", "shipped_report", "splits.block"),
+    ("split_rules.blocked.firewall", "shipped_report", "splits.firewall"),
+    ("split_rules.forward.firewall", "shipped_report", "splits.firewall"),
+    ("split_sizes.blocked.drive", "shipped_report", "drive"),
+    ("split_sizes.blocked.frames", "shipped_report", "drives.drive2018.frames"),
+    ("split_sizes.blocked.train", "shipped_report", "splits.train_n"),
+    ("split_sizes.blocked.val", "shipped_report", "splits.val_n"),
+    ("split_sizes.blocked.test", "shipped_report", "splits.test_n"),
+    ("split_sizes.leaky.drive", "twin_report", "drive"),
+    ("split_sizes.leaky.frames", "twin_report", "drives.drive2018.frames"),
+    ("split_sizes.leaky.train", "twin_report", "splits.train_n"),
+    ("split_sizes.leaky.val", "twin_report", "splits.val_n"),
+    ("split_sizes.leaky.test", "twin_report", "splits.test_n"),
 ]
 
 
@@ -561,7 +598,53 @@ def _leaves(tree, prefix=()):
 
 def _sources(site) -> dict:
     return {"summary": site.summary, "legacy": site.legacy, "leakage": site.leakage,
-            "shipped_report": site.run_reports[site.shipped]}
+            "shipped_report": site.run_reports[site.shipped], "twin_report": site.run_reports[site.twin]}
+
+
+def _derived_fields(site) -> dict:
+    """The split rules and the split sizes results.json holds, worked out here from the splits
+    module and the fixture's settings (a blocked and a shuffled run of seed 0) rather than read
+    from the run reports."""
+    shares = {"train_frac": splits.TRAIN_FRAC, "val_frac": splits.VAL_FRAC, "test_frac": 0.15}
+    rules = {
+        "blocked": {"label": "blocked", "block": BLOCK, "firewall": FIREWALL, "pattern": splits.BLOCK_PATTERN},
+        "forward": {"label": "later in the drive", "firewall": FIREWALL, **shares},
+        "leaky": {"label": "shuffled", **shares},
+    }
+    sizes = {}
+    for protocol, label in (("blocked", "blocked"), ("leaky", "shuffled")):
+        counts = HAND_COUNTS[protocol]
+        sizes[protocol] = {"label": label, "drive": "drive2018", "frames": N, **counts,
+                           "dropped": N - sum(counts.values()), "runs": 1, "seeds": [0]}
+    return {"split_rules": rules, "split_sizes": sizes}
+
+
+def assert_profile_matches(profile: dict, labels: dict) -> None:
+    """``profile`` (a results.json drive_profile) holds the repaired ``labels`` of each drive
+    averaged over its buckets, recomputed here with numpy: angles within the rounding to 0.01,
+    times within the millisecond, everything else exactly."""
+    bucket = profile["bucket_frames"]
+    assert sorted(profile["drives"]) == sorted(labels)
+    for name, drive in labels.items():
+        got, angles = profile["drives"][name], drive.angles_deg
+        starts = list(range(0, len(angles), bucket))
+        assert got["frames"] == len(angles) and got["start_frame"] == starts, name
+        assert all(type(s) is int for s in got["start_frame"])
+        assert len(got["mean_deg"]) == len(got["mean_abs_deg"]) == len(starts), name
+        for k, start in enumerate(starts):
+            chunk = angles[start:start + bucket]
+            assert got["mean_deg"][k] == pytest.approx(chunk.mean(), abs=0.005 + 1e-9), (name, k)
+            assert got["mean_abs_deg"][k] == pytest.approx(np.abs(chunk).mean(), abs=0.005 + 1e-9), (name, k)
+        if drive.timestamps_s is None:
+            assert got["start_s"] is None and got["duration_s"] is None, name
+        else:
+            stamps = drive.timestamps_s
+            assert got["start_s"] == pytest.approx([stamps[s] - stamps[0] for s in starts], abs=0.0005 + 1e-9)
+            assert got["duration_s"] == pytest.approx(stamps[-1] - stamps[0], abs=0.0005 + 1e-9)
+            assert all(round(v, 3) == v for v in [*got["start_s"], got["duration_s"]]), name
+        for key in ("mean_deg", "mean_abs_deg"):  # hundredths of a degree, and no negative zero
+            for v in got[key]:
+                assert type(v) is float and round(v, 2) == v and str(v) != "-0.0", (name, key, v)
 
 
 def test_results_json_copies_the_reports_value_for_value(site):
@@ -589,6 +672,13 @@ def test_results_json_copies_the_reports_value_for_value(site):
             assert results["leakage"]["gaps"][protocol][side] == {k: v for k, v in gaps.items() if k != "median_s"}
             covered |= {("leakage", "gaps", protocol, side, k) for k in gaps if k != "median_s"}
     assert not any("median_s" in leaf for leaf, _ in _leaves(results))
+    # the split rules and sizes are what the splits module makes from the recorded settings
+    for key, tree in _derived_fields(site).items():
+        assert results[key] == tree, key
+        covered |= {(key, *leaf) for leaf, _ in _leaves(tree)}
+    # the drive profile is the repaired labels averaged over buckets, recomputed here with numpy
+    assert_profile_matches(results["drive_profile"], site.labels)
+    covered |= {("drive_profile", *leaf) for leaf, _ in _leaves(results["drive_profile"])}
     numeric = {leaf for leaf, value in _leaves(results)
                if isinstance(value, (int, float)) and not isinstance(value, bool)}
     assert len(numeric) > 150
@@ -604,6 +694,13 @@ def test_results_json_names_the_protocols_as_the_page_does(site):
 
 
 def test_no_string_the_page_shows_has_a_middle_dot(site):
+    # the protocols' labels and the block pattern the page prints are among the strings checked below
+    def strings_of(tree):
+        return {value for _, value in _leaves(tree) if isinstance(value, str)}
+
+    assert strings_of(site.results["split_rules"]) == \
+        {"blocked", "later in the drive", "shuffled", splits.BLOCK_PATTERN}
+    assert strings_of(site.results["split_sizes"]) == {"blocked", "shuffled", "drive2018"}
     shown = [site.out / "data" / "results.json", site.out / "data" / "leakage" / "pairs.json",
              site.out / "data" / "selftest" / "expected.json"]
     shown += [_clip_dir(site, cid) / "clip.json" for cid in TITLES]
@@ -614,20 +711,73 @@ def test_no_string_the_page_shows_has_a_middle_dot(site):
         assert strings and not any("\u00b7" in s for s in strings), path.name
 
 
-def results_out_of_sync(results: dict, summary_path: Path, reports_dir: Path) -> list[str]:
-    """The paths at which ``results`` differs from the results.json the reports give now."""
-    fresh = site_data.site_results(site_data.load_reports(summary_path, reports_dir))
+def results_out_of_sync(results: dict, summary_path: Path, reports_dir: Path, drives: dict | None) -> list[str]:
+    """The paths at which ``results`` differs from the results.json the reports and the drives'
+    repaired labels (``drives``: a drive's name to its labels) give now. Where the drives are
+    not on this machine ``drives`` is None: the drive profile, which only they can recompute, is
+    then left out of the comparison, apart from its bucket size."""
+    fresh = site_data.site_results(site_data.load_reports(summary_path, reports_dir), drives or {})
     a, b = dict(_leaves(results)), dict(_leaves(fresh))
+    if drives is None:
+        a, b = ({leaf: v for leaf, v in tree.items() if leaf[:2] != ("drive_profile", "drives")} for tree in (a, b))
     return sorted(".".join(map(str, leaf)) for leaf in a.keys() | b.keys()
                   if leaf not in a or leaf not in b or a[leaf] != b[leaf] or type(a[leaf]) is not type(b[leaf]))
 
 
 def test_the_sync_check_finds_a_value_that_drifted_from_its_report(site):
-    assert results_out_of_sync(site.results, site.reports / "summary.json", site.reports) == []
+    summary = site.reports / "summary.json"
+    assert results_out_of_sync(site.results, summary, site.reports, site.labels) == []
+    assert results_out_of_sync(site.results, summary, site.reports, None) == []
     drifted = copy.deepcopy(site.results)
     drifted["paired_leakage"]["sightlinenet"]["ratio"]["mean"] += 1e-9
-    assert results_out_of_sync(drifted, site.reports / "summary.json", site.reports) == \
+    assert results_out_of_sync(drifted, summary, site.reports, site.labels) == \
         ["paired_leakage.sightlinenet.ratio.mean"]
+
+
+def test_the_sync_check_finds_a_drifted_drive_profile_split_rule_or_split_size(site):
+    summary = site.reports / "summary.json"
+    drifts = {
+        ("drive_profile", "bucket_frames"): 1,
+        ("drive_profile", "drives", "drive2018", "mean_deg", 3): 0.01,
+        ("drive_profile", "drives", "drive2018", "start_s", 2): 0.001,
+        ("drive_profile", "drives", "drive2018", "duration_s"): 0.001,
+        ("drive_profile", "drives", "drive2017", "mean_abs_deg", 0): 0.01,
+        ("drive_profile", "drives", "drive2017", "start_frame", 1): 1,
+        ("split_rules", "blocked", "block"): 1,
+        ("split_rules", "leaky", "train_frac"): 0.01,
+        ("split_sizes", "blocked", "train"): 1,
+        ("split_sizes", "leaky", "dropped"): 1,
+        ("split_sizes", "blocked", "seeds", 0): 1,
+    }
+    for path, delta in drifts.items():
+        drifted = copy.deepcopy(site.results)
+        _at(drifted, path[:-1])[path[-1]] += delta
+        assert results_out_of_sync(drifted, summary, site.reports, site.labels) == [".".join(map(str, path))], path
+    drifted = copy.deepcopy(site.results)
+    drifted["split_rules"]["blocked"]["pattern"] = "TTVTTEV"
+    drifted["split_sizes"]["leaky"]["label"] = "random"
+    assert results_out_of_sync(drifted, summary, site.reports, site.labels) == \
+        ["split_rules.blocked.pattern", "split_sizes.leaky.label"]
+    # a drive profile whose drives are not on this machine cannot be recomputed there, but its
+    # bucket size, the split rules and the split sizes still can
+    for path, delta in drifts.items():
+        drifted = copy.deepcopy(site.results)
+        _at(drifted, path[:-1])[path[-1]] += delta
+        found = results_out_of_sync(drifted, summary, site.reports, None)
+        assert found == ([] if path[:2] == ("drive_profile", "drives") else [".".join(map(str, path))]), path
+
+
+def test_the_drive_profile_cannot_be_made_for_a_drive_of_another_length(site):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    short = replace(site.labels["drive2017"], filenames=site.labels["drive2017"].filenames[:-1],
+                    angles_deg=site.labels["drive2017"].angles_deg[:-1])
+    with pytest.raises(ValueError, match=f"drive 'drive2017' has {N_CROSS - 1} labelled frames, but summary.json "
+                                         f"describes {N_CROSS}") as exc:
+        site_data.site_results(reports, {"drive2017": short})
+    assert "\n" not in str(exc.value)
+    with pytest.raises(ValueError, match="drive 'drive2019' has 1 labelled frames, but summary.json describes None"):
+        site_data.site_results(reports, {"drive2019": DriveLabels(
+            root=Path("drive2019"), filenames=["0.jpg"], angles_deg=np.zeros(1))})
 
 
 def sprite_hash_mismatches(clip_dir: Path) -> list[int]:
@@ -649,6 +799,241 @@ def test_the_decode_check_finds_a_sprite_that_was_written_again(site, tmp_path):
         pixels = np.asarray(image.convert("RGB"))
     Image.fromarray(pixels).save(sheet, format="JPEG", quality=94, subsampling=0)
     assert sprite_hash_mismatches(clip_dir)[0] == 60  # the first frame of the second sheet
+
+
+# --- the drive profile, the split rules and the split sizes -----------------------------------
+
+def _labels(angles, stamps=None) -> DriveLabels:
+    """The labels of a drive made of nothing but ``angles`` and, if given, ``stamps`` (epoch seconds)."""
+    return DriveLabels(root=Path("drivex"), filenames=[f"{i}.jpg" for i in range(len(angles))],
+                       angles_deg=np.asarray(angles, dtype=np.float64),
+                       timestamps_s=None if stamps is None else np.asarray(stamps, dtype=np.float64))
+
+
+def test_the_drive_profile_is_the_repaired_labels_averaged_over_buckets(site):
+    profile = site.results["drive_profile"]
+    assert profile["bucket_frames"] == site_data.BUCKET_FRAMES
+    for name in ("drive2018", "drive2017"):
+        row = DROPOUT_ROW[name]
+        raw, repaired = site.raw_labels[name].angles_deg, site.labels[name].angles_deg
+        assert raw[row] == 0.0 and abs(repaired[row]) > 15.0  # the drive logs a dropout the repair interpolates
+        got = profile["drives"][name]
+        assert got == site_data.drive_profile(site.labels[name])
+        # the profile holds the repaired labels, not the raw ones: only the bucket of the dropout differs
+        unrepaired = site_data.drive_profile(site.raw_labels[name])
+        k = row // profile["bucket_frames"]
+        assert got["mean_abs_deg"][k] > unrepaired["mean_abs_deg"][k]
+        assert [i for i, (a, b) in enumerate(zip(got["mean_abs_deg"], unrepaired["mean_abs_deg"])) if a != b] == [k]
+
+
+def test_only_the_timestamped_drive_has_a_time_axis(site):
+    drives, bucket = site.results["drive_profile"]["drives"], site.results["drive_profile"]["bucket_frames"]
+    stamped, unstamped = drives["drive2018"], drives["drive2017"]
+    # the stand-in's frames are 57 ms apart
+    assert stamped["start_s"] == [round(k * bucket * 0.057, 3) for k in range(len(stamped["start_frame"]))]
+    assert stamped["duration_s"] == round((N - 1) * 0.057, 3) == 91.143
+    # the 2017 stand-in has no timestamps, and its last bucket holds the frames that are left over
+    assert unstamped["start_s"] is None and unstamped["duration_s"] is None
+    assert unstamped["frames"] == N_CROSS and len(unstamped["start_frame"]) == math.ceil(N_CROSS / bucket)
+
+
+def test_the_bucket_size_gives_about_a_thousand_points_for_the_2018_drive():
+    frames = json.loads((REPO / "reports" / "summary.json").read_text())["drives"]["drive2018"]["frames"]
+    assert 900 <= math.ceil(frames / site_data.BUCKET_FRAMES) <= 1100
+
+
+def test_a_drive_profile_averages_each_bucket_and_the_last_one_holds_what_is_left():
+    profile = site_data.drive_profile(_labels([4, -2, 6, 1, 1, -4, -10]), bucket_frames=3)
+    assert profile == {"frames": 7, "start_frame": [0, 3, 6], "mean_deg": [2.67, -0.67, -10.0],
+                       "mean_abs_deg": [4.0, 2.0, 10.0], "start_s": None, "duration_s": None}
+    whole = site_data.drive_profile(_labels([1.0, 2.0, 3.0, 4.0]), bucket_frames=2)
+    assert (whole["start_frame"], whole["mean_deg"]) == ([0, 2], [1.5, 3.5])  # a drive the buckets divide
+
+
+def test_a_drive_profile_rounds_angles_to_hundredths_times_to_milliseconds_and_has_no_negative_zero():
+    stamps = 1530445184.912 + 0.057 * np.arange(7)
+    assert stamps[3] - stamps[0] != 0.171  # epoch seconds leave float noise in their differences
+    profile = site_data.drive_profile(_labels([0.004, 0.004, 0.004, -0.004, -0.004, -0.004, 1.236], stamps), 3)
+    assert profile["mean_deg"] == profile["mean_abs_deg"] == [0.0, 0.0, 1.24]
+    assert [str(v) for v in profile["mean_deg"]] == ["0.0", "0.0", "1.24"]  # not -0.0 for the mean of -0.004
+    assert profile["start_s"] == [0.0, 0.171, 0.342] and profile["duration_s"] == 0.342
+
+
+def test_a_drive_profile_does_not_depend_on_the_order_a_bucket_is_added_in():
+    values = [1e16, 1.0, -1e16]  # added left to right, the 1.0 is lost between the large values
+    for order in itertools.permutations(values):
+        assert site_data.drive_profile(_labels(order), 3)["mean_deg"] == [0.33]
+
+
+def test_a_drive_profile_leaves_its_labels_alone_and_repeats_itself():
+    labels = _labels([3.0, -1.0, 2.0, 5.0], [100.0, 101.0, 102.5, 103.0])
+    angles, stamps = labels.angles_deg.copy(), labels.timestamps_s.copy()
+    assert site_data.drive_profile(labels, 2) == site_data.drive_profile(labels, 2)
+    assert np.array_equal(labels.angles_deg, angles) and np.array_equal(labels.timestamps_s, stamps)
+
+
+def test_a_drive_profile_refuses_what_it_cannot_chart():
+    stamps = [10.0, 10.057, 10.114, 10.1, 10.2]
+    with pytest.raises(ValueError, match="drive 'drivex': frame 3 is timed before frame 2, so the drive has no "
+                                         "time axis"):
+        site_data.drive_profile(_labels(np.zeros(5), stamps), 2)
+    equal = site_data.drive_profile(_labels(np.zeros(3), [10.0, 10.0, 10.1]), 2)
+    assert equal["start_s"] == [0.0, 0.1]  # two frames at one instant are not backwards
+    with pytest.raises(ValueError, match="a bucket needs at least 1 frame, got 0"):
+        site_data.drive_profile(_labels([1.0]), 0)
+    with pytest.raises(ValueError, match="a drive without frames has no profile"):
+        site_data.drive_profile(_labels([]), 4)
+
+
+def test_the_split_rules_state_the_settings_given_and_the_splits_modules_pattern_and_fractions():
+    rules = site_data.split_rules(block=123, firewall=45)
+    shares = {"train_frac": splits.TRAIN_FRAC, "val_frac": splits.VAL_FRAC, "test_frac": 0.15}
+    assert rules == {
+        "blocked": {"label": "blocked", "block": 123, "firewall": 45, "pattern": splits.BLOCK_PATTERN},
+        "forward": {"label": "later in the drive", "firewall": 45, **shares},
+        "leaky": {"label": "shuffled", **shares},
+    }
+    # the rest of the drive is written as the 0.15 it is, not with the noise of 1 - 0.7 - 0.15
+    assert [repr(rules[p]["test_frac"]) for p in ("forward", "leaky")] == ["0.15", "0.15"]
+    assert {p: rules[p]["label"] for p in rules} == splits.PUBLIC_NAMES
+    # and they are what a split is made with when nothing else is asked for
+    n = 1000
+    for protocol in ("leaky", "forward"):
+        made = make_split(protocol, n, firewall=0)
+        shown = rules[protocol]
+        assert [made.train.size, made.val.size, made.test.size] == \
+            [round(n * shown["train_frac"]), round(n * shown["val_frac"]), round(n * shown["test_frac"])]
+
+
+def test_the_split_rules_of_the_fixture_are_its_recorded_settings(site):
+    recorded = site.run_reports[site.shipped]["splits"]
+    assert (recorded["block"], recorded["firewall"]) == (BLOCK, FIREWALL)  # not the splits module's defaults
+    assert (BLOCK, FIREWALL) != (splits.BLOCK, splits.FIREWALL)
+    assert site.results["split_rules"]["blocked"]["block"] == BLOCK
+    assert site.results["split_rules"]["forward"]["firewall"] == FIREWALL
+
+
+def _run_report(shipped: dict, protocol: str, seed: int, model: str = "sightlinenet") -> dict:
+    """A copy of the shipped run's report for another run of the fixture's drive, with the split
+    sizes the splits module makes for it."""
+    report = copy.deepcopy(shipped)
+    made = make_split(protocol, N, seed=seed, firewall=FIREWALL, block=BLOCK)
+    report.update(run=f"drive2018_{model}_{protocol}_s{seed}", model=model, protocol=protocol, seed=seed)
+    report["splits"].update(train_n=int(made.train.size), val_n=int(made.val.size), test_n=int(made.test.size))
+    return report
+
+
+def _many_runs(shipped: dict) -> list[dict]:
+    return [_run_report(shipped, "blocked", 1), _run_report(shipped, "blocked", 2, model="pilotnet"),
+            _run_report(shipped, "forward", 0), _run_report(shipped, "forward", 1),
+            _run_report(shipped, "leaky", 1)]
+
+
+def test_the_split_sizes_of_a_protocol_are_what_every_one_of_its_runs_recorded(site):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    extra = _many_runs(reports.runs[site.shipped])
+    sizes = site_data.split_sizes(replace(reports, runs={**reports.runs, **{r["run"]: r for r in extra}}))
+    assert list(sizes) == ["leaky", "blocked", "forward"]  # in the protocols' order
+    for protocol, label, runs, seeds in (("leaky", "shuffled", 2, [0, 1]), ("blocked", "blocked", 3, [0, 1, 2]),
+                                         ("forward", "later in the drive", 2, [0, 1])):
+        counts = HAND_COUNTS[protocol]
+        assert sizes[protocol] == {"label": label, "drive": "drive2018", "frames": N, **counts,
+                                   "dropped": N - sum(counts.values()), "runs": runs, "seeds": seeds}, protocol
+    assert [sizes[p]["dropped"] for p in ("leaky", "blocked", "forward")] == [0, 160, 80]
+
+
+@pytest.mark.parametrize("protocol, label", [("leaky", "shuffled"), ("blocked", "blocked"),
+                                             ("forward", "later in the drive")])
+def test_runs_of_one_protocol_that_recorded_other_counts_are_refused_naming_both(site, protocol, label):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    shipped = reports.runs[site.shipped]
+    agree = [_run_report(shipped, protocol, seed) for seed in (1, 2, 3, 4)]
+    other = _run_report(shipped, protocol, 5)
+    other["splits"]["val_n"] += 1
+    runs = {r["run"]: r for r in [*agree, other]}
+    with pytest.raises(ValueError) as exc:
+        site_data.split_sizes(replace(reports, runs=runs))
+    message = str(exc.value)
+    assert f"the run reports disagree on the {label} split's train, validation and test frames" in message
+    expected = HAND_COUNTS[protocol]
+    # the rarest value comes first, and a long list of runs is cut short
+    assert message.index(other["run"]) < message.index(agree[0]["run"])
+    assert f"{expected['train']}/{expected['val'] + 1}/{expected['test']} of the {N} frames of drive2018 in " \
+           f"{other['run']}; {expected['train']}/{expected['val']}/{expected['test']} of the {N} frames of " \
+           f"drive2018 in {agree[0]['run']}, {agree[1]['run']}, {agree[2]['run']} and 1 more" in message
+    assert "\n" not in message
+
+
+def test_split_sizes_refuse_counts_that_do_not_fit_the_drive_and_a_protocol_that_is_none_of_the_three(site):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    shipped = copy.deepcopy(reports.runs[site.shipped])
+    shipped["splits"]["train_n"] = N
+    with pytest.raises(ValueError, match=f"the blocked split's {N}/160/160 train/validation/test frames do not "
+                                         f"fit in the {N} frames of drive2018"):
+        site_data.split_sizes(replace(reports, runs={**reports.runs, site.shipped: shipped}))
+    honest = _run_report(reports.runs[site.shipped], "blocked", 1)
+    honest["protocol"] = "honest"
+    with pytest.raises(ValueError, match=f"run {honest['run']!r} follows the protocol 'honest', which is not one "
+                                         "of leaky, blocked, forward"):
+        site_data.split_sizes(replace(reports, runs={**reports.runs, honest["run"]: honest}))
+    nothing = copy.deepcopy(reports.runs[site.shipped])
+    nothing["drives"].pop("drive2018")
+    with pytest.raises(ValueError, match="run .* does not describe its training drive 'drive2018'; evaluate it "
+                                         "again with `sightline eval --all`"):
+        site_data.split_sizes(replace(reports, runs={**reports.runs, site.shipped: nothing}))
+
+
+def drive_profile_problems(results: dict) -> list[str]:
+    """What does not fit between the drive profile of ``results`` (a results.json) and the rest of
+    it, which needs no drive on disk: a profile for every drive and no other, each drive's frames
+    covered by buckets of the profile's size, a time axis for a drive with a median frame interval
+    and for none else (starting at 0 and increasing, never past the drive's duration), and every
+    bucket's mean absolute angle at least the size of its mean angle."""
+    profile, problems = results["drive_profile"], []
+    bucket = profile["bucket_frames"]
+    if sorted(profile["drives"]) != sorted(results["drives"]):
+        problems.append(f"profiles of {sorted(profile['drives'])}, drives {sorted(results['drives'])}")
+    for name, info in results["drives"].items():
+        got = profile["drives"].get(name)
+        if got is None:
+            continue
+        starts = list(range(0, info["frames"], bucket))
+        if got["frames"] != info["frames"] or got["start_frame"] != starts:
+            problems.append(f"{name}: buckets do not cover its {info['frames']} frames")
+        for key in ("mean_deg", "mean_abs_deg"):
+            if len(got[key]) != len(starts):
+                problems.append(f"{name}: {len(got[key])} values of {key}, {len(starts)} buckets")
+        if any(abs(m) > a + 0.01 for m, a in zip(got["mean_deg"], got["mean_abs_deg"])):
+            problems.append(f"{name}: a mean absolute angle is smaller than its mean angle")
+        timed = info["median_dt_s"] is not None
+        if (got["start_s"] is not None) != timed or (got["duration_s"] is not None) != timed:
+            problems.append(f"{name}: {'no' if timed else 'a'} time axis for a drive "
+                            f"{'with' if timed else 'without'} timestamps")
+        elif timed:
+            times = got["start_s"]
+            if len(times) != len(starts) or times[0] != 0.0 or any(b <= a for a, b in zip(times, times[1:])) \
+                    or times[-1] > got["duration_s"]:
+                problems.append(f"{name}: its time axis is not increasing from 0 to its duration")
+    return problems
+
+
+def test_the_drive_profile_fits_the_rest_of_results_json(site):
+    assert drive_profile_problems(site.results) == []
+    for change in (
+        lambda r: r["drive_profile"]["drives"]["drive2018"]["mean_deg"].pop(),
+        lambda r: r["drive_profile"]["drives"]["drive2017"]["start_frame"].insert(1, 5),
+        lambda r: r["drive_profile"]["drives"]["drive2017"].update(frames=N_CROSS + 1),
+        lambda r: r["drive_profile"]["drives"]["drive2017"].update(start_s=[0.0] * 5, duration_s=1.0),
+        lambda r: r["drive_profile"]["drives"]["drive2018"].update(duration_s=None),
+        lambda r: r["drive_profile"]["drives"]["drive2018"]["start_s"].reverse(),
+        lambda r: r["drive_profile"]["drives"]["drive2018"].update(duration_s=1.0),
+        lambda r: r["drive_profile"]["drives"]["drive2018"]["mean_abs_deg"].__setitem__(2, 0.0),
+        lambda r: r["drive_profile"]["drives"].pop("drive2017"),
+        lambda r: r["drive_profile"]["drives"].update(drive2019=r["drive_profile"]["drives"]["drive2017"]),
+    ):
+        broken = copy.deepcopy(site.results)
+        change(broken)
+        assert drive_profile_problems(broken), change
 
 
 # --- the same bytes every time --------------------------------------------------------------
@@ -795,7 +1180,10 @@ def test_a_summary_that_disagrees_with_the_run_reports_is_refused(site, tmp_path
 @pytest.mark.parametrize("change, named, command", [
     (lambda r: r["summary"].pop("regimes"), "'regimes.models'", "sightline report"),
     (lambda r: r["summary"].pop("train_config"), "'train_config'", "sightline report"),
+    (lambda r: r["summary"].pop("runs"), "'runs'", "sightline report"),
     (lambda r: r["shipped"]["splits"].pop("block"), "'splits.block'", "sightline eval --all"),
+    (lambda r: r["shipped"]["splits"].pop("train_n"), "'splits.train_n'", "sightline eval --all"),
+    (lambda r: r["twin"].pop("drives"), "'drives'", "sightline eval --all"),
 ])
 def test_a_report_lacking_a_key_the_site_reads_is_a_one_line_error(site, tmp_path, capsys, change, named, command):
     reports = _reports_with(site, tmp_path, change)
@@ -861,6 +1249,111 @@ def test_site_data_without_a_summary_is_a_one_line_error(tmp_path, capsys):
     code = main(["site-data", "--summary", str(tmp_path / "none.json"), "--out-dir", str(tmp_path / "public")])
     err = capsys.readouterr().err
     assert code == 2 and "Traceback" not in err and "sightline report" in err and "none.json" in err
+
+
+# --- reports of many runs -------------------------------------------------------------------
+
+def _reports_with_runs(site, tmp_path, runs: list[dict], files: bool = True) -> Path:
+    """A copy of the fixture's reports in which the summary lists ``runs`` (reports of other runs)
+    too, and with ``files`` their run reports are there."""
+    reports = _reports_with(site, tmp_path, lambda loaded: None)
+    summary = json.loads((reports / "summary.json").read_text())
+    summary["runs"] = sorted([*summary["runs"], *(r["run"] for r in runs)])
+    (reports / "summary.json").write_text(json.dumps(summary))
+    for report in runs if files else []:
+        (reports / "runs" / f"{report['run']}.json").write_text(json.dumps(report))
+    return reports
+
+
+def test_reports_of_many_runs_are_checked_and_listed_and_give_every_protocol_its_sizes(site, tmp_path):
+    shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+    extra = _many_runs(shipped)
+    reports_dir = _reports_with_runs(site, tmp_path, extra)
+    reports = site_data.load_reports(reports_dir / "summary.json", reports_dir)
+    # the shipped run and its twin first, as before, then the others in the summary's order
+    assert reports.files == ["reports/summary.json", f"reports/runs/{site.shipped}.json",
+                             f"reports/runs/{site.twin}.json",
+                             *(f"reports/runs/{name}.json" for name in sorted(r["run"] for r in extra)),
+                             "reports/leakage.json", "reports/legacy.json"]
+    assert list(reports.runs) == [site.shipped, site.twin, *sorted(r["run"] for r in extra)]
+    site_data._check_reports(reports)  # the runs agree with the shipped run and with the splits module
+    results = site_data.site_results(reports, site.labels)
+    assert {p: (s["runs"], s["seeds"]) for p, s in results["split_sizes"].items()} == \
+        {"leaky": (2, [0, 1]), "blocked": (3, [0, 1, 2]), "forward": (2, [0, 1])}
+    assert results["generated_from"] == reports.files
+
+
+def test_a_build_from_the_reports_of_many_runs_writes_the_sizes_of_every_protocol(site, tmp_path):
+    shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+    reports_dir = _reports_with_runs(site, tmp_path, _many_runs(shipped))
+    _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports_dir)
+    written = json.loads((tmp_path / "public" / "data" / "results.json").read_text())
+    assert sorted(written["split_sizes"]) == ["blocked", "forward", "leaky"]
+    assert {p: {k: s[k] for k in ("train", "val", "test")} for p, s in written["split_sizes"].items()} == HAND_COUNTS
+    assert len(written["generated_from"]) == 10  # the summary, seven run reports, the leakage and legacy reports
+    assert written["drive_profile"] == site.results["drive_profile"]
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda r: r["splits"].update(firewall=FIREWALL + 1),
+     "made its splits with {'firewall': 21, 'block': 200}, but the shipped run with {'firewall': 20, 'block': 200}"),
+    (lambda r: r["splits"].update(block=BLOCK + 1),
+     "made its splits with {'firewall': 20, 'block': 201}, but the shipped run with {'firewall': 20, 'block': 200}"),
+    (lambda r: r.update(drive="drive2017"), "trained on drive 'drive2017', the shipped run on 'drive2018'"),
+    (lambda r: r["drives"]["drive2018"].update(frames=N + 1),
+     f"describes drive 'drive2018' with {N + 1} frames, but summary.json with {N}"),
+    (lambda r: r["splits"].update(train_n=r["splits"]["train_n"] + 1),
+     "recorded 1121/160/160 train/validation/test frames for its blocked split, but the splits module makes "
+     "1120/160/160 of the same 1600 frames with the same settings; the split rules are not the ones it was "
+     "trained with"),
+    (lambda r: r["splits"].update(test_n=r["splits"]["test_n"] - 1),
+     "recorded 1120/160/159 train/validation/test frames for its blocked split"),
+    (lambda r: r.update(protocol="honest"),
+     "the splits module cannot make its honest split of 1600 frames: unknown protocol 'honest'"),
+])
+def test_a_run_report_that_disagrees_with_the_shipped_run_or_the_splits_module_is_refused(
+        site, tmp_path, change, message):
+    shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+    report = _run_report(shipped, "blocked", 1)
+    change(report)
+    reports_dir = _reports_with_runs(site, tmp_path, [report])
+    with pytest.raises(ValueError) as exc:
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports_dir)
+    assert message in str(exc.value) and report["run"] in str(exc.value) and "\n" not in str(exc.value)
+    assert not (tmp_path / "public").exists()
+
+
+def test_a_run_report_filed_under_another_runs_name_is_refused(site, tmp_path):
+    shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+    report = _run_report(shipped, "blocked", 1)
+    reports_dir = _reports_with_runs(site, tmp_path, [report])
+    (reports_dir / "runs" / f"{report['run']}.json").write_text(
+        json.dumps({**report, "run": "drive2018_sightlinenet_blocked_s9"}))
+    with pytest.raises(ValueError, match=f"runs/{report['run']}.json is the report of run "
+                                         "'drive2018_sightlinenet_blocked_s9'"):
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports_dir)
+    assert not (tmp_path / "public").exists()
+
+
+@pytest.mark.parametrize("change, files, message", [
+    (lambda r: r["splits"].pop("val_n"), True, "lacks 'splits.val_n'; write it again with `sightline eval --all`"),
+    (lambda r: r.pop("drives"), True, "lacks 'drives'; write it again with `sightline eval --all`"),
+    (lambda r: None, False, "no report at "),
+])
+def test_a_run_report_that_is_missing_or_lacks_a_key_is_a_one_line_error(
+        site, tmp_path, capsys, change, files, message):
+    shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+    report = _run_report(shipped, "forward", 0)
+    change(report)
+    reports_dir = _reports_with_runs(site, tmp_path, [report], files)
+    capsys.readouterr()
+    code = main(_site_data_args(reports_dir / "summary.json", tmp_path / "public", reports_dir, site.loc,
+                                video=False))
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if line.startswith("error: ")]
+    assert code == 2 and "Traceback" not in err and len(lines) == 1, err
+    assert message in lines[0] and report["run"] in lines[0]
+    assert not (tmp_path / "public").exists()
 
 
 # --- the clip rule on its own ---------------------------------------------------------------
@@ -942,10 +1435,59 @@ def test_the_clip_check_runs_each_model_file_on_the_sprites(site):
     assert min(clip_prediction_gaps(_clip_dir(site, "c2018"), swapped).values()) > 1e-3
 
 
+def committed_drives() -> dict | None:
+    """The real drives' repaired labels where the dataset is on this machine (it is not part of
+    a clone), else None."""
+    names = ("drive2018", "drive2017")
+    if not all((REPO / "data" / name / "data.txt").is_file() for name in names):
+        return None
+    return {name: repair_dropouts(load_labels(REPO / "data" / name)) for name in names}
+
+
 @needs_published
-def test_the_committed_results_json_matches_the_committed_reports():
+def test_the_committed_results_json_matches_the_committed_reports_and_the_drives_when_they_are_here():
     results = json.loads((PUBLISHED / "data" / "results.json").read_text())
-    assert results_out_of_sync(results, REPO / "reports" / "summary.json", REPO / "reports") == []
+    assert results_out_of_sync(results, REPO / "reports" / "summary.json", REPO / "reports",
+                               committed_drives()) == []
+
+
+@needs_published
+def test_the_committed_drive_profile_fits_the_committed_results():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    assert drive_profile_problems(results) == []
+    profile = results["drive_profile"]["drives"]
+    assert 900 <= len(profile["drive2018"]["start_frame"]) <= 1100  # about a thousand points
+    # a bucket holds the same number of frames but the last, so the frame-weighted mean of the
+    # buckets' mean absolute angles is the drive's mean absolute angle: the other day's
+    # always-straight error in the reports (taken from its third frame on), to the rounding
+    bucket, frames = results["drive_profile"]["bucket_frames"], profile["drive2017"]["frames"]
+    weights = [min(bucket, frames - start) for start in profile["drive2017"]["start_frame"]]
+    mean_abs = sum(w * m for w, m in zip(weights, profile["drive2017"]["mean_abs_deg"])) / frames
+    straight = results["baselines"]["cross_drive"]["baselines"]["zero"]["mae_deg"]
+    assert results["baselines"]["cross_drive"]["drive"] == "drive2017"
+    assert mean_abs == pytest.approx(straight, abs=0.01)
+
+
+@needs_published
+def test_the_committed_split_rules_and_sizes_are_the_splits_modules_and_the_run_reports():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    rules, sizes = results["split_rules"], results["split_sizes"]
+    assert rules["blocked"] == {"label": "blocked", "block": splits.BLOCK, "firewall": splits.FIREWALL,
+                                "pattern": splits.BLOCK_PATTERN}
+    for protocol in ("leaky", "forward"):
+        shares = {"train_frac": splits.TRAIN_FRAC, "val_frac": splits.VAL_FRAC, "test_frac": 0.15}
+        assert rules[protocol] == {"label": splits.PUBLIC_NAMES[protocol], **shares,
+                                   **({"firewall": splits.FIREWALL} if protocol == "forward" else {})}
+    frames = results["drives"]["drive2018"]["frames"]
+    assert sorted(sizes) == sorted(splits.PROTOCOLS)
+    for protocol, found in sizes.items():
+        made = make_split(protocol, frames)  # with the splits module's own settings
+        counts = {"train": made.train.size, "val": made.val.size, "test": made.test.size}
+        assert found == {"label": splits.PUBLIC_NAMES[protocol], "drive": "drive2018", "frames": frames, **counts,
+                         "dropped": frames - sum(counts.values()), "runs": found["runs"], "seeds": [0, 1, 2]}, protocol
+    # every run report of the summary is in, and every one of them was counted
+    summary = json.loads((REPO / "reports" / "summary.json").read_text())
+    assert sum(found["runs"] for found in sizes.values()) == len(summary["runs"])
 
 
 @needs_published

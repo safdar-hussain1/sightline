@@ -20,6 +20,11 @@ of generalization. Three protocols are provided:
     reproduced on purpose so its optimism can be measured on exactly the same
     frames the honest protocol scores (see ``paired_frames``). It is never
     used for a headline number other than the leakage measurement itself.
+
+The rules every split is made with unless a caller names others are the module
+constants ``FIREWALL``, ``BLOCK``, ``BLOCK_PATTERN``, ``TRAIN_FRAC`` and
+``VAL_FRAC``; the functions below take their defaults from them, and the site
+data states them as the split rules.
 """
 
 from __future__ import annotations
@@ -30,9 +35,14 @@ from dataclasses import dataclass
 import numpy as np
 
 __all__ = [
+    "BLOCK",
+    "BLOCK_PATTERN",
+    "FIREWALL",
     "PROTOCOLS",
     "PUBLIC_NAMES",
     "SplitIndices",
+    "TRAIN_FRAC",
+    "VAL_FRAC",
     "blocked_split",
     "chronological_split",
     "frames_sha256",
@@ -43,6 +53,18 @@ __all__ = [
 
 PROTOCOLS = ("leaky", "blocked", "forward")
 PUBLIC_NAMES = {"leaky": "shuffled", "blocked": "blocked", "forward": "later in the drive"}
+
+#: frames dropped on each side of every boundary between a training stretch and an
+#: evaluation stretch (``blocked`` and ``forward``)
+FIREWALL = 250
+#: frames per block of the ``blocked`` split
+BLOCK = 1500
+#: the ``blocked`` split's repeating block pattern: T train, V validation, E test
+BLOCK_PATTERN = "TTVTTET"
+#: the share of a drive the ``leaky`` and ``forward`` splits train on, and the share they
+#: validate on; the rest of the drive tests
+TRAIN_FRAC = 0.70
+VAL_FRAC = 0.15
 
 
 @dataclass(frozen=True)
@@ -81,9 +103,9 @@ class SplitIndices:
 
 def chronological_split(
     n: int,
-    train_frac: float = 0.70,
-    val_frac: float = 0.15,
-    firewall: int = 250,
+    train_frac: float = TRAIN_FRAC,
+    val_frac: float = VAL_FRAC,
+    firewall: int = FIREWALL,
 ) -> SplitIndices:
     """Contiguous train | firewall | val | firewall | test split.
 
@@ -108,8 +130,8 @@ def chronological_split(
 
 def random_split(
     n: int,
-    train_frac: float = 0.70,
-    val_frac: float = 0.15,
+    train_frac: float = TRAIN_FRAC,
+    val_frac: float = VAL_FRAC,
     seed: int = 0,
 ) -> SplitIndices:
     """The standard failure mode: shuffle video frames, then slice.
@@ -130,8 +152,8 @@ def random_split(
     )
 
 
-def blocked_split(n: int, block: int = 1500, firewall: int = 250,
-                  pattern: str = "TTVTTET") -> SplitIndices:
+def blocked_split(n: int, block: int = BLOCK, firewall: int = FIREWALL,
+                  pattern: str = BLOCK_PATTERN) -> SplitIndices:
     """Interleaved contiguous blocks with a firewall at every train/eval boundary.
 
     The drive is cut into ``block``-frame blocks labelled by repeating
@@ -166,8 +188,8 @@ def blocked_split(n: int, block: int = 1500, firewall: int = 250,
     return SplitIndices(**parts)
 
 
-def make_split(protocol: str, n: int, seed: int = 0, firewall: int = 250,
-               block: int = 1500) -> SplitIndices:
+def make_split(protocol: str, n: int, seed: int = 0, firewall: int = FIREWALL,
+               block: int = BLOCK) -> SplitIndices:
     """Build the split for one of ``PROTOCOLS`` over ``n`` frames."""
     if protocol == "leaky":
         return random_split(n, seed=seed)
