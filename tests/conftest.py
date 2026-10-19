@@ -4,8 +4,12 @@ A command's relative default (``runs``, ``data``, ``reports``) resolves against 
 directory, so every test runs from a tmp folder of its own and the session itself from
 another, and a test that needs a repository file names it by an absolute path under
 ``REPO``. Behind that, a tripwire records the repository's drive caches and label files
-when the session starts and fails the test after which any of them changed: a cache that
-training processes have memory-mapped must never change under them.
+when the session starts, before any test module is imported, and checks them again after
+each test module is collected and after each test's setup, call and teardown: a cache that
+training processes have memory-mapped must never change under them. A change fails the
+collection of the module that made it, or the phase of the test it happened in; a change
+made while a module's or the session's fixtures were torn down is reported at the teardown
+of the test after which they were, and says so. Each change is reported once.
 
 Synthetic drives are tiny, deterministic stand-ins for the real dataset. Each frame is a
 455x256 BGR image with a bright vertical bar whose horizontal position follows the
@@ -26,6 +30,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+
+#: runs a pytest session of its own, for the tripwire's tests
+pytest_plugins = ("pytester",)
 
 #: the repository; tests reach its files by absolute paths built from this, never through
 #: the working directory
@@ -89,27 +96,77 @@ def workspace_changes(before: dict | None, root: Path) -> list[str]:
                   + [f"{path} (changed)" for path in before.keys() & after.keys() if after[path] != before[path]])
 
 
-def check_workspace(before: dict | None, root: Path) -> None:
-    """Fail, naming every changed file, when the workspace at ``root`` is not as ``before``."""
+def check_workspace(before: dict | None, root: Path, when: str = "") -> None:
+    """Fail, naming every changed file, when the workspace at ``root`` is not as ``before``;
+    ``when`` says when it changed."""
     changes = workspace_changes(before, root)
     if changes:
-        pytest.fail(f"the repository's drive caches or label files changed: {', '.join(changes)}; "
+        pytest.fail(f"the repository's drive caches or label files changed{when}: {', '.join(changes)}; "
                     "a test writes only under its own tmp folder", pytrace=False)
 
 
-@pytest.fixture(scope="session")
-def workspace_before():
-    """The repository's drive caches and label files as the session found them."""
-    before = workspace_state(REPO)
-    yield before
-    check_workspace(before, REPO)  # what tearing down the last module's fixtures did
+#: the repository's drive caches and label files as the last check found them: recorded when the
+#: session starts, and again by every check, so each change is reported once, where it happened
+TRIPWIRE = pytest.StashKey[dict]()
 
 
-@pytest.fixture(autouse=True)
-def real_workspace_untouched(workspace_before):
-    """The tripwire: fails the test after which the repository's caches or labels changed."""
-    yield
-    check_workspace(workspace_before, REPO)
+def pytest_sessionstart(session):
+    session.stash[TRIPWIRE] = {"state": workspace_state(REPO)}
+
+
+def tripwire(session, when: str) -> None:
+    """Fail with every change since the last check; ``when`` says when it happened."""
+    watched = session.stash.get(TRIPWIRE, None)
+    if watched is None:
+        pytest.fail("the tripwire has no record from the start of the session; run the tests from the "
+                    "repository or its tests folder", pytrace=False)
+    before, watched["state"] = watched["state"], workspace_state(REPO)
+    check_workspace(before, REPO, when)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_make_collect_report(collector):
+    report = yield
+    if isinstance(collector, pytest.Module):  # collecting a test module imports it: its top level runs
+        try:
+            tripwire(collector.session, f" while {collector.nodeid} was imported")
+        except pytest.fail.Exception as exc:
+            report.outcome, report.longrepr = "failed", str(exc)
+    return report
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    try:
+        return (yield)
+    finally:
+        tripwire(item.session, f" while {item.nodeid} was set up")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    try:
+        return (yield)
+    finally:
+        tripwire(item.session, f" while {item.nodeid} ran")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    try:
+        return (yield)
+    finally:
+        # a test's teardown also tears down its module's fixtures when the next test is in
+        # another module, and the session's after the last test
+        module = item.getparent(pytest.Module)
+        name = item.nodeid if module is None else module.nodeid
+        if nextitem is None:
+            also = f" and the fixtures of {name} and of the session were"
+        elif nextitem.getparent(pytest.Module) is not module:
+            also = f" and the fixtures of {name} were"
+        else:
+            also = " was"
+        tripwire(item.session, f" while {item.nodeid}{also} torn down")
 
 
 # --- synthetic drives -------------------------------------------------------------------------

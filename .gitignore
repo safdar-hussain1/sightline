@@ -31,6 +31,8 @@ node_modules/
 /web/dist/
 # a site-data build stages its files here and always removes the folder
 /web/.public-*/
+# and export.json beside itself, which it removes as well unless it is killed
+/reports/.export.json.*
 
 # OS noise
 .DS_Store

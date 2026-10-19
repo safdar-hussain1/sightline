@@ -3,8 +3,10 @@
 A relative default (``runs``, ``data``, ``reports``) resolves against the working
 directory, so every test, and every module- or session-scoped fixture, runs from a tmp
 folder of its own (conftest.py). Behind that, a tripwire records the repository's drive
-caches and label files when the session starts and fails the test after which any of them
-changed. The tripwire is checked here on stand-in repositories.
+caches and label files when the session starts and fails the collection or the test phase
+in which any of them changed. The tripwire is checked here on stand-in repositories: its
+functions directly, and its hooks by running a pytest session of their own on a stand-in
+repository that holds a copy of conftest.py.
 """
 import os
 import re
@@ -41,10 +43,10 @@ def test_a_relative_workspace_default_resolves_under_the_tests_folder(tmp_path):
         assert path.resolve().is_relative_to(tmp_path.resolve()), path
 
 
-def test_the_tripwire_watches_this_repository_after_every_test(request, workspace_before):
-    assert "real_workspace_untouched" in request.fixturenames
-    assert (workspace_before is None) == (not (REPO / "runs" / "cache").is_dir())
-    assert workspace_before == conftest.workspace_state(REPO)
+def test_the_tripwire_holds_this_repositorys_caches_and_labels_as_they_are(request):
+    watched = request.session.stash[conftest.TRIPWIRE]["state"]
+    assert (watched is None) == (not (REPO / "runs" / "cache").is_dir())
+    assert watched == conftest.workspace_state(REPO)
 
 
 # --- the tripwire on stand-in repositories --------------------------------------------------
@@ -135,3 +137,82 @@ def test_without_a_cache_folder_the_tripwire_does_nothing(tmp_path):
     (root / "runs" / "cache" / "drivetest" / "inputs.u8").write_bytes(b"x")
     assert conftest.workspace_changes(before, root) == []
     conftest.check_workspace(before, root)
+
+
+# --- the tripwire's hooks, in a pytest session of their own ------------------------------------
+
+def session_on_a_stand_in(pytester, tests: dict[str, str]):
+    """Run pytest on a stand-in repository with a copy of conftest.py and the test modules
+    ``tests`` (file name to source), in a process of its own; return its result."""
+    root = stand_in(pytester.path)
+    (root / "tests").mkdir()
+    (root / "tests" / "conftest.py").write_text(Path(conftest.__file__).read_text())
+    header = ("from pathlib import Path\nimport pytest\nROOT = Path(__file__).resolve().parents[1]\n"
+              "CACHE = ROOT / 'runs' / 'cache' / 'drive2018'\n")
+    for name, source in tests.items():
+        (root / "tests" / name).write_text(header + source)
+    return pytester.runpytest_subprocess("-p", "no:cacheprovider", "tests")
+
+
+def _reported(result, nodeid: str, when: str, changes: str) -> bool:
+    """Whether the session's output names ``nodeid`` with the tripwire's message for ``when``."""
+    return f"the repository's drive caches or label files changed while {nodeid}{when}: {changes}; " \
+        "a test writes only under its own tmp folder" in result.stdout.str()
+
+
+def test_the_tripwire_fails_the_phase_a_change_happens_in_and_reports_each_change_once(pytester):
+    result = session_on_a_stand_in(pytester, {
+        "test_a.py": (
+            "def test_reads_only():\n"
+            "    (CACHE / 'inputs.u8').read_bytes()\n"
+            "def test_writes_into_the_cache():\n"
+            "    (CACHE / 'inputs.u8').write_bytes(b'other frames')\n"
+            "def test_after_it():\n"
+            "    pass\n"
+            "@pytest.fixture\n"
+            "def writes_while_set_up():\n"
+            "    (CACHE / 'angles.npy').write_bytes(b'other angles')\n"
+            "def test_with_a_fixture_that_writes(writes_while_set_up):\n"
+            "    pass\n"),
+        "test_b.py": (
+            "@pytest.fixture(scope='module')\n"
+            "def leaves_a_file():\n"
+            "    yield\n"
+            "    (CACHE / 'inputs.u8.tmp-1').write_bytes(b'')\n"
+            "def test_one(leaves_a_file):\n"
+            "    pass\n"
+            "def test_two(leaves_a_file):\n"
+            "    pass\n"),
+        "test_c.py": (
+            "@pytest.fixture(scope='session')\n"
+            "def edits_the_labels_at_the_end():\n"
+            "    yield\n"
+            "    (ROOT / 'data' / 'drive2017' / 'data.txt').write_text('0.jpg 2.5\\n')\n"
+            "def test_next(edits_the_labels_at_the_end):\n"
+            "    pass\n"),
+    })
+    # a failure in the call phase, and errors at a setup and at two teardowns (both of those tests
+    # passed first); every other test passes, so each change was reported once, where it happened
+    result.assert_outcomes(passed=5, failed=1, errors=3)
+    assert _reported(result, "tests/test_a.py::test_writes_into_the_cache", " ran",
+                     "runs/cache/drive2018/inputs.u8 (changed)")
+    assert _reported(result, "tests/test_a.py::test_with_a_fixture_that_writes", " was set up",
+                     "runs/cache/drive2018/angles.npy (changed)")
+    # a module fixture's teardown is blamed on the test whose teardown ran it, and says so
+    assert _reported(result, "tests/test_b.py::test_two", " and the fixtures of tests/test_b.py were torn down",
+                     "runs/cache/drive2018/inputs.u8.tmp-1 (new)")
+    assert _reported(result, "tests/test_c.py::test_next",
+                     " and the fixtures of tests/test_c.py and of the session were torn down",
+                     "data/drive2017/data.txt (changed)")
+
+
+def test_the_tripwire_fails_the_collection_of_a_module_that_writes_when_it_is_imported(pytester):
+    result = session_on_a_stand_in(pytester, {
+        "test_a.py": "def test_first():\n    pass\n",
+        "test_b.py": "(CACHE / 'meta.json').unlink()\ndef test_never_runs():\n    pass\n",
+    })
+    # the record from the start of the session sees the write; a record taken at the first
+    # test's setup would have made it the baseline
+    assert result.ret != 0
+    result.assert_outcomes(errors=1)
+    assert _reported(result, "tests/test_b.py", " was imported", "runs/cache/drive2018/meta.json (deleted)")

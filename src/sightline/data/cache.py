@@ -10,14 +10,31 @@ A cache is never rewritten in place. Training processes keep ``inputs.u8``
 memory-mapped for hours, and a mapped file that is rewritten under them
 hands them other frames, or kills them (SIGBUS) once they read past a
 shortened end. So a build writes each file under a temporary name in the
-cache folder and flushes it, deletes the old ``meta.json``, swaps each file
-into place with ``os.replace`` and writes ``meta.json`` last, the same way.
-A process that mapped the old ``inputs.u8`` keeps the old file, whole, until
-it lets go of it, and a process opening the cache finds either no
-``meta.json`` or one that describes the files beside it, even when a build
-is killed half-way: a cache never looks complete unless it is. A build that
-fails with an error deletes its temporary files and leaves no ``meta.json``,
-so the next build starts again.
+cache folder itself (``<name>.tmp-<pid>-<hex>``: the swap never crosses a
+volume) and flushes it, deletes the old ``meta.json``, swaps each file into
+place with ``os.replace`` and writes ``meta.json`` last, the same way.
+
+What is atomic is each file's swap: a process that mapped the old
+``inputs.u8`` keeps the old file, whole, until it lets go of it, and a
+``meta.json`` is always the whole of one build's. A build as a whole is not:
+
+* a process that opens the cache while a build swaps files in can read the
+  old ``meta.json`` and then open files the build has just swapped in
+  (``DriveCache`` reads ``meta.json``, then maps ``inputs.u8``, then loads
+  ``angles.npy``), pairing one build's frames with the other's angles or
+  frame count; only some of those mixes raise an error. Open a cache only
+  while no build of it runs.
+* two builds of one cache that run at once with different fingerprints can
+  each swap in some of the files and leave a ``meta.json`` that describes
+  only some of the files beside it. Run one build of a cache at a time.
+* a build that stops after it deleted the old ``meta.json`` leaves none, so
+  nothing opens the files it swapped in and the next build starts again;
+  one that stops before that leaves the old cache as it was. A build that
+  fails with an exception (Ctrl-C included) deletes its temporary files;
+  one killed by a signal that Python never sees (SIGKILL, or SIGTERM
+  without a handler) cannot, and its ``*.tmp-*`` files stay in the folder:
+  later builds write under names of their own and neither use nor remove
+  them, so they are deleted by hand.
 
 ``open_cache`` is the read-only way in, for commands that publish what they compute from
 a cache: it opens a cache only when its fingerprint is the one the drive's labels give

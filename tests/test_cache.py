@@ -7,6 +7,7 @@ describe.
 import hashlib
 import io
 import os
+import re
 from pathlib import Path
 
 import cv2
@@ -93,6 +94,24 @@ def test_regenerating_drops_the_old_meta_before_it_swaps_a_file_and_writes_the_n
     assert swaps[-1][0] == "meta.json"
     assert not any(meta_present for _, meta_present in swaps)
     assert len(DriveCache(cache_dir)) == 12
+
+
+def test_each_file_is_written_beside_its_final_name_so_no_swap_crosses_a_volume(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    swaps = []
+    replace = os.replace
+
+    def watched(src, dst):
+        swaps.append((Path(src), Path(dst)))
+        replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", watched)
+    build_cache(load_labels(make_drive(tmp_path / "a", "drivetest", n=10)), cache_dir)
+    assert sorted(dst.name for _, dst in swaps) == sorted([*DATA_FILES, "meta.json"])
+    for src, dst in swaps:
+        # a rename within one folder: os.replace would fail across volumes (EXDEV)
+        assert src.parent == dst.parent == cache_dir, (src, dst)
+        assert re.fullmatch(rf"{re.escape(dst.name)}\.tmp-{os.getpid()}-[0-9a-f]{{8}}", src.name), src.name
 
 
 def test_a_build_that_fails_part_way_leaves_no_cache_to_open(tmp_path):
