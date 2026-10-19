@@ -9,10 +9,12 @@
  * it on <html> before the first paint, so the demo never flashes first).
  *
  * The router shows one view and hides the other, marks the nav link of the
- * view on screen, moves focus to the new view's heading, and fades the view
- * in -- except under reduced motion, where the switch is instant. Going to a
- * view from a link starts at its top; going back and forward leaves the
- * scroll position to the browser, which restores where the visitor was. It
+ * view on screen, and fades the view in -- except under reduced motion, where
+ * the switch is instant. Following a link starts the new view at its top, or
+ * at the place the link names, and moves focus there; going back and forward
+ * leaves the scroll position and focus to the browser, which restores where
+ * the visitor was (focus pulled to a view's top would send the next Tab away
+ * from it). It
  * never changes the document's title: the title is what search engines index,
  * and it names the page, not the view.
  */
@@ -112,17 +114,20 @@ export class Router {
 
     const panel = this.panel(view);
     const target = hash.length > 1 ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
-    if (target && panel?.contains(target)) {
+    const place = target && panel?.contains(target) ? target : null;
+    if (place) {
       // A place in the view: the browser could not scroll to it while the view
       // was hidden.
-      target.scrollIntoView({ block: "start" });
+      place.scrollIntoView({ block: "start" });
     } else if (followed) {
       scrollTo(0, 0);
     }
-    const focus = document.querySelector<HTMLElement>(this.options.focus[view]);
-    if (focus) {
-      if (!focus.hasAttribute("tabindex")) focus.tabIndex = -1;
-      focus.focus({ preventScroll: true });
+    if (followed) {
+      const focus = place ?? document.querySelector<HTMLElement>(this.options.focus[view]);
+      if (focus) {
+        if (!focus.hasAttribute("tabindex")) focus.tabIndex = -1;
+        focus.focus({ preventScroll: true });
+      }
     }
     if (panel && !this.reduced()) this.animate(panel);
   }

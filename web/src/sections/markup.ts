@@ -107,7 +107,7 @@ export function howHtml(): string {
         <div class="how__inner wrap">
           <div class="how__head">
             <h2 class="how__title" id="how-title">How it works</h2>
-            <p class="how__lede">Each turn of the wheel above is one answer from the model. This is how it gets there, on the clip that is playing.</p>
+            <p class="how__lede">Each turn of the wheel above is one answer from the model. This is how it gets there, on the clip above.</p>
             <button class="how__toggle" type="button" data-how="toggle" data-playing="false" hidden>${PAUSE_ICON}${PLAY_ICON}<span data-how="toggle-label">Play</span><span class="visually-hidden"> the steps</span></button>
           </div>
           <ol class="how__steps" data-how="steps" data-live="false">
@@ -145,7 +145,7 @@ export function howHtml(): string {
                 <div class="how-answer">
                   <div class="how-answer__dial">
                     <div class="how-answer__wheel" data-how="wheel">${wheelSvg()}</div>
-                    <p class="how-answer__angle" data-how="readout"><span class="how-answer__size" data-how="angle"></span> <span class="how-answer__side" data-how="side"></span></p>
+                    <p class="how-answer__angle" data-how="readout" hidden><span class="how-answer__size" data-how="angle"></span> <span class="how-answer__side" data-how="side"></span></p>
                   </div>
                   <div class="how-answer__map">
                     <span class="how-frame__picture">${ROAD_HEAT}<canvas class="how-frame__canvas" data-how="heat" width="200" height="66"></canvas></span>
@@ -216,13 +216,13 @@ export function resultsHtml(): string {
         <div class="results__inner wrap" data-results="root" data-state="loading">
           <div class="results__head">
             <h2 class="results__title" id="results-title">What the measurements found</h2>
-            <p class="results__lede" data-results="lede">How good a steering model looks depends on how it is tested. These are the headline numbers from its training runs.</p>
+            <p class="results__lede" data-results="lede">How good a steering model looks depends on how it is tested. Here is what its training runs found.</p>
           </div>
           <ul class="headline" data-results="band" role="list">
             <li class="finding finding--hero">
-              <p class="finding__values">${count("ratio")}<span class="finding__also"><span class="finding__also-name">PilotNet</span>${count("ratio-pilotnet")}</span></p>
-              <p class="finding__label">How much better testing on shuffled frames makes the same kind of model look</p>
-              ${ruler("ruler-paired", "Sightline’s error on the same frames", [
+              <p class="finding__values finding__values--pair"><span class="finding__pair">${count("ratio")}<span class="finding__split">Sightline</span></span><span class="finding__pair finding__pair--also">${count("ratio-pilotnet")}<span class="finding__split">PilotNet</span></span></p>
+              <p class="finding__label" data-results="paired-label">How much better testing on shuffled frames makes the same kind of model look</p>
+              ${ruler("ruler-paired", "Sightline’s mean error on the same frames", [
                 ["reported", "shuffled split", "paired-shuffled"],
                 ["model", "blocked split", "paired-blocked"],
               ])}
@@ -231,7 +231,7 @@ export function resultsHtml(): string {
             <li class="finding">
               <p class="finding__values">${count("another-day")}</p>
               <p class="finding__label" data-results="another-day-label">Better than always steering straight, on a drive it never saw</p>
-              ${ruler("ruler-another-day", "Error on another day’s drive", [
+              ${ruler("ruler-another-day", "Mean error on another day’s drive", [
                 ["model", "Sightline", "day-model"],
                 ["straight", "steering straight", "day-straight"],
               ])}
@@ -243,8 +243,8 @@ export function resultsHtml(): string {
               <p class="finding__note" data-results="memoriser-note">It learns nothing, so its error only shows how close the test frames sit to training frames.</p>
             </li>
           </ul>
-          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path d="m6.2 10.3 2.5 2.5 5.1-5.4"/></svg><span data-results="trust-text">Checking this browser against the model run in Python…</span></p>
-          <section class="splits" aria-labelledby="splits-title">
+          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path class="trust__tick" d="m6.2 10.3 2.5 2.5 5.1-5.4"/><path class="trust__alert" d="M10 5.6v5.6M10 14.1v.3"/></svg><span data-results="trust-text">Checking this browser against the same model run in Python…</span></p>
+          <section class="splits" data-results="splits" aria-labelledby="splits-title">
             <h3 class="splits__title" id="splits-title">Shuffled frames against held-back stretches</h3>
             <dl class="splits__list">
               <div class="splits__item"><dt>Shuffled split</dt><dd data-results="shuffled">Frames are dealt out at random, so most test frames sit right beside a frame the model trained on.</dd></div>

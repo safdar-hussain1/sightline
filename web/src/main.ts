@@ -16,6 +16,7 @@ import "./styles.css";
 
 import { bootCockpit } from "./cockpit/boot.ts";
 import { loadResults } from "./data/load.ts";
+import { driveIntervals } from "./data/timing.ts";
 import { Router } from "./router.ts";
 import { Accuracy } from "./sections/accuracy.ts";
 import { readFigures } from "./sections/figures.ts";
@@ -46,6 +47,7 @@ new Router({
 const results = loadResults(new URL("./", document.baseURI).href);
 results.then(
   (loaded) => {
+    how?.setIntervals(driveIntervals(loaded.raw));
     try {
       const figures = readFigures(loaded.raw);
       accuracy?.show(figures);

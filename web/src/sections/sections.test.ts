@@ -12,10 +12,10 @@ import type { Agreement, LiveCockpit, LiveFrame, LiveStatus } from "../cockpit/l
 import { AssetError } from "../data/load.ts";
 import type { Clip } from "../data/types.ts";
 import { Accuracy } from "./accuracy.ts";
-import { accuracyCaption, accuracySentence, leakageSentence, measurementsFailure, parityText } from "./copy.ts";
+import { accuracyCaption, accuracySentence, leakageSentence, measurementsFailure, pairedLabel, parityState } from "./copy.ts";
 import type { Frames } from "./countup.ts";
 import { readFigures } from "./figures.ts";
-import { resultsFixture } from "./fixture.ts";
+import { patch, resultsFixture } from "./fixture.ts";
 import { Headline } from "./headline.ts";
 import { HowItWorks } from "./how.ts";
 import { accuracyHtml, howHtml, resultsHtml } from "./markup.ts";
@@ -240,22 +240,60 @@ describe("the Results band", () => {
     expect(shown("ratio")).toBe("1.0×");
   });
 
-  it("reads the live check from the cockpit, and says why there is none without one", () => {
+  it("reads the live check from the cockpit: passing within the clip's tolerance, failing beyond it", () => {
     vi.useFakeTimers();
     document.documentElement.dataset["view"] = "results";
     const { band } = mount(true);
-    const clipFile = { title: "2018: minutes it never trained on" } as Clip;
-    const agreement: Agreement = { clip: clipFile, model: "sightline", check: "match", compared: 420, total: 420, maxDiffDeg: 0.0000191 };
+    const clipFile = { title: "2018: minutes it never trained on", tolerance: { angle_deg: 0.001 } } as Clip;
+    let agreement: Agreement = { clip: clipFile, model: "sightline", check: "match", compared: 420, total: 420, maxDiffDeg: 0.0000305 };
     const cockpit = {
       agreement: () => agreement,
       status: () => ({ state: "ready" }) as LiveStatus,
     } as unknown as LiveCockpit;
     band.attach(cockpit);
-    expect(text('[data-results="trust-text"]')).toBe(parityText(agreement, "ready"));
+    expect(text('[data-results="trust-text"]')).toBe(parityState(agreement, "ready").text);
     expect(q('[data-results="trust"]').dataset["state"]).toBe("checked");
-    band.attach(null);
-    expect(text('[data-results="trust-text"]')).toBe("The live check needs the demo, which could not run here.");
+
+    // The wrong model served under Sightline's name: its frames decode the
+    // same, its angles do not.
+    agreement = { ...agreement, maxDiffDeg: 124.8157 };
+    vi.advanceTimersByTime(700);
+    expect(q('[data-results="trust"]').dataset["state"]).toBe("mismatch");
+    expect(text('[data-results="trust-text"]')).toMatch(/do not match the same model run in Python/);
+
+    agreement = { ...agreement, check: "differ", maxDiffDeg: 0 };
+    vi.advanceTimersByTime(700);
     expect(q('[data-results="trust"]').dataset["state"]).toBe("note");
+  });
+
+  it("says why there is no live check when the demo's code never started", () => {
+    const { band } = mount(true);
+    band.attach(null);
+    expect(text('[data-results="trust-text"]')).toBe("The live check needs the demo, which could not start in this browser.");
+    expect(q('[data-results="trust"]').dataset["state"]).toBe("note");
+  });
+
+  it("names both networks in the paired figure", () => {
+    const { band } = mount(true);
+    band.show(figures());
+    const names = [...document.querySelectorAll('.finding--hero .finding__split')].map((el) => el.textContent);
+    expect(names).toEqual(["Sightline", "PilotNet"]);
+  });
+
+  it("stops calling the paired ratio flattery if it falls below one, and still counts it from one", () => {
+    onScreen(false);
+    const json = resultsFixture();
+    patch(json, "paired_leakage.sightlinenet.ratio", { mean: 0.8, sd: 0.1, values: [0.7, 0.8, 0.9] });
+    const { band, frames } = mount(false);
+    band.show(readFigures(json));
+    expect(text('[data-results="paired-label"]')).toBe(pairedLabel(0.8));
+    expect(shown("ratio")).toBe("1.0×");
+    onScreen(true);
+    band.viewShown("results");
+    frames.tick(400);
+    expect(Number(shown("ratio").replace("×", ""))).toBeLessThan(1);
+    frames.tick(3000);
+    expect(shown("ratio")).toBe("0.8×");
   });
 
   it("says why there are no figures when the measurements cannot be had", () => {
@@ -264,6 +302,8 @@ describe("the Results band", () => {
     band.fail(error);
     expect(text('[data-results="lede"]')).toBe(measurementsFailure(error));
     expect(q('[data-results="root"]').dataset["state"]).toBe("unavailable");
+    // The explainer of the splits gives way too: nothing stands alone under a heading.
+    expect(q('[data-results="splits"]').hidden).toBe(true);
   });
 });
 
@@ -272,6 +312,7 @@ describe("the Results band", () => {
 describe("How it works", () => {
   const CLIP = {
     id: "c2018",
+    drive: "drive2018",
     title: "2018: minutes it never trained on",
     fps: 17.5,
     n: 40,
@@ -307,15 +348,20 @@ describe("How it works", () => {
   }
 
   let puts: HTMLCanvasElement[] = [];
+  let clears: HTMLCanvasElement[] = [];
+  const drawn = () => puts.flatMap((canvas) => canvas.dataset["how"] ?? []);
+  const INTERVALS = { drive2018: 0.057, drive2017: null };
 
   beforeEach(() => {
     puts = [];
+    clears = [];
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
       const canvas = this;
       return {
         createImageData: (w: number, h: number) => new ImageData(w, h),
         putImageData: () => void puts.push(canvas),
         drawImage: () => undefined,
+        clearRect: () => void clears.push(canvas),
       } as unknown as CanvasRenderingContext2D;
     });
   });
@@ -328,6 +374,7 @@ describe("How it works", () => {
     const { world, cockpit } = fakeCockpit();
     world.status = { ...world.status, clip: null };
     const how = mount(false);
+    how.setIntervals(INTERVALS);
     how.attach(cockpit);
     expect(steps().dataset["live"]).toBe("false");
     expect(q('[data-how="toggle"]').hidden).toBe(true);
@@ -358,18 +405,68 @@ describe("How it works", () => {
     expect(text('[data-how="angle"]') + " " + text('[data-how="side"]')).toBe("3.2° left");
   });
 
-  it("follows the cockpit's frame while its steps are paused, and goes back to its drawings between clips", () => {
+  it("follows the cockpit's frame while its steps are paused and on screen", () => {
     vi.useFakeTimers();
     const { world, cockpit } = fakeCockpit();
     world.answers.set(7, 40);
     const how = mount(true);
     how.attach(cockpit);
+    intersect(true);
     world.status = { ...world.status, frame: 7 };
     vi.advanceTimersByTime(300);
     expect(text('[data-how="angle"]')).toBe("40.0°");
+  });
+
+  it("goes back to its drawings between clips: no angle, the wheel at rest, the frames cleared", () => {
+    vi.useFakeTimers();
+    const { world, cockpit } = fakeCockpit();
+    const how = mount(true);
+    how.attach(cockpit);
+    expect(text('[data-how="angle"]')).toBe("12.6°");
     world.status = { ...world.status, clip: null };
     vi.advanceTimersByTime(300);
     expect(steps().dataset["live"]).toBe("false");
+    expect(q('[data-how="readout"]').hidden).toBe(true);
+    expect(q<SVGGElement>('[data-how="wheel"] [data-wheel="model"]').style.transform).toBe("rotate(0deg)");
+    expect(clears.flatMap((canvas) => canvas.dataset["how"] ?? []).sort()).toEqual(["frame-0", "frame-1", "heat"]);
+    // Once at rest it stays at rest, without clearing again on every look.
+    const cleared = clears.length;
+    vi.advanceTimersByTime(1000);
+    expect(clears.length).toBe(cleared);
+  });
+
+  it("out of sight, draws a clip's first frame and fills in its answer, but does not follow every frame", () => {
+    vi.useFakeTimers();
+    const { world, cockpit } = fakeCockpit();
+    world.answers.clear();
+    const how = mount(true);
+    how.attach(cockpit);
+    intersect(false);
+    expect(drawn().sort()).toEqual(["frame-0", "frame-1", "heat"]);
+    world.answers.set(0, 5).set(5, 9).set(9, -2);
+    vi.advanceTimersByTime(300); // the first frame's answer arrives: drawn once
+    const afterAnswer = drawn().length;
+    expect(text('[data-how="angle"]')).toBe("5.0°");
+    for (const k of [5, 9]) {
+      world.status = { ...world.status, frame: k };
+      vi.advanceTimersByTime(300);
+    }
+    expect(drawn().length).toBe(afterAnswer);
+    intersect(true); // back in sight: it catches up at once
+    expect(text('[data-how="angle"]')).toBe("2.0°");
+  });
+
+  it("counts frames, not milliseconds, on a drive without timestamps", () => {
+    const { world, cockpit } = fakeCockpit();
+    world.status = { ...world.status, clip: { ...CLIP, id: "c2017", drive: "drive2017", title: "2017: another day" } as Clip };
+    const how = mount(true);
+    how.attach(cockpit);
+    // Before results.json says which drive has timestamps, nothing is timed.
+    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two before it");
+    how.setIntervals(INTERVALS);
+    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two before it");
+    expect(text('[data-how="age-1"]')).toBe("two frames before");
+    expect(text('[data-how="frames-text"]')).toMatch(/on the 2018 drive, whose frames do, two frames are 114 ms apart/);
   });
 
   it("starts paused under reduced motion, playing otherwise, and the button switches it", () => {

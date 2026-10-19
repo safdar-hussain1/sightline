@@ -24,9 +24,10 @@ import {
   anotherDayRuler,
   measurementsFailure,
   memoriserNote,
+  pairedLabel,
   pairedNote,
   pairedRuler,
-  parityText,
+  parityState,
   resultsLede,
   splitsText,
 } from "./copy.ts";
@@ -102,6 +103,7 @@ export class Headline {
     const { paired, anotherDay, memoriser, gaps, runs } = figures;
     const day = anotherDayFigure(anotherDay);
     this.part("lede").textContent = resultsLede(runs);
+    this.part("paired-label").textContent = pairedLabel(paired.sightlinenet.ratio.mean);
     this.part("paired-note").textContent = pairedNote(paired);
     this.part("another-day-label").textContent = day.label;
     this.part("another-day-note").textContent = anotherDayNote(anotherDay);
@@ -171,6 +173,7 @@ export class Headline {
   /** Say why there are no figures, in place of them. */
   fail(error: unknown): void {
     this.part("lede").textContent = measurementsFailure(error);
+    this.part("splits").hidden = true;
     this.root.dataset["state"] = "unavailable";
   }
 
@@ -218,16 +221,9 @@ export class Headline {
     clearTimeout(this.checking);
     if (this.cockpit === undefined) return; // the cockpit's code is still on its way
     const cockpit = this.cockpit;
-    const agreement = cockpit?.agreement() ?? null;
-    const state = cockpit ? cockpit.status().state : "unavailable";
-    const trust = this.part("trust");
-    this.part("trust-text").textContent = parityText(agreement, state);
-    const done =
-      agreement !== null && agreement.check === "match" && agreement.compared === agreement.total && Number.isFinite(agreement.maxDiffDeg);
-    trust.dataset["state"] =
-      done ? "checked"
-      : state === "unavailable" || (agreement !== null && agreement.compared > 0 && agreement.check !== "match") ? "note"
-      : "checking";
+    const { look, text } = parityState(cockpit?.agreement() ?? null, cockpit ? cockpit.status().state : "absent");
+    this.part("trust-text").textContent = text;
+    this.part("trust").dataset["state"] = look;
     if (cockpit && this.onView && document.visibilityState !== "hidden") {
       this.checking = window.setTimeout(() => this.check(), CHECK_MS);
     }

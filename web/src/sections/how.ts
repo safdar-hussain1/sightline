@@ -8,7 +8,9 @@
  * each answer once the model has given it, with no interaction. While the
  * section is on screen it walks through the clip, one answer every few
  * seconds: while the footage plays it takes the frame on screen, and while
- * the footage is paused or scrolled away it moves along the clip on its own.
+ * the footage is paused it moves along the clip on its own. Out of sight it
+ * draws only a new clip's first frame and that frame's answer, not every
+ * frame the cockpit shows, and catches up as it comes back into view.
  * Each answer is animated in the order it is computed -- the frames slide
  * into their stack, a pulse runs through the network, then the wheel turns
  * and the heat comes up. The walk can be paused; under reduced motion it
@@ -20,6 +22,7 @@
 import type { LiveCockpit, LiveFrame } from "../cockpit/live.ts";
 import { heatImageFromBytes } from "../cockpit/saliency.ts";
 import { renderWheel } from "../cockpit/wheel.ts";
+import { frameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import { steerParts } from "../format.ts";
 import type { ViewName } from "../router.ts";
@@ -60,6 +63,9 @@ export class HowItWorks {
   private lastAnswer = 0;
   private timers: number[] = [];
   private animations: Animation[] = [];
+  /** Each drive's measured frame interval, from results.json: until it is
+   * known, no clip's frames are timed. */
+  private intervals: Readonly<Record<string, number | null>> = {};
   private readonly scratch: HTMLCanvasElement;
 
   constructor(
@@ -78,8 +84,12 @@ export class HowItWorks {
         (entries) => {
           const was = this.inView;
           this.inView = entries.some((entry) => entry.isIntersecting);
-          // Coming into sight, the next answer is not far off.
-          if (this.inView && !was) this.lastAnswer = Math.min(this.lastAnswer, performance.now() - CYCLE_MS + 700);
+          if (this.inView && !was) {
+            // Coming into sight: catch up with the cockpit now, and the next
+            // answer is not far off.
+            this.lastAnswer = Math.min(this.lastAnswer, performance.now() - CYCLE_MS + 700);
+            this.poll();
+          }
         },
         { threshold: 0.2 },
       ).observe(this.part("steps"));
@@ -101,6 +111,14 @@ export class HowItWorks {
     window.setInterval(() => this.poll(), POLL_MS);
   }
 
+  /** Each drive's measured frame interval (`driveIntervals` of results.json),
+   * so the first step can say how far apart its frames were taken. */
+  setIntervals(intervals: Readonly<Record<string, number | null>>): void {
+    this.intervals = intervals;
+    const clip = this.clipId === null ? null : this.cockpit?.status().clip;
+    if (clip && clip.id === this.clipId) this.describe(clip);
+  }
+
   /** The router switched views: the walk stops behind the other view, and
    * catches up at once on coming back. */
   viewShown(view: ViewName): void {
@@ -116,10 +134,9 @@ export class HowItWorks {
     const status = cockpit.status();
     const clip = status.clip;
     if (status.state === "unavailable" || clip === null) {
-      // Between clips, or with no demo: the drawings, never another clip's frames.
-      this.settle();
-      this.clipId = null;
-      this.live(false);
+      // Between clips, or with no demo: the drawings, never another clip's
+      // frames or answer.
+      if (this.clipId !== null) this.rest();
       return;
     }
     if (clip.id !== this.clipId) {
@@ -135,19 +152,42 @@ export class HowItWorks {
     // the steps rest.
     const speed = speedText(cockpit.msPerFrame());
     if (this.part("speed").textContent !== speed) this.part("speed").textContent = speed;
+    if (!this.inView) {
+      // Out of sight the frame drawn stays; only its answer, once the model
+      // has given it, is filled in.
+      if (!this.answered && this.timers.length === 0) this.draw(this.k, false);
+      return;
+    }
     const now = performance.now();
-    if (this.walking && this.inView && now - this.lastAnswer >= CYCLE_MS) {
+    if (this.walking && now - this.lastAnswer >= CYCLE_MS) {
       this.lastAnswer = now;
       this.draw(this.nextFrame(status.playing ? status.frame : null, clip), !this.reduced());
       return;
     }
     if (this.timers.length > 0) return; // an answer is still being animated
-    if (!this.walking || !this.inView) {
+    if (!this.walking) {
       // Not walking: show what the cockpit shows.
       if (status.frame !== this.k || !this.answered) this.draw(status.frame, false);
     } else if (!this.answered) {
       this.draw(this.k, false); // its answer has arrived since
     }
+  }
+
+  /** Back to the drawings: nothing of the last clip -- frames, angle, turned
+   * wheel -- stays behind them. */
+  private rest(): void {
+    this.settle();
+    this.clipId = null;
+    this.k = -1;
+    this.answered = false;
+    for (const name of ["frame-0", "frame-1", "heat"]) {
+      const canvas = this.part<HTMLCanvasElement>(name);
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    const wheel = this.part("wheel").querySelector("svg");
+    if (wheel) renderWheel(wheel, 0, 0);
+    this.part("readout").hidden = true;
+    this.live(false);
   }
 
   /** The next frame to answer: the frame on screen while the footage plays,
@@ -185,9 +225,10 @@ export class HowItWorks {
 
   /** The words that depend on the clip: how many frames, how far apart. */
   private describe(clip: Clip): void {
-    this.part("frames-title").textContent = framesTitle(clip);
-    this.part("frames-text").textContent = framesText(clip);
-    const ages = framesAges(clip);
+    const timing = frameTiming(this.intervals, clip.drive);
+    this.part("frames-title").textContent = framesTitle(clip, timing);
+    this.part("frames-text").textContent = framesText(clip, timing);
+    const ages = framesAges(clip, timing);
     this.part("age-0").textContent = ages[0] ?? "";
     this.part("age-1").textContent = ages[ages.length - 1] ?? "";
   }

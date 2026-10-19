@@ -1082,24 +1082,12 @@ html:not(.js) .windshield__status {
   }
 }
 
-/* On a phone the twin's note -- what it trained on of the clip on screen --
-   sits right under the model picker, where the visitor just chose it. The
-   note about Sightline stays below, so the first screen still holds the
-   footage, the wheel and Play. */
+/* On a phone the note sits below the strip, past the first screen, in one
+   slot that holds the longest note (the twin's), so switching models moves
+   nothing: the footage, the wheel and Play stay where they were. */
 @media (width < 60rem) {
-  .cockpit__console[data-model="shuffled"] {
-    grid-template-areas:
-      "choices"
-      "note"
-      "screen"
-      "instruments"
-      "transport"
-      "key"
-      "eye";
-  }
-
-  .cockpit__console[data-model="shuffled"] .model-note {
-    margin-block-start: calc(-1 * var(--space-2));
+  .model-note {
+    min-height: 6em;
   }
 }
 
@@ -2019,20 +2007,18 @@ html:not(.js) .windshield__status {
   font-size: clamp(4rem, 2.6rem + 5vw, 7rem);
 }
 
-.finding__also {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.4em;
-  color: var(--ink-2);
-}
-
-.finding__also-name {
-  font: 600 var(--text-md) / 1 var(--font-text);
-  letter-spacing: 0;
-}
-
-.finding .finding__also .count {
+.finding .finding__pair--also .count {
   font-size: clamp(1.75rem, 1.4rem + 1.2vw, 2.5rem);
+}
+
+/* The paired figure names both networks under their numbers, Sightline's the
+   larger: it is the network the page ships. */
+.finding--hero .finding__values--pair {
+  align-items: flex-end;
+}
+
+.finding__pair--also {
+  color: var(--ink-2);
 }
 
 .finding__pair {
@@ -2148,7 +2134,8 @@ html:not(.js) .windshield__status {
   background: var(--line);
 }
 
-[data-results="root"][data-state="unavailable"] :is(.headline, .trust, .splits__list) {
+[data-results="root"][data-state="unavailable"] :is(.headline, .trust),
+.splits[hidden] {
   display: none;
 }
 
@@ -2185,8 +2172,21 @@ html:not(.js) .windshield__status {
   stroke-linejoin: round;
 }
 
-.trust:not([data-state="checked"]) .trust__icon path {
+/* A tick once it passes, an exclamation mark when it fails, the ring alone
+   otherwise. */
+.trust:not([data-state="checked"]) .trust__tick,
+.trust:not([data-state="mismatch"]) .trust__alert {
   display: none;
+}
+
+.trust[data-state="mismatch"] {
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+
+.trust[data-state="mismatch"] .trust__icon {
+  stroke: var(--ink);
+  stroke-width: 1.9;
 }
 
 /* While it checks, the ring turns: a loading mark, the one thing here that

@@ -781,6 +781,32 @@ describe("what the page reads of the cockpit", () => {
     expect(cockpit.msPerFrame()).toBeGreaterThanOrEqual(0);
   });
 
+  it("finishes the clip after the tab comes back, even while the cockpit is scrolled away", async () => {
+    let release: () => void = () => undefined;
+    world.inferGate = new Promise<void>((resolve) => (release = resolve));
+    world.gateAfter = 1;
+    const { cockpit } = await playing();
+    for (const observe of world.observers) observe([{ isIntersecting: false }]);
+    tab("hidden");
+    release();
+    await ticks(10);
+    expect(cockpit.agreement()?.compared).toBeLessThan(N);
+    tab("visible"); // still scrolled away: only the tab came back
+    await until(() => cockpit.agreement()?.compared === N, "every frame has run");
+  });
+
+  it("times the clip's history from its drive's timestamps", async () => {
+    world.results = async () => ({
+      ...RESULTS,
+      raw: { drives: { drive2018: { median_dt_s: 0.057 }, drive2017: { median_dt_s: null } } },
+    });
+    await playing();
+    expect(say("eye-caption")).toMatch(/of the one 114 ms before it/);
+    pick("cockpit-clip", "c2017");
+    await until(() => consoleState() === "ready" && checked("cockpit-clip") === "c2017", "the 2017 clip runs");
+    expect(say("eye-caption")).toMatch(/of the one two frames before it/);
+  });
+
   it("starts on the results the page has already asked for", async () => {
     const asked = vi.fn(world.results);
     world.results = asked;
@@ -791,13 +817,6 @@ describe("what the page reads of the cockpit", () => {
     expect(asked).not.toHaveBeenCalled();
   });
 
-  it("marks the model on screen on the console, for the layout", async () => {
-    await playing();
-    const console_ = document.querySelector<HTMLElement>(".cockpit__console") as HTMLElement;
-    expect(console_.dataset["model"]).toBe("sightline");
-    pick("cockpit-model", "shuffled");
-    await until(() => console_.dataset["model"] === "shuffled", "the twin is marked");
-  });
 });
 
 describe("when something fails late", () => {

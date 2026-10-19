@@ -121,8 +121,9 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-BvPeGG9W.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-nPlBpsmO.css">
+    <script type="module" crossorigin src="./assets/index-4AcnFXiS.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-D0BdCXup.css">
+    <link rel="modulepreload" crossorigin href="./assets/cockpit-pJQcepBT.js">
   </head>
   <body>
     <header class="masthead" id="masthead">
@@ -223,7 +224,7 @@
         <div class="how__inner wrap">
           <div class="how__head">
             <h2 class="how__title" id="how-title">How it works</h2>
-            <p class="how__lede">Each turn of the wheel above is one answer from the model. This is how it gets there, on the clip that is playing.</p>
+            <p class="how__lede">Each turn of the wheel above is one answer from the model. This is how it gets there, on the clip above.</p>
             <button class="how__toggle" type="button" data-how="toggle" data-playing="false" hidden><svg class="how__toggle-icon how__toggle-icon--pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg><svg class="how__toggle-icon how__toggle-icon--play" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-how="toggle-label">Play</span><span class="visually-hidden"> the steps</span></button>
           </div>
           <ol class="how__steps" data-how="steps" data-live="false">
@@ -282,7 +283,7 @@
                 <div class="how-answer">
                   <div class="how-answer__dial">
                     <div class="how-answer__wheel" data-how="wheel"><svg class="wheel" viewBox="-6 -6 252 252" aria-hidden="true" focusable="false"><circle class="wheel__track" cx="120" cy="120" r="106"/><path class="wheel__gap" data-wheel="error" d="" stroke-width="9"/><g class="wheel__turn wheel__model" data-wheel="model"><circle class="wheel__rim" cx="120" cy="120" r="80" stroke-width="15"/><path class="wheel__stripe" d="M110.25 40.6A80 80 0 0 1 129.75 40.6" stroke-width="15"/><path class="wheel__spokes" d="M42 124H94M146 124H198M120 146V198"/><circle class="wheel__hub" cx="120" cy="120" r="24"/><path class="wheel__pointer" d="M120 19.5L113 31.5H127Z"/></g><g class="wheel__turn wheel__ghost" data-wheel="human"><path class="wheel__ghost-lines" d="M28.5 124H92M148 124H211.5M120 148V211.5M120 47.5V32.5"/><path class="wheel__ghost-pointer" d="M120 8.5L112.5 -4H127.5Z"/></g></svg></div>
-                    <p class="how-answer__angle" data-how="readout"><span class="how-answer__size" data-how="angle"></span> <span class="how-answer__side" data-how="side"></span></p>
+                    <p class="how-answer__angle" data-how="readout" hidden><span class="how-answer__size" data-how="angle"></span> <span class="how-answer__side" data-how="side"></span></p>
                   </div>
                   <div class="how-answer__map">
                     <span class="how-frame__picture"><svg class="road" viewBox="0 0 200 66" preserveAspectRatio="none" aria-hidden="true" focusable="false">
@@ -335,19 +336,19 @@
         <div class="results__inner wrap" data-results="root" data-state="loading">
           <div class="results__head">
             <h2 class="results__title" id="results-title">What the measurements found</h2>
-            <p class="results__lede" data-results="lede">How good a steering model looks depends on how it is tested. These are the headline numbers from its training runs.</p>
+            <p class="results__lede" data-results="lede">How good a steering model looks depends on how it is tested. Here is what its training runs found.</p>
           </div>
           <ul class="headline" data-results="band" role="list">
             <li class="finding finding--hero">
-              <p class="finding__values"><span class="count" data-count="ratio"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__also"><span class="finding__also-name">PilotNet</span><span class="count" data-count="ratio-pilotnet"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span></span></p>
-              <p class="finding__label">How much better testing on shuffled frames makes the same kind of model look</p>
-              <div class="ruler" role="img" data-results="ruler-paired" aria-label="Sightline’s error on the same frames"><p class="ruler__title" aria-hidden="true">Sightline’s error on the same frames</p><div class="ruler__row ruler__row--reported"><span class="ruler__name">shuffled split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-shuffled"></span><span class="ruler__value" data-results="value-paired-shuffled"></span></span></div><div class="ruler__row ruler__row--model"><span class="ruler__name">blocked split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-blocked"></span><span class="ruler__value" data-results="value-paired-blocked"></span></span></div></div>
+              <p class="finding__values finding__values--pair"><span class="finding__pair"><span class="count" data-count="ratio"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__split">Sightline</span></span><span class="finding__pair finding__pair--also"><span class="count" data-count="ratio-pilotnet"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__split">PilotNet</span></span></p>
+              <p class="finding__label" data-results="paired-label">How much better testing on shuffled frames makes the same kind of model look</p>
+              <div class="ruler" role="img" data-results="ruler-paired" aria-label="Sightline’s mean error on the same frames"><p class="ruler__title" aria-hidden="true">Sightline’s mean error on the same frames</p><div class="ruler__row ruler__row--reported"><span class="ruler__name">shuffled split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-shuffled"></span><span class="ruler__value" data-results="value-paired-shuffled"></span></span></div><div class="ruler__row ruler__row--model"><span class="ruler__name">blocked split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-blocked"></span><span class="ruler__value" data-results="value-paired-blocked"></span></span></div></div>
               <p class="finding__note" data-results="paired-note">Each network trained both ways and scored on the same held-out frames.</p>
             </li>
             <li class="finding">
               <p class="finding__values"><span class="count" data-count="another-day"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span></p>
               <p class="finding__label" data-results="another-day-label">Better than always steering straight, on a drive it never saw</p>
-              <div class="ruler" role="img" data-results="ruler-another-day" aria-label="Error on another day’s drive"><p class="ruler__title" aria-hidden="true">Error on another day’s drive</p><div class="ruler__row ruler__row--model"><span class="ruler__name">Sightline</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-model"></span><span class="ruler__value" data-results="value-day-model"></span></span></div><div class="ruler__row ruler__row--straight"><span class="ruler__name">steering straight</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-straight"></span><span class="ruler__value" data-results="value-day-straight"></span></span></div></div>
+              <div class="ruler" role="img" data-results="ruler-another-day" aria-label="Mean error on another day’s drive"><p class="ruler__title" aria-hidden="true">Mean error on another day’s drive</p><div class="ruler__row ruler__row--model"><span class="ruler__name">Sightline</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-model"></span><span class="ruler__value" data-results="value-day-model"></span></span></div><div class="ruler__row ruler__row--straight"><span class="ruler__name">steering straight</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-straight"></span><span class="ruler__value" data-results="value-day-straight"></span></span></div></div>
               <p class="finding__note" data-results="another-day-note">Sightline on another day’s drive, against steering straight on the same frames.</p>
             </li>
             <li class="finding">
@@ -356,8 +357,8 @@
               <p class="finding__note" data-results="memoriser-note">It learns nothing, so its error only shows how close the test frames sit to training frames.</p>
             </li>
           </ul>
-          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path d="m6.2 10.3 2.5 2.5 5.1-5.4"/></svg><span data-results="trust-text">Checking this browser against the model run in Python…</span></p>
-          <section class="splits" aria-labelledby="splits-title">
+          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path class="trust__tick" d="m6.2 10.3 2.5 2.5 5.1-5.4"/><path class="trust__alert" d="M10 5.6v5.6M10 14.1v.3"/></svg><span data-results="trust-text">Checking this browser against the same model run in Python…</span></p>
+          <section class="splits" data-results="splits" aria-labelledby="splits-title">
             <h3 class="splits__title" id="splits-title">Shuffled frames against held-back stretches</h3>
             <dl class="splits__list">
               <div class="splits__item"><dt>Shuffled split</dt><dd data-results="shuffled">Frames are dealt out at random, so most test frames sit right beside a frame the model trained on.</dd></div>

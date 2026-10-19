@@ -25,6 +25,7 @@ function page(): void {
     </main>`;
 }
 
+const q = (selector: string) => document.querySelector(selector) as HTMLElement;
 const view = (name: ViewName) => document.querySelector<HTMLElement>(`.view[data-view="${name}"]`) as HTMLElement;
 const link = (name: ViewName) => document.querySelector<HTMLAnchorElement>(`[data-view-link="${name}"]`) as HTMLAnchorElement;
 const shown = () => (["demo", "results"] as const).filter((name) => !view(name).hidden);
@@ -133,21 +134,25 @@ describe("the router", () => {
     expect(document.activeElement?.id).toBe("results-title");
   });
 
-  it("goes back and forward with the browser, leaving the scroll position to it", async () => {
+  it("goes back and forward with the browser, leaving the scroll position and focus to it", async () => {
     start();
     link("results").click();
     await ticks();
+    expect(document.activeElement?.id).toBe("results-title");
     scrolls.length = 0;
+    (document.activeElement as HTMLElement).blur();
     history.back();
     await ticks(6);
     expect(location.hash).toBe("");
     expect(shown()).toEqual(["demo"]);
     expect(scrolls).toEqual([]);
-    expect(document.activeElement?.id).toBe("cockpit");
+    // Focus is not pulled to the top of a view the browser is scrolling down.
+    expect(document.activeElement).toBe(document.body);
     history.forward();
     await ticks(6);
     expect(shown()).toEqual(["results"]);
     expect(scrolls).toEqual([]);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("switches instantly under reduced motion", async () => {
@@ -168,6 +173,20 @@ describe("the router", () => {
     await ticks();
     expect(shown()).toEqual(["demo"]);
     expect(into).toHaveBeenCalledOnce();
+  });
+
+  it("puts focus on the place a followed link names, not on the top of its view", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    const target = document.querySelector<HTMLElement>("#how-it-works") as HTMLElement;
+    target.scrollIntoView = vi.fn();
+    const to = document.createElement("a");
+    to.href = "#how-it-works";
+    q("main").append(to);
+    to.click();
+    await ticks();
+    expect(shown()).toEqual(["demo"]);
+    expect(document.activeElement?.id).toBe("how-it-works");
   });
 
   it("takes the visitor to the top when they pick the view they are on", async () => {

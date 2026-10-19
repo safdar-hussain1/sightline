@@ -10,6 +10,7 @@
  */
 
 import { AssetError } from "../data/load.ts";
+import { lagText, type FrameTiming } from "../data/timing.ts";
 import type { Clip, ModelKey } from "../data/types.ts";
 import { fmtPct } from "../format.ts";
 import { CANNOT_RUN } from "./boot.ts";
@@ -62,11 +63,12 @@ export function splitTitle(title: string): [string, string] {
   return at > 0 ? [title.slice(0, at), title.slice(at + 2)] : ["", title];
 }
 
-/** The caption under the model's own input: its size, and how old the history
- * frames stacked with it are, from the clip's lags and frame rate. */
-export function eyeCaption(clip: Clip): string {
+/** The caption under the model's own input: its size, and how long before
+ * this frame its history frames were taken -- in milliseconds on a drive whose
+ * frames carry timestamps, in frames on one whose do not. */
+export function eyeCaption(clip: Clip, timing: FrameTiming): string {
   const size = `${clip.sprite.frame_w} × ${clip.sprite.frame_h} pixels`;
-  const ages = clip.frame_lags.map((lag) => `${Math.round((lag / clip.fps) * 1000)} ms`);
+  const ages = clip.frame_lags.map((lag) => lagText(lag, timing));
   const history =
     ages.length === 0 ? ""
     : ages.length === 1 ? ` and of the one ${ages[0]} before it`

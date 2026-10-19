@@ -7,6 +7,7 @@ written into ``docs/index.html`` by the build, from the same markup the page
 uses; the model card itself is a file in ``web/public/`` that the build copies.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,16 @@ def test_the_page_links_the_model_card_and_the_data_file():
     html = PUBLISHED.read_text(encoding="utf-8")
     assert html.count('href="model-card.md"') >= 2, "the demo view and the Results view each link the model card"
     assert 'href="data/results.json"' in html
+
+
+def test_the_page_asks_for_the_demo_code_as_early_as_its_own():
+    """The demo's code is a chunk of its own, imported once the page's first
+    chunk runs; a modulepreload lets the browser fetch the two side by side."""
+    html = PUBLISHED.read_text(encoding="utf-8")
+    preloads = re.findall(r'<link rel="modulepreload"[^>]*href="\./(assets/cockpit-[\w-]+\.js)"', html)
+    assert len(preloads) == 1, preloads
+    assert (ROOT / "docs" / preloads[0]).is_file()
+    assert html.index(preloads[0]) < html.index("</head>")
 
 
 @pytest.mark.xfail(

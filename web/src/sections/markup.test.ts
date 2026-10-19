@@ -79,8 +79,9 @@ describe("the sections' markup", () => {
     }
   });
 
-  it("keeps the step-by-step pause control out of sight until the steps can play", () => {
+  it("keeps the step-by-step pause control and the angle out of sight until there is something to show", () => {
     expect(howHtml()).toMatch(/<button\b[^>]*data-how="toggle"[^>]*\bhidden\b/);
+    expect(howHtml()).toMatch(/<p\b[^>]*data-how="readout"[^>]*\bhidden\b/);
   });
 });
 

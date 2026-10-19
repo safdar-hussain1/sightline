@@ -19,12 +19,35 @@ function staticShell(): Plugin {
   };
 }
 
+/**
+ * The demo's own code -- the cockpit and the model runtime -- is a chunk of its
+ * own, imported once the page's first chunk runs. A modulepreload in the head
+ * lets the browser fetch both chunks side by side. The chunk's file name
+ * carries its content hash, so the same sources give the same tag.
+ */
+function preloadCockpit(): Plugin {
+  return {
+    name: "sightline-preload-cockpit",
+    transformIndexHtml: {
+      order: "post",
+      handler: (html, ctx) => {
+        const chunk = Object.values(ctx.bundle ?? {}).find(
+          (item) => item.type === "chunk" && item.isDynamicEntry && (item.facadeModuleId ?? "").endsWith("/src/cockpit/cockpit.ts"),
+        );
+        // The dev server has no bundle, and fetches modules as asked.
+        if (!chunk) return html;
+        return [{ tag: "link", attrs: { rel: "modulepreload", crossorigin: true, href: `./${chunk.fileName}` }, injectTo: "head" }];
+      },
+    },
+  };
+}
+
 // docs/ is the GitHub Pages site root, so the build lands there, and every
 // asset URL is relative: the site is served from a project subpath, where an
 // absolute "/assets/..." would 404.
 export default defineConfig({
   base: "./",
-  plugins: [staticShell()],
+  plugins: [staticShell(), preloadCockpit()],
   build: {
     outDir: "../docs",
     emptyOutDir: true,

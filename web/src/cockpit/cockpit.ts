@@ -32,6 +32,7 @@
 import type { InferenceSession } from "onnxruntime-web/wasm";
 
 import { AssetError, loadClip, loadResults } from "../data/load.ts";
+import { driveIntervals, frameTiming } from "../data/timing.ts";
 import { MODEL_KEYS, type Clip, type ModelKey, type Results } from "../data/types.ts";
 import { NO_VALUE, fmtDeg, steerParts } from "../format.ts";
 import { INPUT_H, INPUT_W, createSession, infer } from "../model/runner.ts";
@@ -459,7 +460,7 @@ export class Cockpit implements LiveCockpit {
     style.setProperty("--camera-aspect", `${w} / ${h}`);
     style.setProperty("--video-overhang", String(videoOverhang(clip.camera_size, clip.video_size)));
     style.setProperty("--band-top", String(band.top));
-    this.view.eyeCaption.textContent = eyeCaption(clip);
+    this.view.eyeCaption.textContent = eyeCaption(clip, frameTiming(driveIntervals(this.results?.raw ?? {}), clip.drive));
   }
 
   private loadVideo(src: string, name: string): Promise<void> {
@@ -760,7 +761,6 @@ export class Cockpit implements LiveCockpit {
   /** Put `model`, whose session exists, on screen. */
   private switchTo(model: ModelKey): void {
     this.model = model;
-    this.view.console.dataset["model"] = model;
     this.view.modelName.textContent = MODEL_NAMES[model];
     const loaded = this.state === "ready" ? this.loaded : null;
     this.view.note.textContent = modelNote(model, loaded?.clip ?? null);
@@ -1024,7 +1024,6 @@ export class Cockpit implements LiveCockpit {
       if (MODEL_KEYS.includes(input.value as ModelKey)) this.selectModel(input.value as ModelKey);
     });
     view.note.textContent = modelNote(this.model, null);
-    view.console.dataset["model"] = this.model;
 
     new IntersectionObserver(
       (entries) => {
@@ -1036,6 +1035,9 @@ export class Cockpit implements LiveCockpit {
     document.addEventListener("visibilitychange", () => {
       this.tabHidden = document.visibilityState === "hidden";
       this.setHidden();
+      // Back from the background while scrolled away, the cockpit is still
+      // hidden, but the model goes on finishing the clip.
+      if (!this.tabHidden) void this.fill();
     });
   }
 }

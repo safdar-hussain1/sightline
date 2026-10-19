@@ -5,13 +5,15 @@
  * browser measured itself, and each sentence is built so it cannot say more
  * than its numbers do: a ratio is put in words only to the nearest half, a
  * model is called better than steering straight only when its skill is above
- * zero, and this browser's angles are compared with Python's only where it
- * decoded the very pixels Python ran on.
+ * zero, a bound on a difference is rounded up, never to nearest, and this
+ * browser's angles pass the live check only within the clip's own tolerance,
+ * on the very pixels Python ran on.
  */
 
 import type { Agreement, CockpitState } from "../cockpit/live.ts";
 import { splitTitle } from "../cockpit/copy.ts";
 import { AssetError } from "../data/load.ts";
+import { lagText, type FrameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import { fmtCount, fmtDeg, fmtMs, fmtPct, fmtSpread } from "../format.ts";
 import type { Figures } from "./figures.ts";
@@ -55,8 +57,10 @@ export function accuracySentence(heldOut: Figures["heldOut"]): string {
   );
 }
 
+/** The frames are the split's test frames: the split also holds back
+ * validation frames and the gaps around them, which this figure does not use. */
 export function accuracyCaption(heldOut: Figures["heldOut"]): string {
-  return `Mean error on the ${fmtCount(heldOut.frames)} frames its training held back.`;
+  return `Mean error on the ${fmtCount(heldOut.frames)} test frames held back from its training.`;
 }
 
 /** The figure's text alternative, from the same numbers it draws. */
@@ -78,7 +82,14 @@ export function leakageSentence(ratio: number): string {
 // -- The Results view ---------------------------------------------------------------
 
 export function resultsLede(runs: number): string {
-  return `How good a steering model looks depends on how it is tested. These are the headline numbers from ${fmtCount(runs)} training runs.`;
+  return `How good a steering model looks depends on how it is tested. Here is what ${fmtCount(runs)} training runs found.`;
+}
+
+/** What the paired ratio measures: flattery only when it is above one. */
+export function pairedLabel(ratio: number): string {
+  return ratio > 1
+    ? "How much better testing on shuffled frames makes the same kind of model look"
+    : "The same kind of model’s error on held-back stretches, as a multiple of its error under a shuffled test";
 }
 
 export function pairedNote(paired: Figures["paired"]): string {
@@ -110,19 +121,22 @@ export function anotherDayNote(anotherDay: Figures["anotherDay"]): string {
  * mean error on each seed's paired frames, trained each way. */
 export function pairedRuler(sightline: Figures["paired"]["sightlinenet"]): string {
   return (
-    `Sightline’s mean error on the frames both splits held out: ${fmtDeg(sightline.shuffled)} when trained on the shuffled split, ` +
-    `${fmtDeg(sightline.blocked)} when trained on the blocked split.`
+    `Sightline’s mean error over ${countWord(sightline.ratio.runs)} trainings on the frames both splits held out: ` +
+    `${fmtDeg(sightline.shuffled)} when trained on the shuffled split, ${fmtDeg(sightline.blocked)} when trained on the blocked split.`
   );
 }
 
 /** The text alternative of the another-day ruler. */
 export function anotherDayRuler(anotherDay: Figures["anotherDay"]): string {
-  return `Mean error on another day’s drive: Sightline ${fmtDeg(anotherDay.model)}, always steering straight ${fmtDeg(anotherDay.straight)}.`;
+  return (
+    `Mean error over ${countWord(anotherDay.skill.runs)} trainings on another day’s drive: ` +
+    `Sightline ${fmtDeg(anotherDay.model)}, always steering straight ${fmtDeg(anotherDay.straight)}.`
+  );
 }
 
 export function memoriserNote(memoriser: Figures["memoriser"]): string {
   return (
-    `On ${fmtCount(memoriser.frames)} held-out frames. It learns nothing, so its small error on the shuffled split ` +
+    `On ${fmtCount(memoriser.frames)} held-out frames. It learns nothing, so its error under each split ` +
     "only shows how close the test frames sit to training frames."
   );
 }
@@ -136,13 +150,20 @@ export function splitsText(gaps: Figures["gaps"]): { shuffled: string; blocked: 
 
 // -- The live check -------------------------------------------------------------------
 
-const PYTHON = "the model run in Python";
+const PYTHON = "the same model run in Python";
 
-/** "to within 0.00002°", or "exactly"; a difference below what four decimals
- * (and two more) can show is stated as the bound it is under. */
-function within(diff: number): string {
-  if (diff === 0) return "exactly";
-  return `to within ${fmtDeg(diff, 4).replace(/^</, "")}`;
+/** The smallest figure of one significant digit at or above `diff`
+ * (degrees): a bound is rounded up, so it is never below what it bounds.
+ * Anything under a millionth of a degree is stated as that. */
+export function upperBound(diff: number): string {
+  const floor = 1e-6;
+  if (!(diff > floor)) return "0.000001°";
+  const decimals = Math.max(1, Math.ceil(-Math.log10(diff)));
+  const scale = 10 ** decimals;
+  let units = Math.ceil(diff * scale);
+  // Float error can carry the product a hair past a whole number.
+  if ((units - 1) / scale >= diff) units -= 1;
+  return `${String(Number((units / scale).toFixed(decimals)))}°`;
 }
 
 function clipName(clip: Clip): string {
@@ -150,54 +171,111 @@ function clipName(clip: Clip): string {
   return year ? `the demo’s ${year} clip` : "the demo clip";
 }
 
-/** The trust chip: this browser's angles on the loaded clip against the
- * published ones, or what the check is waiting for. */
-export function parityText(agreement: Agreement | null, state: CockpitState): string {
+const MODEL_NAMES = { sightline: "Sightline", shuffled: "the twin" } as const;
+
+/** How the check looks: still running, passed, failed, or not possible. */
+export type ParityLook = "checking" | "checked" | "mismatch" | "note";
+
+/**
+ * The trust chip: the model's angles in this browser on the loaded clip
+ * against the clip's published ones, computed in Python by the same runtime on
+ * the reference decoder's frames. It passes only when this browser decoded
+ * those very frames (`check` "match") and every frame run so far is within
+ * the clip's `tolerance`; one frame beyond it fails the check. `state` is the
+ * cockpit's, or "absent" when the demo's code never started.
+ */
+export function parityState(agreement: Agreement | null, state: CockpitState | "absent"): { look: ParityLook; text: string } {
+  if (state === "absent") {
+    return { look: "note", text: "The live check needs the demo, which could not start in this browser." };
+  }
   if (state === "unavailable") {
-    return "The live check needs the demo, which could not run here.";
+    return { look: "note", text: "The live check needs the demo, and the demo is not running." };
   }
   if (agreement === null || agreement.compared === 0) {
-    return `Checking this browser against ${PYTHON}…`;
+    return { look: "checking", text: `Checking this browser against ${PYTHON}…` };
   }
-  const { check, compared, total, maxDiffDeg } = agreement;
-  const name = clipName(agreement.clip);
+  const { check, compared, total, maxDiffDeg, clip } = agreement;
+  const name = clipName(clip);
+  const model = MODEL_NAMES[agreement.model];
+  const angles = `${model.charAt(0).toUpperCase()}${model.slice(1)}’s angles`;
   if (check === "unverified") {
-    return `This browser could not check its decoded frames, so its angles are not compared with ${PYTHON}.`;
+    return {
+      look: "note",
+      text: "This browser could not check that it decoded the clip’s frames as Python did, so its angles are not compared.",
+    };
   }
   if (!Number.isFinite(maxDiffDeg)) {
-    return `This browser’s angles on ${name} do not match ${PYTHON}.`;
+    return { look: "mismatch", text: `${angles} in this browser do not match ${PYTHON} on ${name}.` };
   }
   if (check === "differ") {
-    return `This browser decodes ${name} a little differently, so its angles differ from ${PYTHON} by up to ${fmtDeg(maxDiffDeg, 2)} on the ${fmtCount(compared)} frames it has run.`;
+    return {
+      look: "note",
+      text:
+        `This browser decodes ${name} differently from Python, so ${model}’s angles here differ from ${PYTHON} ` +
+        `by up to ${upperBound(maxDiffDeg)} on the ${fmtCount(compared)} frames it has run.`,
+    };
   }
+  const tolerance = clip.tolerance?.angle_deg;
+  if (tolerance === undefined) {
+    return {
+      look: "note",
+      text:
+        `${angles} in this browser differ from ${PYTHON} by at most ${upperBound(maxDiffDeg)} on the ` +
+        `${fmtCount(compared)} frames it has run; the clip records no tolerance to judge that by.`,
+    };
+  }
+  if (maxDiffDeg > tolerance) {
+    return {
+      look: "mismatch",
+      text:
+        `${angles} in this browser do not match ${PYTHON}: on ${name} they differ by up to ` +
+        `${upperBound(maxDiffDeg)}, more than the ${upperBound(tolerance)} allowed.`,
+    };
+  }
+  const within = maxDiffDeg === 0 ? null : upperBound(maxDiffDeg);
   if (compared < total) {
-    const each = maxDiffDeg === 0 ? `identical to ${PYTHON}` : `${within(maxDiffDeg).replace(/^to /, "")} of ${PYTHON}`;
-    return `Checking live: ${fmtCount(compared)} of ${fmtCount(total)} frames of ${name} so far, every one ${each}.`;
+    const each = within === null ? `identical to ${PYTHON}` : `within ${within} of ${PYTHON}`;
+    return {
+      look: "checking",
+      text: `Checking live: ${fmtCount(compared)} of ${fmtCount(total)} frames of ${name} so far, every one ${each}.`,
+    };
   }
-  return `Checked live: on all ${fmtCount(total)} frames of ${name}, this browser’s angles match ${PYTHON} ${within(maxDiffDeg)}.`;
+  return {
+    look: "checked",
+    text:
+      `Checked live: on all ${fmtCount(total)} frames of ${name}, ${model}’s angles in this browser match ` +
+      `${PYTHON} ${within === null ? "exactly" : `to within ${within}`}.`,
+  };
 }
 
 // -- How it works ------------------------------------------------------------------------
 
-/** How long before the frame on screen each history frame was taken. */
-function lagMs(clip: Clip, lag: number): string {
-  return fmtMs((lag / clip.fps) * 1000, 0);
+/** "the 2018 drive" for "drive2018". */
+function driveName(drive: string): string {
+  const year = /(\d{4})$/.exec(drive)?.[1];
+  return year ? `the ${year} drive` : "the other drive";
 }
 
-export function framesTitle(clip: Clip): string {
+export function framesTitle(clip: Clip, timing: FrameTiming): string {
   const lags = clip.frame_lags;
   if (lags.length === 0) return "One frame at a time";
+  if (timing.interval === null) {
+    // Without timestamps the spacing is a number of frames, not a time.
+    return lags.length === 1
+      ? `This frame and the one ${countWord(lags[0] as number)} before it`
+      : `This frame and the ${countWord(lags.length)} before it`;
+  }
   const count = capitalised(countWord(lags.length + 1));
-  if (lags.length === 1) return `${count} frames, ${lagMs(clip, lags[0] as number)} apart`;
-  return `${count} frames, up to ${lagMs(clip, Math.max(...lags))} apart`;
+  if (lags.length === 1) return `${count} frames, ${lagText(lags[0] as number, timing)} apart`;
+  return `${count} frames, up to ${lagText(Math.max(...lags), timing)} apart`;
 }
 
 /** The labels of the frames shown in the first step, the frame on screen first. */
-export function framesAges(clip: Clip): string[] {
-  return ["now", ...clip.frame_lags.map((lag) => `${lagMs(clip, lag)} before`)];
+export function framesAges(clip: Clip, timing: FrameTiming): string[] {
+  return ["now", ...clip.frame_lags.map((lag) => `${lagText(lag, timing)} before`)];
 }
 
-export function framesText(clip: Clip): string {
+export function framesText(clip: Clip, timing: FrameTiming): string {
   const size = `${clip.sprite.frame_w} × ${clip.sprite.frame_h} pixels`;
   const lags = clip.frame_lags;
   if (lags.length === 0) {
@@ -205,10 +283,18 @@ export function framesText(clip: Clip): string {
   }
   const history =
     lags.length === 1
-      ? `the one ${lagMs(clip, lags[0] as number)} before it`
-      : `the ones ${lags.map((lag) => lagMs(clip, lag)).join(" and ")} before it`;
+      ? `the one ${lagText(lags[0] as number, timing)} before it`
+      : `the ones ${lags.map((lag) => lagText(lag, timing)).join(" and ")} before it`;
+  const spacing =
+    timing.interval !== null
+      ? ""
+      : timing.reference === null
+        ? " This drive’s frames carry no timestamps, so their spacing is counted in frames."
+        : ` This drive’s frames carry no timestamps; on ${driveName(timing.reference.drive)}, whose frames do, ` +
+          `${lagText(Math.max(...lags), { interval: null, reference: null })} are ` +
+          `${lagText(Math.max(...lags), { interval: timing.reference.interval, reference: null })} apart.`;
   return (
-    `The frame on screen and ${history}, cropped to the road and shrunk to ${size}. ` +
+    `The frame on screen and ${history}, cropped to the road and shrunk to ${size}.${spacing} ` +
     `${capitalised(countWord(lags.length + 1))} frames show which way the view is moving, which one frame cannot.`
   );
 }

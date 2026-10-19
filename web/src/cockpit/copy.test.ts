@@ -72,15 +72,26 @@ describe("splitTitle", () => {
 });
 
 describe("eyeCaption", () => {
-  it("states the input's size and the history frame's age from the clip", () => {
-    expect(eyeCaption(clip())).toBe(
+  const timed = { interval: 0.056999921798706055, reference: null };
+  const untimed = { interval: null, reference: { drive: "drive2018", interval: 0.057 } };
+
+  it("states the input's size and the history frame's age, from the drive's own timestamps", () => {
+    expect(eyeCaption(clip(), timed)).toBe(
       "What the model gets: 200 × 66 pixels of this frame and of the one 114 ms before it, with where it looked.",
     );
   });
 
-  it("follows the clip's own lags and rate", () => {
-    expect(eyeCaption(clip({ frame_lags: [1, 3], fps: 10 }))).toMatch(/the ones 100 ms and 300 ms before it/);
-    expect(eyeCaption(clip({ frame_lags: [] }))).toBe(
+  it("counts frames, not milliseconds, on a drive without timestamps", () => {
+    expect(eyeCaption(clip({ drive: "drive2017" }), untimed)).toBe(
+      "What the model gets: 200 × 66 pixels of this frame and of the one two frames before it, with where it looked.",
+    );
+  });
+
+  it("follows the clip's own lags", () => {
+    expect(eyeCaption(clip({ frame_lags: [1, 3] }), { interval: 0.1, reference: null })).toMatch(
+      /the ones 100 ms and 300 ms before it/,
+    );
+    expect(eyeCaption(clip({ frame_lags: [] }), timed)).toBe(
       "What the model gets: 200 × 66 pixels of this frame, with where it looked.",
     );
   });
