@@ -37,6 +37,12 @@ export = [
 figures = [
     "matplotlib>=3.8,<4",
 ]
+# running the narrative notebooks: Jupyter's executor and kernel, and the figures they draw
+notebooks = [
+    "nbconvert>=7.16,<8",
+    "ipykernel>=6.29,<8",
+    "matplotlib>=3.8,<4",
+]
 dev = [
     "pytest>=8,<10",
     "onnx>=1.15,<2",

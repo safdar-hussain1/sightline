@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from sightline.evaluate import REGIME_BINS, SIGN_MIN_ABS_DEG
+from sightline.evaluate import TOLERANCES_DEG, within_key
 
 REPO = Path(__file__).resolve().parents[1]
 NOTEBOOKS = ("01-data-and-leakage.ipynb", "02-results.ipynb")
@@ -182,6 +182,36 @@ def test_the_results_notebook_shows_the_recipe_the_reports_record():
     _assert_shows("02-results.ipynb", tokens=tokens)
 
 
+def test_the_results_notebook_shows_where_and_with_what_the_runs_were_trained_and_evaluated():
+    summary, runs = _report("summary.json"), _runs()
+    devices: dict = {}
+    for r in runs.values():  # in the order of the run reports' names, as the notebook counts them
+        devices[r["train_device"]] = devices.get(r["train_device"], 0) + 1
+    assert {r["code_version"] for r in runs.values()} == set(summary["code_versions"]["train"])
+    assert {r["eval_code_version"] for r in runs.values()} == set(summary["code_versions"]["eval"])
+    tokens = [f"trained at commit {', '.join(c[:7] for c in summary['code_versions']['train'])} on "
+              + ", ".join(f"{device} ({count} runs)" for device, count in devices.items())
+              + f"; evaluated at commit {', '.join(c[:7] for c in summary['code_versions']['eval'])} on the "
+              f"{summary['device']}",
+              "libraries: " + ", ".join(f"{name} {version}" for name, version in sorted(summary["versions"].items()))]
+    _assert_shows("02-results.ipynb", tokens=tokens)
+
+
+def test_the_results_notebook_shows_that_each_paired_comparison_is_on_one_set_of_frames():
+    summary, leakage, runs = _report("summary.json"), _report("leakage.json"), _runs()
+    compared = [(runs[f"{DRIVE}_{model}_leaky_s{p['seed']}"]["paired"]["frames_sha256"],
+                 runs[f"{DRIVE}_{model}_blocked_s{p['seed']}"]["paired"]["frames_sha256"])
+                for model, entry in summary["paired_leakage"].items() for p in entry["per_seed"]]
+    # what the notebook prints as True holds in the reports, and is not true of nothing
+    assert compared and all(shuffled == blocked for shuffled, blocked in compared)
+    first = {runs[f"{DRIVE}_{model}_{protocol}_s{leakage['seed']}"]["paired"]["frames_sha256"]
+             for model in summary["paired_leakage"] for protocol in ("leaky", "blocked")}
+    assert first == {leakage["paired"]["frames_sha256"]}
+    _assert_shows("02-results.ipynb", tokens=[
+        f"each seed's two models were scored on the same frames: True ({len(compared)} pairs of run reports)",
+        f"seed {leakage['seed']}'s paired frames are the ones reports/leakage.json analyses: True"])
+
+
 def test_the_results_notebook_shows_the_splits_and_their_gaps():
     summary, leakage, runs = _report("summary.json"), _report("leakage.json"), _runs()
     rows, medians = [], []
@@ -239,6 +269,11 @@ def test_the_results_notebook_shows_the_ladder_the_paired_measurement_and_the_gr
                          f"{entry['zero_mae_deg']:.2f}", _pm(skill, 3), f"{wins} of {len(entry['seeds'])}"])
             skills.append(f"{entry['rung']} {skill['mean']:.3f}")
         tokens.append(f"{LABELS[model]}: skill on each rung, " + ", ".join(skills))
+        for entry in (e for e in ladder if e["protocol"] == "leaky"):
+            zeros = [runs[run]["test"]["baselines"]["zero"]["mae_deg"] for run in summary["groups"][f"{model}/leaky"]["runs"]]
+            assert len(zeros) == len(entry["seeds"]) > 1  # a mean over the seeds' own test sets
+            tokens.append(f"{LABELS[model]}, shuffled rung: always straight ahead on each seed's own test frames "
+                          + ", ".join(f"{z:.2f}" for z in zeros) + f", mean {entry['zero_mae_deg']:.2f}")
     for model, entry in summary["paired_leakage"].items():
         tokens.append(f"{LABELS[model]}: on identical frames the blocked-split error is {_pm(entry['ratio'])} times the "
                       f"shuffled-split error (per seed: {_per_seed(entry['ratio'])}); "
@@ -277,8 +312,10 @@ def test_the_claims_in_the_results_text_hold_in_the_run_reports():
     runs = _runs()
 
     def scores(model, protocol, split):
-        return [(r[split]["model"]["mae_deg"], r[split]["baselines"]["zero"]["mae_deg"])
-                for r in runs.values() if r["model"] == model and r["protocol"] == protocol]
+        found = [(r[split]["model"]["mae_deg"], r[split]["baselines"]["zero"]["mae_deg"])
+                 for r in runs.values() if r["model"] == model and r["protocol"] == protocol]
+        assert found, f"no {model} run on the {protocol} split"  # every seed of nothing is not every seed
+        return found
 
     def ahead_in_every_seed(model, protocol, split="test"):
         return all(mae < zero for mae, zero in scores(model, protocol, split))
@@ -296,7 +333,9 @@ def test_the_claims_in_the_results_text_hold_in_the_run_reports():
     assert ahead_in_every_seed("sightlinenet", "leaky") and ahead_in_every_seed("pilotnet", "leaky")
     # the model a shuffled split trains: SightlineNet's is no worse on another day in any seed, PilotNet's worse in every
     # seed, and neither of PilotNet's two beats straight ahead there
-    for seed in sorted({r["seed"] for r in runs.values()}):
+    seeds = sorted({r["seed"] for r in runs.values()})
+    assert len(seeds) > 1
+    for seed in seeds:
         sl = [runs[f"{DRIVE}_sightlinenet_{protocol}_s{seed}"]["cross_drive"]["model"]["mae_deg"] for protocol in ("leaky", "blocked")]
         pn = [runs[f"{DRIVE}_pilotnet_{protocol}_s{seed}"]["cross_drive"]["model"]["mae_deg"] for protocol in ("leaky", "blocked")]
         zero = runs[f"{DRIVE}_pilotnet_blocked_s{seed}"]["cross_drive"]["baselines"]["zero"]["mae_deg"]
@@ -313,14 +352,16 @@ def test_the_results_notebook_shows_the_baselines_and_the_regimes():
         rows.append([title, f"{s['n']:,}", f"{s['model']['mae_deg']:.2f}", f"{b['zero']['mae_deg']:.2f}",
                      f"{b['mean']['mae_deg']:.2f}", f"{b['zoh']['mae_deg']:.2f}", f"{b['extrap']['mae_deg']:.2f}",
                      f"{s['pearson_r']:.3f}", f"{s['sign_agreement']:.1%}"])
-    t, smooth = run["test"]["model"], run["test"]["smoothness"]
-    tokens = [f"sign agreement: the share of frames steered at least {SIGN_MIN_ABS_DEG:g} deg either way on which the "
-              "model turns the wheel the same way as the human",
-              f"test frames within 1.5 / 5 / 15 deg of the human: {t['within_1p5_deg']:.1%} / {t['within_5_deg']:.1%} / "
-              f"{t['within_15_deg']:.1%}; median error {t['medae_deg']:.2f} deg, RMSE {t['rmse_deg']:.2f} deg",
+    t, smooth, cutoffs = run["test"]["model"], run["test"]["smoothness"], summary["cutoffs"]
+    tolerances = cutoffs["tolerances_deg"]
+    tokens = [f"sign agreement: the share of frames steered at least {cutoffs['sign_min_abs_deg']:g} deg either way on "
+              "which the model turns the wheel the same way as the human",
+              "test frames within " + " / ".join(f"{x:g}" for x in tolerances) + " deg of the human: "
+              + " / ".join(f"{t[within_key(x)]:.1%}" for x in tolerances)
+              + f"; median error {t['medae_deg']:.2f} deg, RMSE {t['rmse_deg']:.2f} deg",
               f"frame-to-frame change on the test split: model {smooth['model']['mean_abs_step_deg']:.2f} deg, "
               f"human {smooth['human']['mean_abs_step_deg']:.2f} deg on average"]
-    regimes, (low, high) = summary["regimes"], REGIME_BINS
+    regimes, (low, high) = summary["regimes"], cutoffs["regime_bins_deg"]
     columns = [entry["regimes"] for entry in regimes["models"].values()] + [regimes["zero"]]
     names = {"straight": f"straight, under {low:g} deg either way", "gentle": f"gentle, {low:g} to {high:g} deg",
              "sharp": f"sharp, {high:g} deg or more"}
@@ -366,6 +407,16 @@ def test_the_results_notebook_shows_the_ablation_the_standard_recipe_and_the_exp
 
 
 # --- notebook 01 -------------------------------------------------------------------------------
+
+def test_the_data_notebook_gives_the_memoriser_one_column_per_tolerance_of_the_evaluation_code():
+    leakage = _report("leakage.json")
+    rows = [["training frames searched", "frames", "MAE (deg)", "RMSE", "median error",
+             *(f"within {x:g} deg" for x in TOLERANCES_DEG)]]
+    for protocol, m in leakage["memoriser"].items():
+        rows.append([RUNGS[protocol], str(m["n"]), f"{m['mae_deg']:.3f}", f"{m['rmse_deg']:.2f}", f"{m['medae_deg']:.2f}",
+                     *(f"{m[within_key(x)]:.1%}" for x in TOLERANCES_DEG)])
+    _assert_shows("01-data-and-leakage.ipynb", rows=rows)
+
 
 def test_the_data_notebook_shows_the_reports_current_values():
     leakage, summary = _report("leakage.json"), _report("summary.json")
