@@ -1,24 +1,54 @@
 /**
- * The steering wheel: the model's wheel, the driver's ghost, and the gap
- * between them.
+ * The steering wheel: the model's wheel, the driver's, and the gap between
+ * them.
  *
  * Angles are steering-wheel degrees, clockwise positive, as the labels and the
- * model use them. The wheel turns by the angle itself, never wrapped: a label
+ * model use them. Each wheel turns by its angle itself, never wrapped: a label
  * of 501.8° is a wheel turned past one and a quarter turns, and the drawing
- * says so. The model's wheel is drawn solid in its violet; the driver's is a
- * ghost -- faint spokes behind the model's and an outlined pointer on the track
- * outside the rim -- and the arc along that track between the two pointers is
- * how far apart they are.
+ * says so.
+ *
+ * The model's wheel is solid, in its violet. The driver's is drawn over it as
+ * a pale wireframe -- the centre lines of its spokes, reaching just past the
+ * rim, and a tick across the rim at its top -- so where the two agree the pale
+ * lines run down the middle of the violet spokes, and where they differ a
+ * second wheel shows. Outside the rim a track carries the comparison at a
+ * glance: the model's pointer reaches up to it from the rim, the driver's pale
+ * pointer down to it from outside, and the arc along it between the two
+ * pointers is the gap. The pointers stop short of the track on either side,
+ * so the arc is never hidden under one of them, even when the two are only a
+ * few degrees apart -- the size of most gaps.
  */
 
-/** The drawing's centre; its viewBox is twice this on each side. */
+/** The drawing's centre. */
 export const WHEEL_CENTRE = 120;
+/** How far from the centre the drawing reaches: its viewBox is the square
+ * this far round the centre. */
+export const WHEEL_EXTENT = 126;
 
-/** Radius of the track outside the rim that the pointers and the gap ride. */
-const TRACK_R = 111;
-/** Radius of the rim's centre line. */
-const RIM_R = 88;
-/** Half the angular width of the stripe at the top of the rim, in degrees. */
+/** The rim: the radius of its centre line, and its width. */
+export const RIM_R = 80;
+export const RIM_WIDTH = 15;
+const HUB_R = 24;
+
+/** The circle the gap is drawn along, and the gap's width: wide enough to
+ * read when the two wheels are a few degrees apart. */
+export const TRACK_R = 106;
+export const GAP_WIDTH = 9;
+
+/** A pointer at twelve o'clock: a triangle from its `base` to its `tip`
+ * (radii), `half` wide either side of the centre line at its base. */
+export interface Pointer {
+  readonly base: number;
+  readonly tip: number;
+  readonly half: number;
+}
+
+/** The model's pointer stands on its rim and reaches up towards the track. */
+export const MODEL_POINTER: Pointer = { base: RIM_R + RIM_WIDTH / 2 + 1, tip: TRACK_R - GAP_WIDTH / 2 - 1, half: 7 };
+/** The driver's pointer hangs outside the track and reaches down towards it. */
+export const DRIVER_POINTER: Pointer = { base: WHEEL_EXTENT - 2, tip: TRACK_R + GAP_WIDTH / 2 + 1, half: 7.5 };
+
+/** Half the angular width of the stripe at the top of the model's rim, in degrees. */
 const STRIPE_HALF_DEG = 7;
 /** The largest gap the arc draws: an arc of a whole turn has no length. */
 const MAX_ARC_DEG = 359.5;
@@ -76,27 +106,41 @@ export function renderWheel(svg: SVGSVGElement, modelDeg: number | null, humanDe
   );
 }
 
+/** A pointer's triangle at twelve o'clock. */
+function pointerPath({ base, tip, half }: Pointer): string {
+  const c = WHEEL_CENTRE;
+  return `M${c} ${c - tip}L${c - half} ${c - base}H${c + half}Z`;
+}
+
+/** Three spokes, left, right and down, between radii `inner` and `outer`; the
+ * side spokes sit a little below the centre line, as a steering wheel's do. */
+function spokesPath(inner: number, outer: number): string {
+  const c = WHEEL_CENTRE;
+  return `M${c - outer} ${c + 4}H${c - inner}M${c + inner} ${c + 4}H${c + outer}M${c} ${c + inner}V${c + outer}`;
+}
+
 /** The wheel, unturned. Decorative to assistive technology: the readouts
- * beside it carry the same numbers as text. */
+ * beside it carry the same numbers as text. Every length that decides whether
+ * two marks overlap is written here, not in the stylesheet. */
 export function wheelSvg(): string {
   const c = WHEEL_CENTRE;
-  const spokes = `M${c - 82} ${c + 4}H${c - 27}M${c + 27} ${c + 4}H${c + 82}M${c} ${c + 27}V${c + 82}`;
-  const pointer = (tip: number, base: number, half: number) =>
-    `M${c} ${c - tip}L${c - half} ${c - base}H${c + half}Z`;
+  const rimOuter = RIM_R + RIM_WIDTH / 2;
+  const box = `${c - WHEEL_EXTENT} ${c - WHEEL_EXTENT} ${2 * WHEEL_EXTENT} ${2 * WHEEL_EXTENT}`;
+  const ghost = `${spokesPath(HUB_R + 4, rimOuter + 4)}M${c} ${c - (RIM_R - RIM_WIDTH / 2)}V${c - rimOuter}`;
   return (
-    `<svg class="wheel" viewBox="0 0 ${2 * c} ${2 * c}" aria-hidden="true" focusable="false">` +
+    `<svg class="wheel" viewBox="${box}" aria-hidden="true" focusable="false">` +
     `<circle class="wheel__track" cx="${c}" cy="${c}" r="${TRACK_R}"/>` +
-    `<path class="wheel__gap" data-wheel="error" d=""/>` +
-    `<g class="wheel__turn wheel__ghost" data-wheel="human">` +
-    `<path class="wheel__ghost-spokes" d="${spokes}"/>` +
-    `<path class="wheel__ghost-pointer" d="${pointer(TRACK_R - 9, TRACK_R + 8, 8.5)}"/>` +
-    `</g>` +
+    `<path class="wheel__gap" data-wheel="error" d="" stroke-width="${GAP_WIDTH}"/>` +
     `<g class="wheel__turn wheel__model" data-wheel="model">` +
-    `<circle class="wheel__rim" cx="${c}" cy="${c}" r="${RIM_R}"/>` +
-    `<path class="wheel__stripe" d="${arc(-STRIPE_HALF_DEG, STRIPE_HALF_DEG, RIM_R, c, c)}"/>` +
-    `<path class="wheel__spokes" d="${spokes}"/>` +
-    `<circle class="wheel__hub" cx="${c}" cy="${c}" r="26"/>` +
-    `<path class="wheel__pointer" d="${pointer(TRACK_R - 7, TRACK_R + 6, 6.5)}"/>` +
+    `<circle class="wheel__rim" cx="${c}" cy="${c}" r="${RIM_R}" stroke-width="${RIM_WIDTH}"/>` +
+    `<path class="wheel__stripe" d="${arc(-STRIPE_HALF_DEG, STRIPE_HALF_DEG, RIM_R, c, c)}" stroke-width="${RIM_WIDTH}"/>` +
+    `<path class="wheel__spokes" d="${spokesPath(HUB_R + 2, RIM_R - 2)}"/>` +
+    `<circle class="wheel__hub" cx="${c}" cy="${c}" r="${HUB_R}"/>` +
+    `<path class="wheel__pointer" d="${pointerPath(MODEL_POINTER)}"/>` +
+    `</g>` +
+    `<g class="wheel__turn wheel__ghost" data-wheel="human">` +
+    `<path class="wheel__ghost-lines" d="${ghost}"/>` +
+    `<path class="wheel__ghost-pointer" d="${pointerPath(DRIVER_POINTER)}"/>` +
     `</g>` +
     `</svg>`
   );

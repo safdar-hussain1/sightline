@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { decodeSprites, framesFromSheet, mismatchedFrames, sha256Hex, stackAt, type SheetPixels } from "./sprites.ts";
+import { AssetError } from "../data/load.ts";
+import {
+  checkDecoded,
+  decodeSprites,
+  framesFromSheet,
+  mismatchedFrames,
+  sha256Hex,
+  stackAt,
+  type SheetPixels,
+  type SheetSteps,
+} from "./sprites.ts";
 
 const PIXELS = 200 * 66;
 
@@ -81,6 +91,28 @@ describe("mismatchedFrames", () => {
   });
 });
 
+describe("checkDecoded", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("says the frames match only when every one hashes to its recorded digest", async () => {
+    const frames = [flat(1), flat(2)];
+    const digests = await Promise.all(frames.map((f) => sha256Hex(f)));
+    expect(await checkDecoded(frames, digests)).toEqual({ status: "match" });
+    expect(await checkDecoded(frames, [digests[0] ?? "", "0".repeat(64)])).toEqual({ status: "differ", frames: [1] });
+  });
+
+  it("claims nothing where it cannot hash: no SubtleCrypto is unverified, never a match", async () => {
+    vi.stubGlobal("crypto", {}); // an insecure context has crypto without crypto.subtle
+    expect(await checkDecoded([flat(1)], ["anything"])).toEqual({ status: "unverified" });
+    vi.stubGlobal("crypto", undefined);
+    expect(await checkDecoded([flat(1)], ["anything"])).toEqual({ status: "unverified" });
+    vi.stubGlobal("crypto", { subtle: { digest: () => Promise.reject(new Error("not allowed")) } });
+    expect(await checkDecoded([flat(1)], ["anything"])).toEqual({ status: "unverified" });
+  });
+});
+
 describe("decodeSprites", () => {
   const clip = {
     lead_in: 2,
@@ -88,40 +120,73 @@ describe("decodeSprites", () => {
     sprite: { files: ["sprite-00.jpg", "sprite-01.jpg"], frames_per_sheet: 3, frame_w: 2, frame_h: 1 },
   };
 
-  /** Sheets whose every pixel of frame f (counted across sheets) is (f, f, f). */
-  function sheets(): Map<string, SheetPixels> {
-    const make = (first: number, count: number): SheetPixels => {
-      const data = new Uint8ClampedArray(2 * count * 4);
-      for (let row = 0; row < count; row += 1) {
-        for (let x = 0; x < 2; x += 1) data.set([first + row, first + row, first + row, 255], (row * 2 + x) * 4);
-      }
-      return { data, width: 2, height: count };
+  /** A sheet whose every pixel of frame f (counted across sheets) is (f, f, f). */
+  const sheet = (first: number, count: number, width = 2): SheetPixels => {
+    const data = new Uint8ClampedArray(width * count * 4);
+    for (let row = 0; row < count; row += 1) {
+      for (let x = 0; x < width; x += 1) data.set([first + row, first + row, first + row, 255], (row * width + x) * 4);
+    }
+    return { data, width, height: count };
+  };
+
+  /** Steps that serve these sheets, recording what happened in order. */
+  function steps(sheets: Record<string, SheetPixels>, log: string[] = []): SheetSteps {
+    return {
+      download: async (url) => {
+        log.push(`download ${url}`);
+        return new Blob([url]);
+      },
+      decode: async (_file, url) => {
+        log.push(`decode ${url}`);
+        const found = sheets[url];
+        if (!found) throw new Error(`no ${url}`);
+        return found;
+      },
     };
-    return new Map([
-      ["base/sprite-00.jpg", make(0, 3)],
-      ["base/sprite-01.jpg", make(3, 2)],
-    ]);
   }
 
+  const both = { "base/sprite-00.jpg": sheet(0, 3), "base/sprite-01.jpg": sheet(3, 2) };
+
   it("decodes every sheet, in order, into lead_in + n frames", async () => {
-    const loaded = sheets();
-    const urls: string[] = [];
-    const frames = await decodeSprites(clip, "base/", async (url) => {
-      urls.push(url);
-      const sheet = loaded.get(url);
-      if (!sheet) throw new Error(`no ${url}`);
-      return sheet;
-    });
-    expect(urls).toEqual(["base/sprite-00.jpg", "base/sprite-01.jpg"]);
+    const frames = await decodeSprites(clip, "base/", undefined, steps(both));
     expect(frames.map((f) => f[0])).toEqual([0, 1, 2, 3, 4]);
     expect(frames.every((f) => f.length === 2 * 1 * 3)).toBe(true);
   });
 
-  it("refuses sheets holding fewer frames than the clip needs", async () => {
-    const loaded = sheets();
+  it("downloads every sheet before decoding any, and says when each step starts", async () => {
+    const log: string[] = [];
+    await decodeSprites(clip, "base/", (phase) => log.push(phase), steps(both, log));
+    expect(log).toEqual([
+      "downloading",
+      "download base/sprite-00.jpg",
+      "download base/sprite-01.jpg",
+      "decoding",
+      "decode base/sprite-00.jpg",
+      "decode base/sprite-01.jpg",
+    ]);
+  });
+
+  it("refuses sheets holding fewer frames than the clip needs, as data of the wrong shape", async () => {
     const short = { ...clip, n: 4 };
-    await expect(decodeSprites(short, "base/", async (url) => loaded.get(url) as SheetPixels)).rejects.toThrow(
-      /6 frames/,
-    );
+    const failure = decodeSprites(short, "base/", undefined, steps(both));
+    await expect(failure).rejects.toThrow(/6 frames/);
+    await expect(failure).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("refuses a sheet of another width or height than the clip describes, as data of the wrong shape", async () => {
+    const wide = { "base/sprite-00.jpg": sheet(0, 3, 3), "base/sprite-01.jpg": sheet(3, 2) };
+    await expect(decodeSprites(clip, "base/", undefined, steps(wide))).rejects.toMatchObject({ kind: "invalid" });
+    const ragged = { "base/sprite-00.jpg": { ...sheet(0, 3), height: 4 }, "base/sprite-01.jpg": sheet(3, 2) };
+    await expect(decodeSprites(clip, "base/", undefined, steps(ragged))).rejects.toBeInstanceOf(AssetError);
+  });
+
+  it("passes on what went wrong with a sheet, so the page can say it", async () => {
+    const unreadable: SheetSteps = {
+      download: async (url) => new Blob([url]),
+      decode: async (_file, url) => {
+        throw new AssetError(`this browser could not decode ${url}`, "undecodable", url);
+      },
+    };
+    await expect(decodeSprites(clip, "base/", undefined, unreadable)).rejects.toMatchObject({ kind: "undecodable" });
   });
 });

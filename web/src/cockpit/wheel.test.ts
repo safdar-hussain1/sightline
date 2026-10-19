@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { WHEEL_CENTRE, errorArcPath, renderWheel, rimPoint, wheelRotationDeg, wheelSvg } from "./wheel.ts";
+import {
+  DRIVER_POINTER,
+  GAP_WIDTH,
+  MODEL_POINTER,
+  RIM_R,
+  RIM_WIDTH,
+  TRACK_R,
+  WHEEL_CENTRE,
+  WHEEL_EXTENT,
+  errorArcPath,
+  renderWheel,
+  rimPoint,
+  wheelRotationDeg,
+  wheelSvg,
+  type Pointer,
+} from "./wheel.ts";
 
 /** The numbers in an SVG path, in order. */
 const numbers = (d: string) => (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
@@ -108,6 +123,44 @@ describe("wheelSvg", () => {
     const markup = wheelSvg();
     for (const part of ["model", "human", "error"]) expect(markup).toContain(`data-wheel="${part}"`);
     expect(markup).toMatch(/^<svg\b[^>]*aria-hidden="true"/);
-    expect(markup).toContain(`viewBox="0 0 ${2 * WHEEL_CENTRE} ${2 * WHEEL_CENTRE}"`);
+    const from = WHEEL_CENTRE - WHEEL_EXTENT;
+    expect(markup).toContain(`viewBox="${from} ${from} ${2 * WHEEL_EXTENT} ${2 * WHEEL_EXTENT}"`);
+  });
+
+  it("draws the gap and the rim at the widths the pointers are placed by", () => {
+    const markup = wheelSvg();
+    expect(markup).toMatch(new RegExp(`class="wheel__gap"[^>]*stroke-width="${GAP_WIDTH}"`));
+    expect(markup).toMatch(new RegExp(`class="wheel__rim"[^>]*stroke-width="${RIM_WIDTH}"`));
+  });
+
+  it("draws the driver over the model, so the driver's lines are never hidden by its spokes", () => {
+    const markup = wheelSvg();
+    expect(markup.indexOf('data-wheel="human"')).toBeGreaterThan(markup.indexOf('data-wheel="model"'));
+  });
+});
+
+describe("the wheel's geometry", () => {
+  /** The farthest a pointer's triangle reaches from the centre. */
+  const reach = (p: Pointer) => Math.max(p.tip, Math.hypot(p.base, p.half));
+
+  it("keeps both pointers off the track, one inside and one outside, so neither can cover the gap", () => {
+    expect(MODEL_POINTER.tip).toBeGreaterThan(MODEL_POINTER.base); // points out, at the track
+    expect(DRIVER_POINTER.tip).toBeLessThan(DRIVER_POINTER.base); // points in, at the track
+    expect(reach(MODEL_POINTER)).toBeLessThan(TRACK_R - GAP_WIDTH / 2);
+    expect(DRIVER_POINTER.tip).toBeGreaterThan(TRACK_R + GAP_WIDTH / 2);
+  });
+
+  it("stands the model's pointer clear of its rim", () => {
+    expect(MODEL_POINTER.base).toBeGreaterThan(RIM_R + RIM_WIDTH / 2);
+  });
+
+  it("fits every mark inside the drawing", () => {
+    expect(reach(DRIVER_POINTER)).toBeLessThan(WHEEL_EXTENT);
+    expect(TRACK_R + GAP_WIDTH / 2).toBeLessThan(WHEEL_EXTENT);
+  });
+
+  it("draws a gap of a few degrees longer than it is wide, so it reads as an arc", () => {
+    const fourDegrees = TRACK_R * ((4 * Math.PI) / 180);
+    expect(fourDegrees + GAP_WIDTH).toBeGreaterThan(1.5 * GAP_WIDTH);
   });
 });

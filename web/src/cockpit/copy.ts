@@ -1,15 +1,38 @@
 /**
- * The cockpit's sentences that depend on the data.
+ * The cockpit's sentences: what it says about the data, and what it says when
+ * something cannot be had.
  *
- * Each is built from the clip file it describes, so a sentence cannot say
- * something its numbers do not: the twin is only said to look better on a clip
- * where its own error there is smaller, and how much of a clip it trained on
- * is quoted only where the clip file records it.
+ * Each sentence about the data is built from the clip file it describes, so it
+ * cannot say something its numbers do not: the twin is only said to look
+ * better on a clip where its own error there is smaller, how much of a clip it
+ * trained on is quoted only where the clip file records it, and the footage is
+ * never said to match the published frames unless every frame was checked.
  */
 
 import { AssetError } from "../data/load.ts";
 import type { Clip, ModelKey } from "../data/types.ts";
 import { fmtPct } from "../format.ts";
+import { CANNOT_RUN } from "./boot.ts";
+import type { DecodeCheck } from "./sprites.ts";
+
+/** Said once when the visitor chose the twin and it could not be downloaded
+ * or run: the demo carries on with Sightline. */
+export const TWIN_UNAVAILABLE = "The twin could not be loaded, so Sightline is shown instead; pick the twin again to retry.";
+
+/** The standing remark about how this browser decoded the clip's frames:
+ * nothing when they are the reference decoder's, otherwise why the angles on
+ * screen may stray a little from the published ones. `total` is the number of
+ * frames checked. */
+export function decodeNote(check: DecodeCheck, total: number): string {
+  switch (check.status) {
+    case "match":
+      return "";
+    case "differ":
+      return `This browser decodes ${check.frames.length} of the clip’s ${total} frames slightly differently from the reference decoder, so the model’s angles here can differ a little from the published ones.`;
+    case "unverified":
+      return "This browser could not check its decoded frames against the reference decoder’s, so the model’s angles here may differ a little from the published ones.";
+  }
+}
 
 /** What the visitor reads about the selected model on the clip on screen. */
 export function modelNote(model: ModelKey, clip: Clip | null): string {
@@ -66,5 +89,5 @@ export function failureMessage(error: unknown): string {
         return "This browser could not decode the clip’s footage, so the demo cannot run here.";
     }
   }
-  return "This browser could not run the model, so the demo cannot start.";
+  return CANNOT_RUN;
 }

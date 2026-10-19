@@ -4,11 +4,13 @@
  * The masthead and the cockpit's markup are already in the served HTML (the
  * build writes them in); `mountShell` only fills the masthead if the page
  * arrived without it. The cockpit's code, the model runtime and everything
- * they download come in a separate chunk, so the page is drawn before them.
+ * they download come in a separate chunk, so the page is drawn before them;
+ * if that chunk cannot be had, `bootCockpit` says the demo cannot run.
  */
 
 import "./styles.css";
 
+import { bootCockpit } from "./cockpit/boot.ts";
 import { mountShell } from "./shell.ts";
 import { initTheme } from "./theme.ts";
 
@@ -17,4 +19,4 @@ console.info("Sightline — built by Safdar Hussain · https://github.com/safdar
 mountShell();
 initTheme();
 
-void import("./cockpit/cockpit.ts").then(({ startCockpit }) => startCockpit());
+void bootCockpit(() => import("./cockpit/cockpit.ts"));

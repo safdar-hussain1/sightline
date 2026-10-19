@@ -2,7 +2,9 @@
  *
  * Colour carries meaning, and each colour has one job:
  *   violet  -- the model: its wheel, its line, and the page's one accent;
- *   ghost   -- the human driver: a neutral outline beside the model;
+ *   pale    -- the human driver: the console's own ink, drawn thin, beside
+ *              the model's solid violet;
+ *   orchid  -- the gap between the two on the wheel, and nothing else;
  *   heat    -- where the model looks: a ramp from night through violet and
  *              ember to pale sun, used for attention and for nothing else.
  * The ramp rises steadily in luminance, so "where it looks" reads as brightness
@@ -143,10 +145,13 @@
   --model: #b07af7;
   --model-stripe: #e7d6ff;
   --model-unlit: #3a3456;
-  --human: rgb(236 233 246 / 62%);
-  --human-shadow: rgb(236 233 246 / 24%);
-  /* The gap between the model's wheel and the driver's. */
-  --gap-arc: #ece9f6;
+  /* The driver: the console's ink at full strength, set apart from the model
+     by its drawing (thin lines over the solid violet), not by fading it. */
+  --human: #ece9f6;
+  /* The gap between the model's wheel and the driver's. Checked against both
+     marks on the console: no closer than 15 (OKLab x100) to either, 12 under
+     simulated red-green colour blindness. */
+  --gap-arc: #f0abfc;
   /* The error strip: one violet ramp, dim to bright, for how hard the driver
      was turning (checked: monotone lightness, 3.6:1 for the dimmest step on
      the strip's ground). */
@@ -457,10 +462,12 @@ svg {
 /* -- The cockpit ----------------------------------------------------------- */
 
 /* The live demo: the footage with the model's heat on it, the wheel, the
-   readouts and the strip, on one dark screen. On a phone it is one column,
-   footage first and the wheel right under it; on a wide screen the footage and
-   its controls take the left and the instruments the right. The build writes
-   this markup into the page, so it holds its final size from the first paint. */
+   readouts and the strip, on one dark screen. On a phone it is one column:
+   the two choices -- which footage, which model -- on top, then the footage
+   and the wheel right under it; on a wide screen the footage and its controls
+   take the left and the instruments the right, each under its own choice. The
+   build writes this markup into the page, so it holds its final size from the
+   first paint. */
 
 .cockpit {
   scroll-margin-top: var(--space-4);
@@ -470,12 +477,11 @@ svg {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "clips"
+    "choices"
     "screen"
     "instruments"
     "transport"
     "key"
-    "models"
     "note"
     "eye";
   gap: var(--space-4);
@@ -493,6 +499,15 @@ svg {
 
 .cockpit__side {
   display: contents;
+}
+
+/* The choices, stacked as one block on a phone; on a wide screen each takes
+   its own place in the grid. */
+.cockpit__choices {
+  grid-area: choices;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 @media (min-width: 40rem) {
@@ -514,6 +529,10 @@ svg {
     column-gap: var(--space-6);
     row-gap: var(--space-3);
     padding: var(--space-4) var(--space-5);
+  }
+
+  .cockpit__choices {
+    display: contents;
   }
 
   .cockpit__side {
@@ -705,6 +724,13 @@ html:not(.js) .windshield__status {
 [data-state="loading"] .windshield__band,
 [data-state="unavailable"] .windshield__band {
   opacity: 0;
+}
+
+/* Between clips, and when a clip cannot run, the last picture shown belongs
+   to no clip on screen: the windshield holds only its message. */
+[data-state="loading"] .windshield__video,
+[data-state="unavailable"] .windshield__video {
+  visibility: hidden;
 }
 
 .cockpit__noscript {
@@ -915,12 +941,20 @@ html:not(.js) .windshield__status {
 
 /* -- Instruments: the wheel and its readouts. */
 
+/* On a phone the wheel takes the larger share: the readouts need little more
+   than their widest figure. */
 .instruments {
   grid-area: instruments;
   display: grid;
-  grid-template-columns: minmax(8rem, 2fr) minmax(0, 3fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(7.5rem, 1fr);
   align-items: center;
   gap: var(--space-4);
+}
+
+@media (min-width: 40rem) {
+  .instruments {
+    grid-template-columns: minmax(10rem, 2fr) minmax(0, 3fr);
+  }
 }
 
 @media (min-width: 60rem) {
@@ -930,7 +964,7 @@ html:not(.js) .windshield__status {
   }
 
   .wheel-box {
-    inline-size: min(100%, 14.5rem);
+    inline-size: min(100%, 15.25rem);
     margin-inline: auto;
   }
 }
@@ -947,10 +981,11 @@ html:not(.js) .windshield__status {
   stroke-width: 1.5;
 }
 
+/* The widths that decide whether two marks overlap -- the rim's and the
+   gap's -- are written into the drawing (wheel.ts), not here. */
 .wheel__gap {
   fill: none;
   stroke: var(--gap-arc);
-  stroke-width: 6;
   stroke-linecap: round;
 }
 
@@ -962,21 +997,18 @@ html:not(.js) .windshield__status {
   transition: transform 60ms linear;
 }
 
-/* The driver's wheel is a shadow behind the model's: spokes wider and fainter
-   than the model's, so where the two agree it is a halo round each spoke, and
-   where they differ it shows as a second wheel turned to the driver's angle. */
-.wheel__ghost-spokes {
+/* The driver's wheel is a pale wireframe over the model's: where the two
+   agree its lines run down the middle of the violet spokes, and where they
+   differ it shows as a second, thinner wheel turned to the driver's angle. */
+.wheel__ghost-lines {
   fill: none;
-  stroke: var(--human-shadow);
-  stroke-width: 26;
+  stroke: var(--human);
+  stroke-width: 2.75;
   stroke-linecap: round;
 }
 
 .wheel__ghost-pointer {
-  fill: none;
-  stroke: var(--human);
-  stroke-width: 2.5;
-  stroke-linejoin: round;
+  fill: var(--human);
 }
 
 .wheel__model {
@@ -986,21 +1018,19 @@ html:not(.js) .windshield__status {
 .wheel__rim {
   fill: none;
   stroke: var(--wheel-ink);
-  stroke-width: 16;
   transition: stroke 400ms ease;
 }
 
 .wheel__stripe {
   fill: none;
   stroke: var(--model-stripe);
-  stroke-width: 16;
   transition: stroke 400ms ease;
 }
 
 .wheel__spokes {
   fill: none;
   stroke: var(--wheel-ink);
-  stroke-width: 13;
+  stroke-width: 12;
   stroke-linecap: round;
   transition: stroke 400ms ease;
 }
@@ -1028,6 +1058,18 @@ html:not(.js) .windshield__status {
 [data-state="loading"] .wheel__ghost,
 [data-state="unavailable"] .wheel__ghost {
   opacity: 0;
+}
+
+/* The frame on screen has no output from the model yet: its wheel goes unlit
+   rather than show the last frame's angle as this one's. The dimming waits a
+   moment, so the short waits of scrubbing never flicker. */
+.wheel-box[data-waiting="true"] .wheel__model {
+  --wheel-ink: var(--model-unlit);
+  --model-stripe: var(--model-unlit);
+}
+
+.wheel-box[data-waiting="true"] .wheel__model > * {
+  transition-delay: 150ms;
 }
 
 .readouts {
@@ -1087,16 +1129,13 @@ html:not(.js) .windshield__status {
 }
 
 .key--driver path {
-  fill: none;
-  stroke: var(--human);
-  stroke-width: 1.5;
-  stroke-linejoin: round;
+  fill: var(--human);
 }
 
 .key--gap path {
   fill: none;
   stroke: var(--gap-arc);
-  stroke-width: 2.5;
+  stroke-width: 3;
   stroke-linecap: round;
 }
 

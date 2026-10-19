@@ -10,9 +10,14 @@
  * clip's average error. The strip is also the clip's scrubber: a slider that
  * takes clicks, drags and the keyboard.
  *
- * It draws from the expected outputs in the clip file the moment the clip
- * loads, and the cockpit overwrites each column with the model's live output
- * as the browser computes it.
+ * The cockpit gives it the clip file's expected outputs the moment the clip
+ * loads -- when this browser's decoded frames are the ones those outputs were
+ * computed on -- and overwrites each column with the model's live output as
+ * the browser computes it.
+ *
+ * A disabled strip is inert -- no key or pointer moves the clip -- and is out
+ * of the tab order: the cockpit disables it whenever there is no running clip
+ * to move through, while one loads or after one has failed.
  */
 
 import type { ModelKey } from "../data/types.ts";
@@ -108,6 +113,9 @@ function readPalette(element: HTMLElement): Palette {
 /** Space above the columns for the playhead's knob, CSS pixels. */
 const KNOB = 6;
 
+/** The slider's spoken value while it holds no clip. */
+export const NO_CLIP_TEXT = "No clip loaded yet";
+
 export interface StripOptions {
   /** The visitor moved the clip to frame `k`. */
   onSeek(k: number): void;
@@ -123,6 +131,8 @@ export class ErrorStrip {
   private scale = 1;
   private average = Number.NaN;
   private frame = 0;
+  private fps = 1;
+  private enabled = false;
   private palette: Palette;
   private readonly context: CanvasRenderingContext2D | null;
 
@@ -134,14 +144,15 @@ export class ErrorStrip {
     this.context = canvas.getContext("2d");
     this.palette = readPalette(element);
     element.addEventListener("keydown", (event) => {
+      if (!this.live()) return;
       const target = stepForKey(event.key, this.frame, this.labels.length, this.fps);
-      if (target !== null && this.labels.length > 0) {
+      if (target !== null) {
         event.preventDefault();
         this.options.onSeek(target);
       }
     });
     element.addEventListener("pointerdown", (event) => {
-      if (this.labels.length === 0) return;
+      if (!this.live()) return;
       try {
         element.setPointerCapture(event.pointerId);
       } catch {
@@ -150,12 +161,36 @@ export class ErrorStrip {
       this.seekTo(event.clientX);
     });
     element.addEventListener("pointermove", (event) => {
-      if (element.hasPointerCapture(event.pointerId)) this.seekTo(event.clientX);
+      if (this.live() && element.hasPointerCapture(event.pointerId)) this.seekTo(event.clientX);
     });
     new ResizeObserver(() => this.draw()).observe(canvas);
   }
 
-  private fps = 1;
+  /** Whether input may move the clip: the strip is enabled and holds one. */
+  private live(): boolean {
+    return this.enabled && this.labels.length > 0;
+  }
+
+  /** Let keys and pointers move the clip, or make the strip inert and take it
+   * out of the tab order. */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    this.element.tabIndex = on ? 0 : -1;
+    this.element.setAttribute("aria-disabled", String(!on));
+  }
+
+  /** No clip: nothing drawn, nothing to move through. */
+  clear(): void {
+    this.labels = [];
+    this.regimes = [];
+    this.heights = new Float32Array(0);
+    this.average = Number.NaN;
+    this.frame = 0;
+    this.element.setAttribute("aria-valuemax", "0");
+    this.element.setAttribute("aria-valuenow", "0");
+    this.element.setAttribute("aria-valuetext", NO_CLIP_TEXT);
+    this.draw();
+  }
 
   private seekTo(clientX: number): void {
     const box = this.canvas.getBoundingClientRect();

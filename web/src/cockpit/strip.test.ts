@@ -1,6 +1,16 @@
+// @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 
-import { REGIME_BINS_DEG, columnHeights, errorScale, frameAtX, regimeOf, stepForKey } from "./strip.ts";
+import {
+  ErrorStrip,
+  NO_CLIP_TEXT,
+  REGIME_BINS_DEG,
+  columnHeights,
+  errorScale,
+  frameAtX,
+  regimeOf,
+  stepForKey,
+} from "./strip.ts";
 
 describe("regimeOf", () => {
   it("bins a frame by how hard the driver is turning, either way", () => {
@@ -70,5 +80,64 @@ describe("stepForKey", () => {
   it("leaves every other key alone", () => {
     expect(stepForKey("Enter", 10, 420, 17.5)).toBeNull();
     expect(stepForKey("a", 10, 420, 17.5)).toBeNull();
+  });
+});
+
+describe("ErrorStrip", () => {
+  /** A strip on a page, holding a clip of `n` frames, and the seeks it asks for. */
+  function strip(n = 10) {
+    const element = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    element.append(canvas);
+    document.body.append(element);
+    const seeks: number[] = [];
+    const bar = new ErrorStrip(element, canvas, { onSeek: (k) => seeks.push(k), describe: (k) => `frame ${k}` });
+    bar.setClip(Array.from({ length: n }, () => 0), 17.5, 1);
+    const press = (key: string) => element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    const point = (type: string) => element.dispatchEvent(new PointerEvent(type, { clientX: 5, pointerId: 1, bubbles: true }));
+    return { bar, element, seeks, press, point };
+  }
+
+  it("is inert until enabled: no key or pointer moves the clip", () => {
+    const { seeks, press, point, element } = strip();
+    press("ArrowRight");
+    press("End");
+    point("pointerdown");
+    point("pointermove");
+    expect(seeks).toEqual([]);
+    expect(element.tabIndex).toBe(-1);
+  });
+
+  it("moves the clip by key and by pointer once enabled", () => {
+    const { bar, seeks, press, point, element } = strip();
+    bar.setEnabled(true);
+    press("ArrowRight");
+    point("pointerdown");
+    expect(seeks).toHaveLength(2);
+    expect(seeks[0]).toBe(1);
+    expect(element.tabIndex).toBe(0);
+    expect(element.getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("goes inert again when disabled, even in the middle of a drag", () => {
+    const { bar, seeks, press, point, element } = strip();
+    bar.setEnabled(true);
+    point("pointerdown");
+    bar.setEnabled(false);
+    point("pointermove");
+    press("ArrowLeft");
+    expect(seeks).toHaveLength(1);
+    expect(element.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("holds nothing once cleared: no clip to move through, and says so", () => {
+    const { bar, seeks, press, element } = strip();
+    bar.setEnabled(true);
+    bar.setFrame(4, true);
+    bar.clear();
+    press("ArrowRight");
+    expect(seeks).toEqual([]);
+    expect(element.getAttribute("aria-valuetext")).toBe(NO_CLIP_TEXT);
+    expect(element.getAttribute("aria-valuenow")).toBe("0");
   });
 });

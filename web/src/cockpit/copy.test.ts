@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { AssetError } from "../data/load.ts";
 import type { Clip } from "../data/types.ts";
-import { eyeCaption, failureMessage, modelNote, splitTitle } from "./copy.ts";
+import { CANNOT_RUN } from "./boot.ts";
+import { TWIN_UNAVAILABLE, decodeNote, eyeCaption, failureMessage, modelNote, splitTitle } from "./copy.ts";
 
 /** The parts of a clip the copy reads. */
 function clip(overrides: Partial<Clip> = {}): Clip {
@@ -92,6 +93,7 @@ describe("failureMessage", () => {
     expect(failureMessage(new AssetError("x", "invalid", "u"))).toMatch(/not in the form this page reads/);
     expect(failureMessage(new AssetError("x", "undecodable", "u"))).toMatch(/could not decode the clip/);
     expect(failureMessage(new Error("no available backend found"))).toMatch(/could not run the model/);
+    expect(failureMessage(new Error("no available backend found"))).toBe(CANNOT_RUN);
   });
 
   it("never shows a URL or a stack of technical detail", () => {
@@ -104,5 +106,30 @@ describe("failureMessage", () => {
       expect(message).not.toMatch(/https?:|Failed to fetch|WebAssembly SIMD/);
       expect(message.endsWith(".")).toBe(true);
     }
+  });
+});
+
+describe("decodeNote", () => {
+  it("says nothing when every frame is the reference decoder's", () => {
+    expect(decodeNote({ status: "match" }, 422)).toBe("");
+  });
+
+  it("counts the frames this browser decodes differently, from the check itself", () => {
+    expect(decodeNote({ status: "differ", frames: [3, 9, 10] }, 422)).toBe(
+      "This browser decodes 3 of the clip’s 422 frames slightly differently from the reference decoder, so the model’s angles here can differ a little from the published ones.",
+    );
+  });
+
+  it("never claims a match it could not check", () => {
+    const note = decodeNote({ status: "unverified" }, 422);
+    expect(note).toMatch(/could not check/);
+    expect(note).toMatch(/may differ a little from the published ones\.$/);
+  });
+});
+
+describe("TWIN_UNAVAILABLE", () => {
+  it("says what the visitor now sees and what to do, in one sentence", () => {
+    expect(TWIN_UNAVAILABLE).toMatch(/^The twin could not be loaded, so Sightline is shown instead;/);
+    expect(TWIN_UNAVAILABLE.match(/\./g)).toHaveLength(1);
   });
 });
