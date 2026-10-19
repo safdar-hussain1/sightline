@@ -13,7 +13,8 @@
 
 import { MODEL_KEYS, type Clip, type ModelKey, type Results } from "./types.ts";
 
-export type AssetErrorKind = "missing" | "unreachable" | "invalid" | "undecodable";
+/** "stopped" is footage that loaded and then broke off. */
+export type AssetErrorKind = "missing" | "unreachable" | "invalid" | "undecodable" | "stopped";
 
 export class AssetError extends Error {
   constructor(

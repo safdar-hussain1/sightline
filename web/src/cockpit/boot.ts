@@ -29,14 +29,20 @@ export function showCannotRun(): void {
   }
 }
 
-/** Load the cockpit's chunk with `load` and start it; if either step fails,
- * say that the demo cannot run. */
-export async function bootCockpit(load: () => Promise<{ startCockpit(): unknown }>): Promise<void> {
+/** Load the cockpit's chunk with `load` and start it on `results` (the page's
+ * own request for results.json, so the file is fetched once); if either step
+ * fails, say that the demo cannot run. Resolves to the running cockpit, or
+ * null when there is none. */
+export async function bootCockpit<Results, Cockpit>(
+  load: () => Promise<{ startCockpit(results?: Results): Cockpit | null }>,
+  results?: Results,
+): Promise<Cockpit | null> {
   try {
     const { startCockpit } = await load();
-    startCockpit();
+    return startCockpit(results);
   } catch (error) {
     console.warn("The demo could not start:", error);
     showCannotRun();
+    return null;
   }
 }

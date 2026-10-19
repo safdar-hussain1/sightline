@@ -87,6 +87,8 @@ export function failureMessage(error: unknown): string {
         return "The demo’s data is not in the form this page reads, so it cannot run.";
       case "undecodable":
         return "This browser could not decode the clip’s footage, so the demo cannot run here.";
+      case "stopped":
+        return "The clip’s footage stopped loading. Pick the clip again to reload it.";
     }
   }
   return CANNOT_RUN;

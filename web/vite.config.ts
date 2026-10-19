@@ -1,18 +1,21 @@
 import { defineConfig, type Plugin } from "vite";
 
 import { injectCockpit } from "./src/cockpit/markup.ts";
+import { injectSections } from "./src/sections/markup.ts";
 import { injectShell } from "./src/shell.ts";
 
 /**
- * Writes the masthead -- the mark, the one <h1> and the lede -- and the
- * cockpit's markup into index.html, so the served page carries its heading
- * before any script runs and its first paint already has the demo's layout.
- * The markup comes from the same `shellHtml()` and `cockpitHtml()` the app uses.
+ * Writes the masthead -- the mark, the one <h1>, the lede and the nav -- the
+ * cockpit's markup and the markup of the sections around it into index.html,
+ * so the served page carries its heading and its words before any script
+ * runs, and its first paint already has the page's layout. The markup comes
+ * from the same `shellHtml()`, `cockpitHtml()` and section functions the app
+ * uses.
  */
 function staticShell(): Plugin {
   return {
     name: "sightline-static-shell",
-    transformIndexHtml: (html) => injectCockpit(injectShell(html)),
+    transformIndexHtml: (html) => injectSections(injectCockpit(injectShell(html))),
   };
 }
 

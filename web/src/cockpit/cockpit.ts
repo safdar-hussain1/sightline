@@ -20,6 +20,13 @@
  * Sightline stays on screen and a note says so. Only Sightline failing stops
  * the demo, and even then the clip picker stays usable, so the other clip --
  * or the same one, picked again -- can be tried.
+ *
+ * The page around the cockpit reads it through `LiveCockpit` (live.ts): How it
+ * works draws the model's input and answer on a frame of the clip, and the
+ * Results view compares this browser's answers with the clip's published ones.
+ * So the model finishes the clip even while the cockpit is scrolled away or
+ * the other view is on screen -- one pass per model and clip -- and only the
+ * footage pauses; a tab in the background stops both.
  */
 
 import type { InferenceSession } from "onnxruntime-web/wasm";
@@ -30,6 +37,7 @@ import { NO_VALUE, fmtDeg, steerParts } from "../format.ts";
 import { INPUT_H, INPUT_W, createSession, infer } from "../model/runner.ts";
 import { TWIN_UNAVAILABLE, decodeNote, eyeCaption, failureMessage, modelNote, splitTitle } from "./copy.ts";
 import { cropBand, videoOverhang } from "./geometry.ts";
+import { compareAngles, type Agreement, type LiveCockpit, type LiveFrame, type LiveStatus } from "./live.ts";
 import { mountCockpitMarkup } from "./markup.ts";
 import { seekTime, startFrameLoop, type FrameLoop } from "./player.ts";
 import { heatImageFromBytes, quantizeSaliency } from "./saliency.ts";
@@ -66,7 +74,7 @@ const PHASE_STATUS: Readonly<Record<SpritePhase, string>> = {
   decoding: "Decoding the frames the model reads",
 };
 
-type State = "loading" | "ready" | "unavailable";
+type State = LiveStatus["state"];
 
 /** The standing remarks under the strip, in the order they are read. */
 const REMARKS = ["twin", "decode"] as const;
@@ -214,7 +222,7 @@ class View {
   }
 }
 
-export class Cockpit {
+export class Cockpit implements LiveCockpit {
   private readonly view: View;
   private readonly strip: ErrorStrip;
   private results: Results | null = null;
@@ -251,7 +259,13 @@ export class Cockpit {
   /** A frame on screen still waiting for the model's output, drawn again when
    * the fill reaches it. */
   private awaiting: number | null = null;
-  private msPerFrame = 12;
+  /** The recent cost of one frame, ms: sizes the batches. A first guess until
+   * a batch has run. */
+  private msEstimate = 12;
+  /** What every batch after each session's first has cost, for `msPerFrame()`. */
+  private timedMs = 0;
+  private timedFrames = 0;
+  private readonly warmed = new WeakSet<InferenceSession>();
   private stripStale = false;
   /** Stops listening for the video of a clip another clip has replaced. */
   private dropVideo: (() => void) | null = null;
@@ -259,7 +273,11 @@ export class Cockpit {
   private readonly eyeContext: CanvasRenderingContext2D | null;
   private readonly eyeImage: ImageData | null;
 
-  constructor(root: HTMLElement) {
+  /** `results` is results.json, when the page has already asked for it. */
+  constructor(
+    root: HTMLElement,
+    private readonly resultsSource?: Promise<Results>,
+  ) {
     this.view = new View(root);
     this.heatContext = this.view.heat.getContext("2d");
     this.eyeContext = this.view.eye.getContext("2d");
@@ -284,7 +302,7 @@ export class Cockpit {
     try {
       this.enterLoading("Loading the model and the footage");
       const site = new URL("./", document.baseURI).href;
-      this.results = await loadResults(site);
+      this.results = await (this.resultsSource ?? loadResults(site));
       void this.session(PRIMARY).catch(() => undefined); // start the download now; a failure surfaces when the clip needs it
       const ids = Object.keys(this.results.assets.clips);
       const ordered = [...ids.filter((id) => id === HERO_CLIP), ...ids.filter((id) => id !== HERO_CLIP)];
@@ -447,6 +465,7 @@ export class Cockpit {
   private loadVideo(src: string, name: string): Promise<void> {
     this.dropVideo?.();
     const video = this.view.video;
+    const generation = this.generation;
     const loading = new Promise<void>((resolve, reject) => {
       const stop = () => {
         video.removeEventListener("loadeddata", ready);
@@ -454,16 +473,27 @@ export class Cockpit {
       };
       const ready = () => {
         stop();
+        video.addEventListener("error", stopped);
         resolve();
       };
       const failed = () => {
         stop();
         reject(new AssetError(`this browser could not play ${name}`, "undecodable", src));
       };
+      // Footage that has loaded can still stop -- the connection drops, or
+      // the decoder gives up -- and a frozen windshield must not pass for a
+      // running demo. The clip ends there, and picking it again reloads it.
+      const stopped = () => {
+        video.removeEventListener("error", stopped);
+        if (generation !== this.generation) return;
+        this.generation += 1; // whatever this clip's start still awaits gives up
+        this.unavailable(footageError(video.error, name, src));
+      };
       // When another clip takes the element, whoever waits on this load
       // belongs to the old clip and stops at its own generation check.
       this.dropVideo = () => {
         stop();
+        video.removeEventListener("error", stopped);
         resolve();
       };
       video.addEventListener("loadeddata", ready);
@@ -612,7 +642,16 @@ export class Cockpit {
       todo.forEach((k, i) => batch.set(stackAt(loaded.frames, clip.lead_in + k, clip.frame_lags), i * stride));
       const started = performance.now();
       const out = await infer(session, batch, todo.length, channels);
-      this.msPerFrame = 0.7 * this.msPerFrame + (0.3 * (performance.now() - started)) / todo.length;
+      const elapsed = performance.now() - started;
+      this.msEstimate = 0.7 * this.msEstimate + (0.3 * elapsed) / todo.length;
+      // A session's first run carries the runtime's warm-up; the cost quoted
+      // to the visitor counts only the runs after it.
+      if (this.warmed.has(session)) {
+        this.timedMs += elapsed;
+        this.timedFrames += todo.length;
+      } else {
+        this.warmed.add(session);
+      }
       todo.forEach((k, i) => {
         track.angles[k] = out.angles[i] as number;
         track.saliency.set(quantizeSaliency(out.saliency.subarray(i * MAP, (i + 1) * MAP)), k * MAP);
@@ -644,8 +683,11 @@ export class Cockpit {
       for (;;) {
         const loaded = this.loaded;
         const model = this.model;
-        if (this.state !== "ready" || this.hidden || !loaded || !this.ready.has(model)) break;
-        const size = Math.max(1, Math.min(MAX_BATCH, Math.floor(BATCH_BUDGET_MS / this.msPerFrame)));
+        // Scrolled away or behind the other view, the model still finishes the
+        // clip (the page's other sections read it); a tab in the background
+        // waits.
+        if (this.state !== "ready" || this.tabHidden || !loaded || !this.ready.has(model)) break;
+        const size = Math.max(1, Math.min(MAX_BATCH, Math.floor(BATCH_BUDGET_MS / this.msEstimate)));
         const next = this.nextMissing(this.track(loaded, model), this.frame, size);
         if (next.length === 0) break;
         try {
@@ -718,6 +760,7 @@ export class Cockpit {
   /** Put `model`, whose session exists, on screen. */
   private switchTo(model: ModelKey): void {
     this.model = model;
+    this.view.console.dataset["model"] = model;
     this.view.modelName.textContent = MODEL_NAMES[model];
     const loaded = this.state === "ready" ? this.loaded : null;
     this.view.note.textContent = modelNote(model, loaded?.clip ?? null);
@@ -728,16 +771,68 @@ export class Cockpit {
   }
 
   /** `model` (the twin) could not be downloaded or run: Sightline takes over
-   * and the visitor is told, once. Picking the twin again starts afresh. */
+   * and the visitor is told, once. Picking the twin again starts afresh. When
+   * the demo itself has already failed, its failure screen says all there is:
+   * the choice goes back to Sightline without a note. */
   private fallBack(model: ModelKey, error: unknown): void {
     console.warn("The twin could not be used:", error);
+    const session = this.ready.get(model);
     this.ready.delete(model);
     delete this.sessions[model];
+    // A session that arrived but cannot run is let go of, once any run
+    // queued before now has finished with it.
+    if (session) void this.exclusive(() => session.release()).catch(() => undefined);
     this.chosen = PRIMARY;
     this.view.checkModel(PRIMARY);
     if (this.state === "ready") this.view.say("");
-    this.remark("twin", TWIN_UNAVAILABLE);
+    if (this.state !== "unavailable") this.remark("twin", TWIN_UNAVAILABLE);
     this.switchTo(PRIMARY);
+  }
+
+  // -- What the page reads (LiveCockpit) ----------------------------------------------
+
+  status(): LiveStatus {
+    return { state: this.state, playing: this.playing, frame: this.frame, clip: this.loaded?.clip ?? null, model: this.model };
+  }
+
+  frameAt(k: number): LiveFrame | null {
+    const loaded = this.loaded;
+    if (!loaded || !Number.isInteger(k) || k < 0 || k >= loaded.clip.n) return null;
+    const { clip, frames } = loaded;
+    const t = clip.lead_in + k;
+    const inputs = [t, ...clip.frame_lags.map((lag) => t - lag)].flatMap((i) => frames[i] ?? []);
+    const track = loaded.tracks[this.model];
+    const done = track?.done[k] === 1;
+    return {
+      clip,
+      k,
+      model: this.model,
+      inputs,
+      angle: done && track ? (track.angles[k] as number) : null,
+      heat: done && track ? track.saliency.subarray(k * MAP, (k + 1) * MAP) : null,
+    };
+  }
+
+  agreement(): Agreement | null {
+    const loaded = this.loaded;
+    if (!loaded) return null;
+    const track = loaded.tracks[this.model];
+    const expected = loaded.clip.expected[this.model];
+    const { compared, maxDiff } = track
+      ? compareAngles(track.angles, track.done, expected)
+      : { compared: 0, maxDiff: Number.NaN };
+    return {
+      clip: loaded.clip,
+      model: this.model,
+      check: loaded.check.status,
+      compared,
+      total: loaded.clip.n,
+      maxDiffDeg: maxDiff,
+    };
+  }
+
+  msPerFrame(): number | null {
+    return this.timedFrames > 0 ? this.timedMs / this.timedFrames : null;
   }
 
   // -- Drawing ---------------------------------------------------------------------
@@ -929,6 +1024,7 @@ export class Cockpit {
       if (MODEL_KEYS.includes(input.value as ModelKey)) this.selectModel(input.value as ModelKey);
     });
     view.note.textContent = modelNote(this.model, null);
+    view.console.dataset["model"] = this.model;
 
     new IntersectionObserver(
       (entries) => {
@@ -944,13 +1040,27 @@ export class Cockpit {
   }
 }
 
-/** Mount the cockpit into the page and start it. Building it can throw (a
- * browser without what it needs); starting it reports its own failures on
- * screen. */
-export function startCockpit(): Cockpit | null {
+/** MediaError's codes for a picture the browser cannot decode, and for one it
+ * does not support (HTML's numbering). */
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
+/** Footage that stopped after it had loaded: a picture this browser cannot
+ * decode, or a download that broke off. */
+function footageError(error: { readonly code: number } | null, name: string, src: string): AssetError {
+  const decoding = error !== null && (error.code === MEDIA_ERR_DECODE || error.code === MEDIA_ERR_SRC_NOT_SUPPORTED);
+  return decoding
+    ? new AssetError(`this browser stopped decoding ${name}`, "undecodable", src)
+    : new AssetError(`${name} stopped loading`, "stopped", src);
+}
+
+/** Mount the cockpit into the page and start it, on `results` when the page
+ * has already asked for results.json. Building it can throw (a browser
+ * without what it needs); starting it reports its own failures on screen. */
+export function startCockpit(results?: Promise<Results>): Cockpit | null {
   const root = mountCockpitMarkup();
   if (!root) return null;
-  const cockpit = new Cockpit(root);
+  const cockpit = new Cockpit(root, results);
   void cockpit.start();
   return cockpit;
 }

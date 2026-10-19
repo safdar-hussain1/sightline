@@ -101,10 +101,15 @@
       // Before the first paint: a stored theme has to be on <html> before
       // anything is drawn, or every visit flashes the other theme. theme.ts
       // owns the choice after load and writes the same key. The "js" class
-      // shows the controls that need scripts (the theme toggle, the demo's
-      // status line); without scripts they stay out of sight.
+      // shows the controls that need scripts (the theme toggle, the views'
+      // nav, the demo's status line); without scripts they stay out of sight.
+      // A link straight to the results shows them from the first paint, not
+      // after the demo has flashed up (router.ts takes over after load).
       (function () {
         document.documentElement.classList.add("js");
+        if (location.hash.toLowerCase() === "#results") {
+          document.documentElement.setAttribute("data-view", "results");
+        }
         try {
           var theme = localStorage.getItem("sightline-theme");
           if (theme === "light" || theme === "dark") {
@@ -116,8 +121,8 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-DGLV7Ieo.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CrOmxQ7C.css">
+    <script type="module" crossorigin src="./assets/index-BvPeGG9W.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-nPlBpsmO.css">
   </head>
   <body>
     <header class="masthead" id="masthead">
@@ -135,14 +140,21 @@
           <h1 class="wordmark__name">Sightline</h1>
         </div>
         <p class="lede">A steering model you can watch drive. It runs in your browser on recorded road footage, turns its wheel beside the real driver’s, and shows where on the road it looks.</p>
+        <nav class="views-nav" aria-label="Primary" data-views-nav data-active="demo">
+          <a class="views-nav__link" href="#demo" data-view-link="demo" aria-current="page">Demo</a>
+          <a class="views-nav__link" href="#results" data-view-link="results">Results</a>
+        </nav>
         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch between the light and dark themes"><svg class="theme-toggle__icon theme-toggle__icon--moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.4 14.3A8.4 8.4 0 0 1 9.7 3.6a8.4 8.4 0 1 0 10.7 10.7Z" /></svg><svg class="theme-toggle__icon theme-toggle__icon--sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.35 5.35l1.55 1.55M17.1 17.1l1.55 1.55M5.35 18.65l1.55-1.55M17.1 6.9l1.55-1.55" /></svg></button>
       </div>
     </header>
 
     <main id="main">
-      <!-- The live demo. The build writes its markup in, so the first paint
-           already has its layout and nothing below it moves when it starts. -->
-      <section class="cockpit" id="cockpit" aria-label="Live demo">
+      <!-- Two views, chosen by the location's hash: the live demo, and the
+           results (#results). The build writes each section's markup in, so
+           the first paint already has its layout and nothing below it moves
+           when it starts. -->
+      <div class="view" data-view="demo">
+        <section class="cockpit" id="cockpit" aria-label="Live demo">
         <div class="cockpit__console wrap" data-state="loading">
           <div class="cockpit__choices">
             <fieldset class="picker picker--clips" data-cockpit="clips" disabled>
@@ -207,6 +219,155 @@
           <noscript><p class="cockpit__noscript">The live demo needs JavaScript.</p></noscript>
         </div>
       </section>
+        <section class="how" id="how-it-works" aria-labelledby="how-title">
+        <div class="how__inner wrap">
+          <div class="how__head">
+            <h2 class="how__title" id="how-title">How it works</h2>
+            <p class="how__lede">Each turn of the wheel above is one answer from the model. This is how it gets there, on the clip that is playing.</p>
+            <button class="how__toggle" type="button" data-how="toggle" data-playing="false" hidden><svg class="how__toggle-icon how__toggle-icon--pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg><svg class="how__toggle-icon how__toggle-icon--play" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l10.5-6.5z"/></svg><span data-how="toggle-label">Play</span><span class="visually-hidden"> the steps</span></button>
+          </div>
+          <ol class="how__steps" data-how="steps" data-live="false">
+            <li class="how-step how-step--frames">
+              <div class="how-step__visual">
+                <div class="how-frames" data-how="frames">
+                  <figure class="how-frame how-frame--back">
+                    <span class="how-frame__picture"><svg class="road" viewBox="0 0 200 66" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            <rect class="road__ground" width="200" height="66"/>
+            <path class="road__verge" d="M0 18h200v6H0z"/>
+            <path class="road__surface" d="M58 18h84l58 34v14H0V52z"/>
+            <path class="road__line" d="M99 19 82 66M101 19l17 47"/>
+            <path class="road__edge" d="M60 19 0 54M140 19l60 35"/>
+          </svg><canvas class="how-frame__canvas" data-how="frame-1" width="200" height="66"></canvas></span>
+                    <figcaption class="how-frame__age" data-how="age-1">just before</figcaption>
+                  </figure>
+                  <figure class="how-frame how-frame--front">
+                    <span class="how-frame__picture"><svg class="road" viewBox="0 0 200 66" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            <rect class="road__ground" width="200" height="66"/>
+            <path class="road__verge" d="M0 18h200v6H0z"/>
+            <path class="road__surface" d="M58 18h84l58 34v14H0V52z"/>
+            <path class="road__line" d="M99 19 82 66M101 19l17 47"/>
+            <path class="road__edge" d="M60 19 0 54M140 19l60 35"/>
+          </svg><canvas class="how-frame__canvas" data-how="frame-0" width="200" height="66"></canvas></span>
+                    <figcaption class="how-frame__age" data-how="age-0">now</figcaption>
+                  </figure>
+                </div>
+                <span class="how-step__wire" aria-hidden="true"><span class="how-step__pulse"></span></span>
+              </div>
+              <div class="how-step__text">
+                <h3 class="how-step__title" data-how="frames-title">Frames of the road</h3>
+                <p data-how="frames-text">The frame on screen and one taken just before it, cropped to the road and shrunk to the size the model reads. Together they show which way the view is moving.</p>
+              </div>
+            </li>
+            <li class="how-step how-step--graph">
+              <div class="how-step__visual">
+                <div class="how-graph" data-how="graph"><svg class="graph" viewBox="0 0 264 120" aria-hidden="true" focusable="false">
+            <rect class="graph__case" x="1" y="1" width="262" height="118" rx="14"/>
+            <path class="graph__wire" d="M12 64H36M50 64H66M82 64H98M116 64H132M152 64H166M186 64H202M216 64H222M226 64H244"/>
+            <path class="graph__back" pathLength="1" d="M176 82C176 108 52 110 42 106"/>
+            <path class="graph__back-tip" d="m46 100 -4 7 -5 -6"/>
+            <g class="graph__slab"><path class="graph__top" d="M36 27l7 -5h7l-7 5z"/><path class="graph__side" d="M43 27l7 -5v78l-7 5z"/><rect class="graph__front" x="36" y="27" width="7" height="78"/><rect class="graph__glow" x="36" y="27" width="7" height="78"/></g><g class="graph__slab"><path class="graph__top" d="M66 36l7 -5h9l-7 5z"/><path class="graph__side" d="M75 36l7 -5v60l-7 5z"/><rect class="graph__front" x="66" y="36" width="9" height="60"/><rect class="graph__glow" x="66" y="36" width="9" height="60"/></g><g class="graph__slab"><path class="graph__top" d="M98 44l7 -5h11l-7 5z"/><path class="graph__side" d="M109 44l7 -5v44l-7 5z"/><rect class="graph__front" x="98" y="44" width="11" height="44"/><rect class="graph__glow" x="98" y="44" width="11" height="44"/></g><g class="graph__slab"><path class="graph__top" d="M132 51l7 -5h13l-7 5z"/><path class="graph__side" d="M145 51l7 -5v30l-7 5z"/><rect class="graph__front" x="132" y="51" width="13" height="30"/><rect class="graph__glow" x="132" y="51" width="13" height="30"/></g><g class="graph__slab"><path class="graph__top" d="M166 55l7 -5h13l-7 5z"/><path class="graph__side" d="M179 55l7 -5v22l-7 5z"/><rect class="graph__front" x="166" y="55" width="13" height="22"/><rect class="graph__glow" x="166" y="55" width="13" height="22"/></g>
+            <rect class="graph__dense" x="202" y="44" width="4" height="40" rx="2"/><rect class="graph__glow" x="202" y="44" width="4" height="40" rx="2"/><rect class="graph__dense" x="212" y="51" width="4" height="26" rx="2"/><rect class="graph__glow" x="212" y="51" width="4" height="26" rx="2"/><rect class="graph__dense" x="222" y="58" width="4" height="12" rx="2"/><rect class="graph__glow" x="222" y="58" width="4" height="12" rx="2"/>
+            <circle class="graph__out" cx="248" cy="64" r="6"/>
+            <circle class="graph__glow graph__glow--out" cx="248" cy="64" r="6"/>
+          </svg></div>
+                <span class="how-step__wire" aria-hidden="true"><span class="how-step__pulse"></span></span>
+              </div>
+              <div class="how-step__text">
+                <h3 class="how-step__title">One ONNX graph, in your browser</h3>
+                <p>The trained network is a single ONNX file. It runs on this device, in WebAssembly, and no frame leaves the page. <span data-how="speed"></span></p>
+              </div>
+            </li>
+            <li class="how-step how-step--answer">
+              <div class="how-step__visual">
+                <div class="how-answer">
+                  <div class="how-answer__dial">
+                    <div class="how-answer__wheel" data-how="wheel"><svg class="wheel" viewBox="-6 -6 252 252" aria-hidden="true" focusable="false"><circle class="wheel__track" cx="120" cy="120" r="106"/><path class="wheel__gap" data-wheel="error" d="" stroke-width="9"/><g class="wheel__turn wheel__model" data-wheel="model"><circle class="wheel__rim" cx="120" cy="120" r="80" stroke-width="15"/><path class="wheel__stripe" d="M110.25 40.6A80 80 0 0 1 129.75 40.6" stroke-width="15"/><path class="wheel__spokes" d="M42 124H94M146 124H198M120 146V198"/><circle class="wheel__hub" cx="120" cy="120" r="24"/><path class="wheel__pointer" d="M120 19.5L113 31.5H127Z"/></g><g class="wheel__turn wheel__ghost" data-wheel="human"><path class="wheel__ghost-lines" d="M28.5 124H92M148 124H211.5M120 148V211.5M120 47.5V32.5"/><path class="wheel__ghost-pointer" d="M120 8.5L112.5 -4H127.5Z"/></g></svg></div>
+                    <p class="how-answer__angle" data-how="readout"><span class="how-answer__size" data-how="angle"></span> <span class="how-answer__side" data-how="side"></span></p>
+                  </div>
+                  <div class="how-answer__map">
+                    <span class="how-frame__picture"><svg class="road" viewBox="0 0 200 66" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            <rect class="road__ground" width="200" height="66"/>
+            <path class="road__verge" d="M0 18h200v6H0z"/>
+            <path class="road__surface" d="M58 18h84l58 34v14H0V52z"/>
+            <path class="road__line" d="M99 19 82 66M101 19l17 47"/>
+            <path class="road__edge" d="M60 19 0 54M140 19l60 35"/>
+          <defs><radialGradient id="how-heat-glow"><stop offset="0" class="road__heat-core"/><stop offset="0.55" class="road__heat-mid"/><stop offset="1" class="road__heat-edge"/></radialGradient></defs>
+            <ellipse cx="96" cy="34" rx="44" ry="15" fill="url(#how-heat-glow)"/>
+            <ellipse cx="150" cy="30" rx="26" ry="9" fill="url(#how-heat-glow)" opacity="0.6"/>
+          </svg><canvas class="how-frame__canvas" data-how="heat" width="200" height="66"></canvas></span>
+                    <p class="heat-key" aria-hidden="true"><span>less</span><span class="heat-key__ramp"></span><span>more</span></p>
+                  </div>
+                </div>
+              </div>
+              <div class="how-step__text">
+                <h3 class="how-step__title">An angle, and where it looked</h3>
+                <p>Out come a steering angle and a heat map of where it looked: the brighter the spot, the more that part of the road counted.</p>
+              </div>
+            </li>
+          </ol>
+          <p class="how__caveat">It estimates the steering angle being applied from what it sees. It does not drive.</p>
+        </div>
+      </section>
+        <section class="accuracy" id="accuracy" aria-labelledby="accuracy-title">
+        <div class="accuracy__inner wrap" data-accuracy="root" data-state="loading">
+          <h2 class="accuracy__title" id="accuracy-title">How accurate it is</h2>
+          <p class="accuracy__lead" data-accuracy="sentence">Sightline is scored on minutes of driving it never trained on, against always steering straight on the same frames.</p>
+          <figure class="bars" data-accuracy="figure">
+            <div class="bars__plot" role="img" data-accuracy="plot" aria-label="Mean error of Sightline and of always steering straight, on the same frames.">
+              <div class="bars__row bars__row--model">
+                <span class="bars__name">Sightline</span>
+                <span class="bars__track"><span class="bars__bar" data-accuracy="bar-model"></span><span class="bars__value" data-accuracy="value-model"></span></span>
+              </div>
+              <div class="bars__row bars__row--straight">
+                <span class="bars__name">Always steering straight</span>
+                <span class="bars__track"><span class="bars__bar" data-accuracy="bar-straight"></span><span class="bars__value" data-accuracy="value-straight"></span></span>
+              </div>
+            </div>
+            <figcaption class="bars__caption" data-accuracy="caption">Mean error on the frames its training held back, in degrees of steering-wheel angle.</figcaption>
+          </figure>
+          <p class="accuracy__leak" data-accuracy="leak">Test it the usual way, on shuffled frames, and the same kind of model looks better than it is on road it has not seen nearby.</p>
+          <p class="accuracy__links"><a class="accuracy__more" href="#results">See what the measurements found</a><a href="model-card.md">Read the model card</a></p>
+        </div>
+      </section>
+      </div>
+      <div class="view" data-view="results" hidden>
+        <section class="results" id="results-view" aria-labelledby="results-title">
+        <div class="results__inner wrap" data-results="root" data-state="loading">
+          <div class="results__head">
+            <h2 class="results__title" id="results-title">What the measurements found</h2>
+            <p class="results__lede" data-results="lede">How good a steering model looks depends on how it is tested. These are the headline numbers from its training runs.</p>
+          </div>
+          <ul class="headline" data-results="band" role="list">
+            <li class="finding finding--hero">
+              <p class="finding__values"><span class="count" data-count="ratio"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__also"><span class="finding__also-name">PilotNet</span><span class="count" data-count="ratio-pilotnet"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span></span></p>
+              <p class="finding__label">How much better testing on shuffled frames makes the same kind of model look</p>
+              <div class="ruler" role="img" data-results="ruler-paired" aria-label="Sightline’s error on the same frames"><p class="ruler__title" aria-hidden="true">Sightline’s error on the same frames</p><div class="ruler__row ruler__row--reported"><span class="ruler__name">shuffled split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-shuffled"></span><span class="ruler__value" data-results="value-paired-shuffled"></span></span></div><div class="ruler__row ruler__row--model"><span class="ruler__name">blocked split</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-paired-blocked"></span><span class="ruler__value" data-results="value-paired-blocked"></span></span></div></div>
+              <p class="finding__note" data-results="paired-note">Each network trained both ways and scored on the same held-out frames.</p>
+            </li>
+            <li class="finding">
+              <p class="finding__values"><span class="count" data-count="another-day"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span></p>
+              <p class="finding__label" data-results="another-day-label">Better than always steering straight, on a drive it never saw</p>
+              <div class="ruler" role="img" data-results="ruler-another-day" aria-label="Error on another day’s drive"><p class="ruler__title" aria-hidden="true">Error on another day’s drive</p><div class="ruler__row ruler__row--model"><span class="ruler__name">Sightline</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-model"></span><span class="ruler__value" data-results="value-day-model"></span></span></div><div class="ruler__row ruler__row--straight"><span class="ruler__name">steering straight</span><span class="ruler__track"><span class="ruler__bar" data-results="bar-day-straight"></span><span class="ruler__value" data-results="value-day-straight"></span></span></div></div>
+              <p class="finding__note" data-results="another-day-note">Sightline on another day’s drive, against steering straight on the same frames.</p>
+            </li>
+            <li class="finding">
+              <p class="finding__values finding__values--pair"><span class="finding__pair"><span class="count" data-count="memoriser-shuffled"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__split">shuffled split</span></span><span class="finding__pair"><span class="count" data-count="memoriser-blocked"><span class="count__final" aria-hidden="true"></span><span class="count__shown" aria-hidden="true"></span><span class="count__text visually-hidden"></span></span><span class="finding__split">blocked split</span></span></p>
+              <p class="finding__label">A lookup table that copies the angle of the most similar training frame</p>
+              <p class="finding__note" data-results="memoriser-note">It learns nothing, so its error only shows how close the test frames sit to training frames.</p>
+            </li>
+          </ul>
+          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path d="m6.2 10.3 2.5 2.5 5.1-5.4"/></svg><span data-results="trust-text">Checking this browser against the model run in Python…</span></p>
+          <section class="splits" aria-labelledby="splits-title">
+            <h3 class="splits__title" id="splits-title">Shuffled frames against held-back stretches</h3>
+            <dl class="splits__list">
+              <div class="splits__item"><dt>Shuffled split</dt><dd data-results="shuffled">Frames are dealt out at random, so most test frames sit right beside a frame the model trained on.</dd></div>
+              <div class="splits__item"><dt>Blocked split</dt><dd data-results="blocked">Whole stretches of road are held back, so every test frame is far from the frames the model trained on.</dd></div>
+            </dl>
+            <p class="splits__sources">Every number in this view is read from <a href="data/results.json">results.json</a>, which the repository generates from its training reports. The <a href="model-card.md">model card</a> says how the models were trained and where they fall short.</p>
+          </section>
+        </div>
+      </section>
+      </div>
     </main>
 
     <footer class="site-footer">

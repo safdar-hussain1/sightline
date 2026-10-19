@@ -1,5 +1,6 @@
 /**
- * The masthead: the mark, the page's one <h1>, the lede and the theme toggle.
+ * The masthead: the mark, the page's one <h1>, the lede, the nav between the
+ * page's two views and the theme toggle.
  *
  * Plain HTML with no behaviour, which is what lets the build write it into
  * index.html (see `injectShell`, called from vite.config.ts): the served page
@@ -32,6 +33,14 @@ const MOON = `<svg class="theme-toggle__icon theme-toggle__icon--moon" viewBox="
 
 const SUN = `<svg class="theme-toggle__icon theme-toggle__icon--sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.35 5.35l1.55 1.55M17.1 17.1l1.55 1.55M5.35 18.65l1.55-1.55M17.1 6.9l1.55-1.55" /></svg>`;
 
+/** The nav between the page's two views. The demo is the page as served; the
+ * router marks the view on screen (and the page's first script marks a deep
+ * link to the results before the first paint). */
+const NAV = `<nav class="views-nav" aria-label="Primary" data-views-nav data-active="demo">
+          <a class="views-nav__link" href="#demo" data-view-link="demo" aria-current="page">Demo</a>
+          <a class="views-nav__link" href="#results" data-view-link="results">Results</a>
+        </nav>`;
+
 /** The masthead's contents, written into `SHELL_ROOT`. */
 export function shellHtml(): string {
   return `
@@ -41,6 +50,7 @@ export function shellHtml(): string {
           <h1 class="wordmark__name">Sightline</h1>
         </div>
         <p class="lede">A steering model you can watch drive. It runs in your browser on recorded road footage, turns its wheel beside the real driver’s, and shows where on the road it looks.</p>
+        ${NAV}
         <button class="theme-toggle" id="${THEME_TOGGLE_ID}" type="button" aria-label="Switch between the light and dark themes">${MOON}${SUN}</button>
       </div>
     `;

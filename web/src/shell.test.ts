@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import page from "../index.html?raw";
+import { VIEW_NAMES } from "./router.ts";
 import { SHELL_ROOT, injectShell, shellHtml } from "./shell.ts";
 import { THEME_TOGGLE_ID } from "./theme.ts";
 
@@ -15,6 +16,23 @@ describe("the static shell", () => {
   it("holds the theme toggle the theme module wires up", () => {
     expect(shellHtml()).toContain(`id="${THEME_TOGGLE_ID}"`);
     expect(shellHtml()).toMatch(/<button\b[^>]*type="button"/);
+  });
+
+  it("holds the nav between the page's two views, the demo marked as the page served", () => {
+    const nav = /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(shellHtml());
+    expect(nav).not.toBeNull();
+    const links = [...(nav?.[1] ?? "").matchAll(/<a\b([^>]*)>([^<]*)<\/a>/g)].map((m) => ({ attrs: m[1] ?? "", text: m[2] }));
+    expect(links.map((l) => l.text)).toEqual(["Demo", "Results"]);
+    expect(links.map((l) => /data-view-link="(\w+)"/.exec(l.attrs)?.[1])).toEqual([...VIEW_NAMES]);
+    expect(links.map((l) => /href="([^"]+)"/.exec(l.attrs)?.[1])).toEqual(["#demo", "#results"]);
+    expect(links.map((l) => /aria-current="page"/.test(l.attrs))).toEqual([true, false]);
+  });
+
+  it("prints no number of its own", () => {
+    const text = shellHtml()
+      .replace(/<svg\b[\s\S]*?<\/svg>/g, " ")
+      .replace(/<[^>]+>/g, " ");
+    expect(text).not.toMatch(/\d/);
   });
 
   it("explains the product in a sentence or two of plain text", () => {

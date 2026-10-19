@@ -136,3 +136,36 @@ export function fmtRatio(x: number): string {
 export function fmtPct(x: number, digits = 0): string {
   return measured(x * 100, digits, "%", { value: 100, inner: true });
 }
+
+/**
+ * A count of things -- frames, runs -- with its thousands grouped by commas:
+ * `fmtCount(6000)` is `6,000`. Only whole counts are counts; anything else
+ * prints as an em dash rather than as a count nobody made.
+ */
+export function fmtCount(n: number): string {
+  if (!Number.isInteger(n)) {
+    return NO_VALUE;
+  }
+  const digits = String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return n < 0 ? `${MINUS}${digits}` : digits;
+}
+
+/**
+ * The spread of a figure over repeated runs (a standard deviation) as
+ * `±0.6`, with the figure's own decimals. A spread is never negative; one
+ * that was measured is never printed as none.
+ */
+export function fmtSpread(sd: number, digits = 1): string {
+  if (!Number.isFinite(sd) || sd < 0) {
+    return NO_VALUE;
+  }
+  return `±${measured(sd, digits, "")}`;
+}
+
+/** A time in milliseconds: `fmtMs(2.53)` is `2.5 ms`. */
+export function fmtMs(x: number, digits = 1): string {
+  if (!Number.isFinite(x) || x < 0) {
+    return NO_VALUE;
+  }
+  return measured(x, digits, " ms");
+}

@@ -27,6 +27,10 @@ const LEAD_IN = 2;
 const world = vi.hoisted(() => ({
   sessionFor: (url: string): Promise<{ url: string }> => Promise.resolve({ url }),
   sessionUrls: [] as string[],
+  /** The sessions let go of, by URL. */
+  released: [] as string[],
+  /** The cockpit's visibility observers: a test says when it scrolls away. */
+  observers: [] as Array<(entries: Array<{ isIntersecting: boolean }>) => void>,
   runs: [] as string[],
   inferGate: null as Promise<void> | null,
   /** How many runs go through before the gate holds the rest. */
@@ -45,7 +49,14 @@ vi.mock("../model/runner.ts", () => ({
   threadsInUse: () => 1,
   createSession: (url: string) => {
     world.sessionUrls.push(url);
-    return world.sessionFor(url);
+    return world.sessionFor(url).then((session) =>
+      Object.assign(session, {
+        release: () => {
+          world.released.push(url);
+          return Promise.resolve();
+        },
+      }),
+    );
   },
   infer: async (session: { url: string }, frames: Uint8Array, n: number) => {
     world.runs.push(session.url);
@@ -166,13 +177,20 @@ function clipVideo(video: HTMLVideoElement) {
     plays: 0,
     /** The next play() waits on this, once. */
     holdPlay: null as Promise<void> | null,
+    /** The next seek reports itself done only once this settles. */
+    holdSeek: null as Promise<void> | null,
+    seeks: 0,
   };
   Object.defineProperty(video, "currentTime", {
     configurable: true,
     get: () => time,
     set: (t: number) => {
       time = t;
-      queueMicrotask(() => video.dispatchEvent(new Event("seeked")));
+      control.seeks += 1;
+      const held = control.holdSeek;
+      control.holdSeek = null;
+      if (held) void held.then(() => video.dispatchEvent(new Event("seeked")));
+      else queueMicrotask(() => video.dispatchEvent(new Event("seeked")));
     },
   });
   video.load = () => {
@@ -221,6 +239,8 @@ declare const process: {
 beforeEach(() => {
   world.sessionFor = (url) => Promise.resolve({ url });
   world.sessionUrls = [];
+  world.released = [];
+  world.observers = [];
   world.runs = [];
   world.inferGate = null;
   world.gateAfter = 0;
@@ -238,6 +258,9 @@ beforeEach(() => {
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        world.observers.push(callback);
+      }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -682,3 +705,189 @@ describe("telling the visitor what it is doing", () => {
     expect(first[N - 1]).toBe(100 + LEAD_IN + N - 1);
   });
 });
+
+// -- What the page around the cockpit reads ---------------------------------------------
+
+/** The tab goes to the background, or comes back. */
+function tab(state: "hidden" | "visible"): void {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("what the page reads of the cockpit", () => {
+  afterEach(() => {
+    delete (document as { visibilityState?: string }).visibilityState;
+  });
+
+  it("hands over the clip's first frame as soon as its frames are decoded, before the model has run", async () => {
+    let start: () => void = () => undefined;
+    world.sessionFor = (url) => new Promise((resolve) => (start = () => resolve({ url })));
+    const { cockpit } = mount();
+    await until(() => shown("status") === "Starting the model", "the model is starting");
+    expect(cockpit.status()).toMatchObject({ state: "loading", frame: 0, model: "sightline" });
+    expect(cockpit.status().clip?.id).toBe("c2018");
+    const first = cockpit.frameAt(0);
+    // Sprite frame t holds the byte t: frame 0 is sprite frame 2, its history sprite frame 0.
+    expect(first?.inputs.map((frame) => frame[0])).toEqual([LEAD_IN, 0]);
+    expect(first?.angle).toBeNull();
+    expect(first?.heat).toBeNull();
+    expect(cockpit.frameAt(N)).toBeNull();
+    start();
+    await until(() => consoleState() === "ready", "the clip is ready");
+  });
+
+  it("hands over the model's answer and where it looked on a frame it has run", async () => {
+    const { cockpit } = await playing();
+    const frame = cockpit.frameAt(3);
+    expect(frame?.angle).toBe(100 + LEAD_IN + 3);
+    expect(frame?.heat).toHaveLength(66 * 200);
+    expect(frame?.heat?.[0]).toBe(Math.round(0.5 ** 0.6 * 255));
+  });
+
+  it("finishes the clip while scrolled out of view, pausing only the footage", async () => {
+    const { cockpit } = await playing();
+    for (const observe of world.observers) observe([{ isIntersecting: false }]);
+    expect(cockpit.status().playing).toBe(false);
+    await until(() => cockpit.agreement()?.compared === N, "every frame has run");
+    expect(cockpit.agreement()).toMatchObject({ model: "sightline", check: "match", compared: N, total: N, maxDiffDeg: 0 });
+    expect(cockpit.msPerFrame()).not.toBeNull();
+  });
+
+  it("runs nothing more while the tab is in the background", async () => {
+    let release: () => void = () => undefined;
+    world.inferGate = new Promise<void>((resolve) => (release = resolve));
+    world.gateAfter = 1;
+    const { cockpit } = await playing();
+    tab("hidden");
+    release();
+    await ticks(10);
+    const runs = world.runs.length;
+    await ticks(10);
+    expect(world.runs.length).toBe(runs);
+    expect(cockpit.agreement()?.compared).toBeLessThan(N);
+    tab("visible");
+    await until(() => cockpit.agreement()?.compared === N, "every frame has run once the tab is back");
+  });
+
+  it("quotes this browser's time per frame only from runs after a session's first, which carries its warm-up", async () => {
+    let release: () => void = () => undefined;
+    world.inferGate = new Promise<void>((resolve) => (release = resolve));
+    world.gateAfter = 1;
+    const { cockpit } = await playing();
+    expect(world.runs).toHaveLength(2); // the opening run, and the next one waiting at the gate
+    expect(cockpit.msPerFrame()).toBeNull();
+    release();
+    await until(() => cockpit.msPerFrame() !== null, "a timed run");
+    expect(cockpit.msPerFrame()).toBeGreaterThanOrEqual(0);
+  });
+
+  it("starts on the results the page has already asked for", async () => {
+    const asked = vi.fn(world.results);
+    world.results = asked;
+    const root = mountCockpitMarkup() as HTMLElement;
+    clipVideo(root.querySelector("video") as HTMLVideoElement);
+    void new Cockpit(root, Promise.resolve(RESULTS)).start();
+    await until(() => consoleState() === "ready", "the clip is ready");
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it("marks the model on screen on the console, for the layout", async () => {
+    await playing();
+    const console_ = document.querySelector<HTMLElement>(".cockpit__console") as HTMLElement;
+    expect(console_.dataset["model"]).toBe("sightline");
+    pick("cockpit-model", "shuffled");
+    await until(() => console_.dataset["model"] === "shuffled", "the twin is marked");
+  });
+});
+
+describe("when something fails late", () => {
+  it("puts no note about the twin on the failure screen", async () => {
+    let failTwin: (error: unknown) => void = () => undefined;
+    world.sessionFor = (url) =>
+      url.includes("shuffled") ? new Promise((_, reject) => (failTwin = reject)) : Promise.resolve({ url });
+    await playing();
+    pick("cockpit-model", "shuffled");
+    world.decode = (clip) =>
+      (clip as Clip).id === "c2017" ? Promise.reject(new AssetError("bad sheet", "undecodable", "x")) : Promise.resolve(frames());
+    pick("cockpit-clip", "c2017");
+    await until(() => consoleState() === "unavailable", "the next clip fails");
+    failTwin(new AssetError(`could not reach ${TWIN}`, "unreachable", TWIN));
+    await ticks(5);
+    expect(shown("notice")).toBe("");
+    expect(shown("status")).toMatch(/could not decode/);
+    expect(checked("cockpit-model")).toBe("sightline");
+    expect(say("model-name")).toBe("Sightline");
+  });
+
+  it("lets go of a twin that arrived but cannot run", async () => {
+    world.inferFails = (url) => url.includes("shuffled");
+    await playing();
+    pick("cockpit-model", "shuffled");
+    await until(() => world.released.length > 0, "the twin's session is let go of");
+    expect(world.released).toHaveLength(1);
+    expect(world.released[0]).toMatch(new RegExp(`${TWIN}$`));
+    expect(shown("notice")).toMatch(/^The twin could not be loaded/);
+  });
+
+  it("says so when the footage stops after it has started, and reloads it when the clip is picked again", async () => {
+    const { video } = await playing();
+    const element = document.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(element, "error", { configurable: true, value: { code: 2 } });
+    element.dispatchEvent(new Event("error"));
+    await ticks(3);
+    expect(consoleState()).toBe("unavailable");
+    expect(shown("status")).toBe("The clip’s footage stopped loading. Pick the clip again to reload it.");
+    expect((el("play") as HTMLButtonElement).disabled).toBe(true);
+    Object.defineProperty(element, "error", { configurable: true, value: null });
+    radio("cockpit-clip", "c2018").click();
+    await until(() => consoleState() === "ready", "the clip runs again");
+    video.present(1);
+    await until(() => say("model-angle") === sightlineAt(1), "Sightline drives again");
+  });
+
+  it("keeps the failure on screen when the footage fails while its first frame is being found", async () => {
+    const root = mountCockpitMarkup() as HTMLElement;
+    const video = clipVideo(root.querySelector("video") as HTMLVideoElement);
+    let found: () => void = () => undefined;
+    video.control.holdSeek = new Promise<void>((resolve) => (found = resolve));
+    void new Cockpit(root).start();
+    await until(() => video.control.seeks === 1, "the clip seeks to its first frame");
+    const element = root.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(element, "error", { configurable: true, value: { code: 2 } });
+    element.dispatchEvent(new Event("error"));
+    await ticks(2);
+    expect(consoleState()).toBe("unavailable");
+    found(); // the seek completes after the failure
+    await ticks(5);
+    expect(consoleState()).toBe("unavailable");
+    expect(shown("status")).toMatch(/stopped loading/);
+    expect((el("play") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("calls footage the browser cannot decode by its name", async () => {
+    await playing();
+    const element = document.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(element, "error", { configurable: true, value: { code: 3 } });
+    element.dispatchEvent(new Event("error"));
+    await ticks(3);
+    expect(shown("status")).toMatch(/could not decode the clip’s footage/);
+  });
+
+  it("keeps the failure on screen when the footage fails while the clip is still starting", async () => {
+    const root = mountCockpitMarkup() as HTMLElement;
+    const video = clipVideo(root.querySelector("video") as HTMLVideoElement);
+    let played: () => void = () => undefined;
+    video.control.holdPlay = new Promise<void>((resolve) => (played = resolve));
+    void new Cockpit(root).start();
+    await until(() => consoleState() === "ready" && video.control.plays === 1, "the clip asks to play");
+    const element = root.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(element, "error", { configurable: true, value: { code: 2 } });
+    element.dispatchEvent(new Event("error"));
+    played();
+    await ticks(5);
+    expect(consoleState()).toBe("unavailable");
+    expect(el("play").dataset["playing"]).toBe("false");
+    expect(shown("status")).toMatch(/stopped loading/);
+  });
+});
+

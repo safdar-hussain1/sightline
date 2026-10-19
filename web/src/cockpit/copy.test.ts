@@ -92,6 +92,9 @@ describe("failureMessage", () => {
     expect(failureMessage(new AssetError("x", "unreachable", "u"))).toMatch(/could not download.*reload/);
     expect(failureMessage(new AssetError("x", "invalid", "u"))).toMatch(/not in the form this page reads/);
     expect(failureMessage(new AssetError("x", "undecodable", "u"))).toMatch(/could not decode the clip/);
+    expect(failureMessage(new AssetError("x", "stopped", "u"))).toBe(
+      "The clip’s footage stopped loading. Pick the clip again to reload it.",
+    );
     expect(failureMessage(new Error("no available backend found"))).toMatch(/could not run the model/);
     expect(failureMessage(new Error("no available backend found"))).toBe(CANNOT_RUN);
   });

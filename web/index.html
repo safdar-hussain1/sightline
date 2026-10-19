@@ -101,10 +101,15 @@
       // Before the first paint: a stored theme has to be on <html> before
       // anything is drawn, or every visit flashes the other theme. theme.ts
       // owns the choice after load and writes the same key. The "js" class
-      // shows the controls that need scripts (the theme toggle, the demo's
-      // status line); without scripts they stay out of sight.
+      // shows the controls that need scripts (the theme toggle, the views'
+      // nav, the demo's status line); without scripts they stay out of sight.
+      // A link straight to the results shows them from the first paint, not
+      // after the demo has flashed up (router.ts takes over after load).
       (function () {
         document.documentElement.classList.add("js");
+        if (location.hash.toLowerCase() === "#results") {
+          document.documentElement.setAttribute("data-view", "results");
+        }
         try {
           var theme = localStorage.getItem("sightline-theme");
           if (theme === "light" || theme === "dark") {
@@ -121,9 +126,18 @@
     <header class="masthead" id="masthead"></header>
 
     <main id="main">
-      <!-- The live demo. The build writes its markup in, so the first paint
-           already has its layout and nothing below it moves when it starts. -->
-      <section class="cockpit" id="cockpit" aria-label="Live demo"></section>
+      <!-- Two views, chosen by the location's hash: the live demo, and the
+           results (#results). The build writes each section's markup in, so
+           the first paint already has its layout and nothing below it moves
+           when it starts. -->
+      <div class="view" data-view="demo">
+        <section class="cockpit" id="cockpit" aria-label="Live demo"></section>
+        <section class="how" id="how-it-works" aria-labelledby="how-title"></section>
+        <section class="accuracy" id="accuracy" aria-labelledby="accuracy-title"></section>
+      </div>
+      <div class="view" data-view="results" hidden>
+        <section class="results" id="results-view" aria-labelledby="results-title"></section>
+      </div>
     </main>
 
     <footer class="site-footer">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_VALUE, fmtDeg, fmtPct, fmtRatio, steerParts } from "./format.ts";
+import { NO_VALUE, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread, steerParts } from "./format.ts";
 
 describe("fmtDeg", () => {
   it("keeps the sign with a true minus", () => expect(fmtDeg(-7.04)).toBe("−7.0°"));
@@ -113,6 +113,58 @@ describe("fmtPct", () => {
   });
 });
 
+describe("fmtCount", () => {
+  it("groups the thousands of a count with commas", () => {
+    expect(fmtCount(6000)).toBe("6,000");
+    expect(fmtCount(45404)).toBe("45,404");
+    expect(fmtCount(1234567)).toBe("1,234,567");
+    expect(fmtCount(893)).toBe("893");
+    expect(fmtCount(0)).toBe("0");
+  });
+
+  it("prints only whole counts, with a true minus, and an em dash for anything else", () => {
+    expect(fmtCount(-1500)).toBe("−1,500");
+    expect(fmtCount(2.5)).toBe(NO_VALUE);
+    expect(fmtCount(Number.NaN)).toBe(NO_VALUE);
+  });
+});
+
+describe("fmtSpread", () => {
+  it("prints a standard deviation as a plus-or-minus with the figure's decimals", () => {
+    expect(fmtSpread(0.6142)).toBe("±0.6");
+    expect(fmtSpread(0.13787, 2)).toBe("±0.14");
+    expect(fmtSpread(1.3648, 0)).toBe("±1");
+  });
+
+  it("never prints a spread that was measured as none", () => {
+    expect(fmtSpread(0.04)).toBe("±0.04");
+    expect(fmtSpread(0.0002)).toBe("±<0.001");
+    expect(fmtSpread(0)).toBe("±0.0");
+  });
+
+  it("refuses a negative or missing spread", () => {
+    expect(fmtSpread(-0.5)).toBe(NO_VALUE);
+    expect(fmtSpread(Number.NaN)).toBe(NO_VALUE);
+  });
+});
+
+describe("fmtMs", () => {
+  it("prints a time in milliseconds", () => {
+    expect(fmtMs(2.53)).toBe("2.5 ms");
+    expect(fmtMs(114.28, 0)).toBe("114 ms");
+  });
+
+  it("never prints a time that was measured as no time at all", () => {
+    expect(fmtMs(0.03)).toBe("0.03 ms");
+    expect(fmtMs(0.00002)).toBe("<0.001 ms");
+  });
+
+  it("prints an em dash where there is no time", () => {
+    expect(fmtMs(Number.NaN)).toBe(NO_VALUE);
+    expect(fmtMs(-1)).toBe(NO_VALUE);
+  });
+});
+
 describe("every formatter, across many magnitudes", () => {
   // A sweep rather than a list of cases: the defect this guards against is a
   // rounding rule that misstates a measurement somewhere nobody thought to look.
@@ -201,6 +253,23 @@ describe("every formatter, across many magnitudes", () => {
     for (const value of values.filter((v) => v < 0)) {
       for (const { text } of printed(value)) {
         expect(text.replace(/^[<>]/, "").startsWith("−"), `${value} printed as ${text}`).toBe(true);
+      }
+    }
+  });
+
+  it("prints no measured spread or time as none, and states only true bounds", () => {
+    for (const value of values.filter((v) => v > 0)) {
+      for (const [text, unit] of [
+        [fmtSpread(value).replace(/^±/, ""), ""],
+        [fmtSpread(value, 2).replace(/^±/, ""), ""],
+        [fmtMs(value), " ms"],
+      ] as const) {
+        const match = /^([<>]?)(\d+(?:\.\d+)?)(.*)$/.exec(text);
+        expect(match, `unparseable: ${text}`).not.toBeNull();
+        const [, operator = "", digits = "", rest = ""] = match ?? [];
+        expect(rest).toBe(unit);
+        expect(Number(digits) === 0 && operator !== "<", `${value} printed as ${text}`).toBe(false);
+        if (operator === "<") expect(value).toBeLessThan(Number(digits));
       }
     }
   });
