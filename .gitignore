@@ -16,9 +16,15 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.ipynb_checkpoints/
 *.egg-info/
 build/
 dist/
+
+# the demo command's default output (demo.mp4 and renamed variants), in the repository root
+# only: the clip videos under web/public/data/clips are tracked
+# (structural guard: tests/test_guards.py)
+/demo*.mp4
 
 # node
 node_modules/

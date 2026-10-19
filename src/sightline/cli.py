@@ -538,7 +538,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", type=_int_from(0), default=0, help="first frame of the drive to render")
     p.add_argument("--frames", type=_int_from(1), default=600, help="number of frames to render")
     p.add_argument("--fps", type=_positive_float, default=17.5,
-                   help="frame rate of the video (the drives were recorded at about 17.5 frames a second)")
+                   help="frame rate of the video; the default, %(default)g, is drive2018's measured rate (the "
+                        "median interval between its timestamps is 57 ms); drive2017 has no timestamps, and its "
+                        "rate was inferred to match from motion and steering signatures")
     _add_locations(p)
     p.set_defaults(fn=cmd_demo)
     return parser

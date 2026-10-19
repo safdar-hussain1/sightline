@@ -4,18 +4,22 @@ The drawing helpers are checked on their own (the display filter, the wheel and 
 overlay); the renderer runs on a small synthetic drive with a hand-made run of seeded random
 weights, through the command line, and its video is read back with OpenCV.
 """
+import argparse
+import inspect
 import json
+import math
 
 import cv2
 import numpy as np
 import pytest
 import torch
 
-from conftest import make_drive
-from sightline.cli import main
+from conftest import REPO, W, make_drive
+from sightline.cli import build_parser, main
 from sightline.data.cache import DriveCache
 from sightline.data.preprocess import CROP_BOTTOM
 from sightline.demo import (
+    BATCH,
     DISPLAY_ALPHA,
     HUMAN_BGR,
     MODEL_BGR,
@@ -129,12 +133,17 @@ def _hand_made_run(runs, drive: str, model: str):
     return run
 
 
-@pytest.fixture
-def workspace(tmp_path):
-    make_drive(tmp_path / "data", "drivetest", n=60)
+def _make_workspace(tmp_path, frames: int):
+    """A synthetic drive of ``frames`` frames under ``tmp_path/data``, cached under ``tmp_path/runs``."""
+    make_drive(tmp_path / "data", "drivetest", n=frames)
     loc = ["--data-dir", str(tmp_path / "data"), "--runs-dir", str(tmp_path / "runs")]
     assert main(["cache", "--drive", "drivetest", *loc]) == 0
     return tmp_path, loc
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    return _make_workspace(tmp_path, 60)
 
 
 def _video(path):
@@ -156,6 +165,26 @@ def _error_line(err: str) -> str:
     lines = [line for line in err.splitlines() if line.startswith("error: ")]
     assert len(lines) == 1, err
     return lines[0]
+
+
+def _ghost_angle(frame: np.ndarray) -> float:
+    """The human's angle as the video shows it: where the amber ghost ring sits on the wheel, in
+    degrees clockwise from straight up. The ring is found by its colour, loosely, because the
+    codec shifts colours a little."""
+    left = frame.shape[1] // 2 - PANEL // 2
+    wheel = frame[-PANEL:, left:left + PANEL].astype(int)  # the wheel, under the two camera views
+    blue, green, red = wheel[..., 0], wheel[..., 1], wheel[..., 2]
+    rows, cols = np.nonzero((red > 170) & (green > 110) & (green < 235) & (blue < 140))
+    assert rows.size > 20, "no ghost ring on the wheel"
+    return math.degrees(math.atan2(cols.mean() - PANEL / 2, PANEL / 2 - rows.mean()))
+
+
+def _bar_column(frame: np.ndarray) -> float:
+    """Where the synthetic drive's bright bar stands in a camera frame, as a column: the bar fills
+    the rows under the horizon and its position follows the steering angle."""
+    bright = frame[160:250, :W].astype(float).mean(axis=(0, 2)) > 140
+    assert bright.any(), "no bar in the camera frame"
+    return float(np.nonzero(bright)[0].mean())
 
 
 def test_a_demo_renders_the_requested_frames_of_a_run_named_under_runs_dir(workspace, capsys):
@@ -190,6 +219,29 @@ def test_the_demo_shows_the_angles_the_evaluation_computes(workspace, model):
     assert result.zero_mae_deg == pytest.approx(float(np.mean(np.abs(cache.angles_deg[:9]))))
 
 
+def test_a_render_longer_than_one_batch_keeps_every_frame_in_step(tmp_path):
+    start, count = 3, 2 * BATCH + 22  # three batches, none of them starting on a multiple of the batch size
+    _make_workspace(tmp_path, start + count + 5)
+    run = _hand_made_run(tmp_path / "runs", "drivetest", "sightlinenet")
+    ws = Workspace(data_dir=tmp_path / "data", runs_dir=tmp_path / "runs")
+    out = tmp_path / "long.mp4"
+    result = render_demo("drivetest", run, out, ws, start=start, num_frames=count)
+    cache = DriveCache(tmp_path / "runs" / "cache" / "drivetest")
+    net, _ = load_run_model(run)
+    stretch = np.arange(start, start + count)
+    # every frame is scored with its own history, whichever batch carried it
+    np.testing.assert_allclose(result.model_deg, predict(net, cache, stretch, torch.device("cpu")), atol=1e-5)
+    np.testing.assert_array_equal(result.human_deg, cache.angles_deg[stretch])
+    # and drawn in step: video frame i shows drive frame start + i, with that frame's human angle on the wheel
+    frames, (counted, _) = _video(out)
+    assert len(frames) == count == counted == result.frames
+    for i, frame in enumerate(frames):
+        source = cv2.imread(str(tmp_path / "data" / "drivetest" / f"{start + i}.jpg"))
+        assert abs(_bar_column(frame) - _bar_column(source)) <= 1.0, f"video frame {i} shows another camera frame"
+        gap = (_ghost_angle(frame) - cache.angles_deg[start + i] + 180.0) % 360.0 - 180.0
+        assert abs(gap) < 1.0, f"video frame {i} marks another human angle"
+
+
 def test_a_segment_past_the_end_of_the_drive_is_a_one_line_error(workspace, capsys):
     tmp_path, loc = workspace
     run = _hand_made_run(tmp_path / "runs", "drivetest", "sightlinenet")
@@ -199,6 +251,34 @@ def test_a_segment_past_the_end_of_the_drive_is_a_one_line_error(workspace, caps
     line = _error_line(capsys.readouterr().err)
     assert code == 2 and "60 frames" in line and "55..60" in line
     assert not out.exists() and not list(tmp_path.glob(".demo*"))
+
+
+@pytest.mark.parametrize("damage", ["deleted", "not a picture"])
+def test_an_unreadable_frame_mid_segment_is_a_one_line_error_and_leaves_no_file(workspace, capsys, monkeypatch, damage):
+    tmp_path, loc = workspace
+    run = _hand_made_run(tmp_path / "runs", "drivetest", "sightlinenet")
+    bad = tmp_path / "data" / "drivetest" / "13.jpg"  # frame 13 of the segment 5..16, after eight frames are written
+    if damage == "deleted":
+        bad.unlink()
+    else:
+        bad.write_bytes(b"not a jpeg")
+    out = tmp_path / "videos" / "demo.mp4"
+    listed = []
+    read_picture = cv2.imread
+
+    def reading(path, *args):
+        if str(path) == str(bad):
+            listed.append(sorted(p.name for p in out.parent.iterdir()))  # what is on disk as the read fails
+        return read_picture(path, *args)
+
+    monkeypatch.setattr(cv2, "imread", reading)
+    code = main(["demo", "--drive", "drivetest", "--run", run.name, "--out", str(out),
+                 "--start", "5", "--frames", "12", *loc])
+    line = _error_line(capsys.readouterr().err)
+    assert code == 2 and "frame 13" in line and "cannot be read" in line
+    # the render was under way, writing into a hidden temporary file; none of it is left
+    assert len(listed) == 1 and len(listed[0]) == 1 and listed[0][0].startswith("."), listed
+    assert not out.exists() and list(out.parent.iterdir()) == []
 
 
 def test_the_demo_reads_a_cache_and_never_builds_one(tmp_path, capsys):
@@ -230,3 +310,15 @@ def test_the_demo_refuses_impossible_segment_settings(flag, value, capsys):
     with pytest.raises(SystemExit) as exc:
         main(["demo", "--drive", "drivetest", "--run", "r", flag, value])
     assert exc.value.code == 2 and flag in capsys.readouterr().err
+
+
+def test_the_default_frame_rate_is_the_one_drive2018s_timestamps_give():
+    summary = json.loads((REPO / "reports" / "summary.json").read_text())
+    interval = summary["drives"]["drive2018"]["median_dt_s"]
+    assert summary["drives"]["drive2017"]["median_dt_s"] is None  # the other drive has no timestamps
+    demo = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)).choices["demo"]
+    default = demo.get_default("fps")
+    assert default == round(1.0 / interval, 1) == inspect.signature(render_demo).parameters["fps"].default
+    words = " ".join(demo.format_help().split())  # argparse wraps the help text
+    assert f"{default:g}" in words and f"{interval * 1000:.0f} ms" in words
+    assert "drive2017 has no timestamps" in words and "inferred" in words

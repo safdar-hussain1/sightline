@@ -92,6 +92,9 @@ def test_no_process_documents_tracked():
         "weights.npz",
         "model.ckpt.index",
         "web/.public-k2x9q1/data/results.json",
+        "demo.mp4",  # what `sightline demo` writes by default
+        "demo-c2018.mp4",
+        "notebooks/.ipynb_checkpoints/02-results-checkpoint.ipynb",
     ],
 )
 def test_private_paths_are_ignored(path: str):
@@ -99,6 +102,24 @@ def test_private_paths_are_ignored(path: str):
         ["git", "check-ignore", "--quiet", path], cwd=REPO
     )
     assert result.returncode == 0, f"{path} is NOT git-ignored"
+
+
+def _matched_by_an_ignore_rule(path: str) -> bool:
+    """Whether the ignore rules alone match ``path``: ``--no-index`` asks the rules even about
+    a tracked file, which ``git check-ignore`` otherwise leaves out."""
+    return subprocess.run(["git", "check-ignore", "--no-index", "--quiet", path], cwd=REPO).returncode == 0
+
+
+def test_the_demo_clip_videos_are_tracked_and_no_ignore_rule_matches_them():
+    tracked = {p.relative_to(REPO).as_posix() for p in _tracked_files()}
+    for clip in ("c2017", "c2018"):
+        path = f"web/public/data/clips/{clip}/clip.mp4"
+        assert path in tracked, f"{path} is not tracked"
+        assert not _matched_by_an_ignore_rule(path), f"an ignore rule matches {path}"
+    # the rule for the demo command's output is anchored to the repository root
+    assert _matched_by_an_ignore_rule("demo.mp4")
+    assert not _matched_by_an_ignore_rule("web/public/demo.mp4"), "the demo.mp4 rule is not root-only"
+    assert not _matched_by_an_ignore_rule("notebooks/demo.mp4"), "the demo.mp4 rule is not root-only"
 
 
 def test_no_dataset_or_weight_files_tracked():
