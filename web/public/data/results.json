@@ -118,6 +118,18 @@
       "n": 6000
     }
   },
+  "cutoffs": {
+    "regime_bins_deg": [
+      5.0,
+      30.0
+    ],
+    "sign_min_abs_deg": 5.0,
+    "tolerances_deg": [
+      1.5,
+      5.0,
+      15.0
+    ]
+  },
   "drive_profile": {
     "bucket_frames": 64,
     "drives": {
@@ -7163,6 +7175,26 @@
           3.774054897721948
         ]
       }
+    }
+  },
+  "parity": {
+    "shuffled": {
+      "angle_tolerance_deg": 0.0005,
+      "max_abs_angle_deg": 0.00012969970703125,
+      "max_abs_saliency": 8.165836334228516e-06,
+      "onnxruntime": "1.28.0",
+      "run": "drive2018_sightlinenet_leaky_s2",
+      "saliency_tolerance": 0.0001,
+      "stacks": 848
+    },
+    "sightline": {
+      "angle_tolerance_deg": 0.0005,
+      "max_abs_angle_deg": 0.000179290771484375,
+      "max_abs_saliency": 7.450580596923828e-06,
+      "onnxruntime": "1.28.0",
+      "run": "drive2018_sightlinenet_blocked_s2",
+      "saliency_tolerance": 0.0001,
+      "stacks": 848
     }
   },
   "protocol_names": {

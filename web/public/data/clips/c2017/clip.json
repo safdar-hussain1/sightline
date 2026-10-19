@@ -856,6 +856,7 @@
     ]
   },
   "first_frame": 33112,
+  "first_s": null,
   "fps": 17.5,
   "frame_lags": [
     2
@@ -1283,6 +1284,7 @@
     24.100000381469727,
     22.989999771118164
   ],
+  "last_s": null,
   "lead_in": 2,
   "n": 420,
   "rule": "the 420-frame window with the largest standard deviation of its steering labels, among the windows that fit, with the 2 frames before them, inside the whole of drive2017 and whose labels, those 2 frames included, all stay within 90 degrees either way, so that the clip shows road following rather than parking or intersection manoeuvres; windows start every 10 frames and ties go to the earliest",
