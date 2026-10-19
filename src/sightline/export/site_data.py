@@ -15,9 +15,15 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     The numbers the page shows, copied value for value from the reports, never computed
     again: the generalisation ladder, the paired leakage measurement, each group's mean and
     sd over seeds, the shipped run's baselines and regimes, the standard-recipe PilotNet,
-    the leakage analysis, the drives, the training recipe and the library versions. The
-    leakage report's ``median_s`` (a median frame count times the median frame interval,
-    not a time anything took) is left out; the interval itself is ``median_frame_interval_s``.
+    the leakage analysis, the drives, the training recipe, the library versions and the
+    evaluation's ``cutoffs`` (the steering regimes' edges, the smallest angle the sign
+    agreement counts and the tolerances of the shares of frames within them, in degrees, so
+    the page never types them). The leakage report's ``median_s`` (a median frame count times
+    the median frame interval, not a time anything took) is left out; the interval itself is
+    ``median_frame_interval_s``. ``parity`` gives, for each of the page's models, how closely
+    onnxruntime reproduced PyTorch when this build exported it, as export.json records it: the
+    run, the largest angle and saliency differences over the ``stacks`` frame stacks checked,
+    the gates they met and the onnxruntime version.
 
     Three more fields are made here. ``drive_profile`` holds, for each drive, its steering
     labels as ``repair_dropouts`` leaves them (read from the label files, never from the
@@ -26,12 +32,15 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     in degrees to 0.01; for a drive with timestamps also each bucket's ``start_s``, seconds
     since the drive's first frame to the millisecond, and the drive's ``duration_s``. The
     2017 drive has no timestamps, so both are null. The last bucket holds the frames left
-    over, so every frame is in exactly one bucket. ``split_rules`` states how each protocol
-    cuts a drive: the block and firewall the run reports record, and the splits module's
-    pattern and fractions. ``split_sizes`` gives each protocol's train, validation and test
-    frame counts from the run reports, and the frames its firewalls dropped; every run of a
-    protocol must have recorded the same counts, and they must be the ones the splits module
-    makes from the recorded settings.
+    over, so every frame is in exactly one bucket. The labels must be the ones the reports
+    were scored on: as many frames, as many repaired dropouts and the same label file
+    (sha256) as the summary records for the drive. ``split_rules`` states how each protocol
+    cuts a drive: the block and firewall every run report, the leakage report and the
+    standard-recipe report agree on, and the splits module's pattern and fractions.
+    ``split_sizes`` gives each protocol's train, validation and test frame counts from the run
+    reports, and the frames its firewalls dropped; every run of a protocol must have recorded
+    the same counts, they must be the ones the splits module makes from those settings, and
+    every blocked and shuffled run's paired frames (their count and digest) the ones it pairs.
 ``data/clips/<id>/``
     A demo clip of ``clip_frames`` scored frames: ``c2018`` from the blocked test stretches
     of the drive the shipped run trained on (minutes it never trained on), ``c2017`` from
@@ -46,8 +55,11 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     client's own predictions must agree within ``tolerance``. ``clip.mp4`` shows the scored
     camera frames (video frame ``k`` is scored frame ``k``) as H.264 at 17.5 fps; 4:2:0
     video needs an even width, so each 455-pixel camera frame is followed by one repeated
-    column (``video_size`` against ``camera_size``). ``clip_mae_deg`` is the mean absolute
-    error on this clip alone, for each model and for steering straight ahead.
+    column (``video_size`` against ``camera_size``). ``first_s`` and ``last_s`` are the times
+    of the first and last scored frames in seconds since the drive's first frame, to the
+    millisecond as in the drive profile, and null for a drive without timestamps (the 2017
+    one). ``clip_mae_deg`` is the mean absolute error on this clip alone, for each model and
+    for steering straight ahead.
     ``twin_trained_frac`` is the share of the clip's scored frames the twin trained on and
     ``twin_neighbour_frac`` the share within one frame of a frame it trained on, both from
     the twin's saved training split; the twin trained on frames of its own drive only, so
@@ -76,15 +88,21 @@ each stretch, and ties go to the earliest. The 2018 clip's distance from the fra
 shipped run trained on is then measured; under 2·firewall + 1 frames it is refused. A clip
 is picked for being worth watching, so its MAE describes the clip, not the model.
 
-Nothing is written before the reports, checkpoints, caches and drives have passed every
-check. The build is staged in a folder beside ``out_dir`` (``web/.public-*`` for
-``web/public``), which is always removed. The previous build's files and export.json are
-then moved aside (into another such folder) and the new ones moved in; if anything fails on
-the way the new files are removed and the old ones moved back, so a failed build leaves
-``out_dir`` and export.json as they were. Run again on the same machine with the same library versions, the same
-reports, checkpoints and drives give the same bytes apart from the videos; elsewhere the
-values computed in floating point (expected outputs, self-test angles and saliency, parity
-figures) can differ in their last bits.
+Every check that needs only the inputs runs before anything is written: the reports, the
+checkpoints, the caches, the drives and the clip rule. The build is then staged in a folder
+beside ``out_dir`` (``web/.public-*`` for ``web/public``), which is always removed, and
+export.json in a hidden file beside its own final path. The models are exported there and
+must pass their parity gates and the size limit, the sprites are written and decoded and the
+videos encoded, so a failure at any of those steps leaves ``out_dir`` and export.json as
+they were. Only then is the build swapped in: the previous build's files are moved into
+another folder beside ``out_dir`` and the previous export.json beside itself, then the new
+files are moved in, each move a rename within one folder's volume. If a move fails, the new
+files are removed and the old ones moved back, so ``out_dir`` and export.json are as they
+were; if moving them back fails as well, the error says so and names where the previous
+files are, and they are left there. Run again on the same machine with the same library
+versions, the same reports, checkpoints and drives give the same bytes apart from the
+videos; elsewhere the values computed in floating point (expected outputs, self-test angles
+and saliency, parity figures) can differ in their last bits.
 """
 
 from __future__ import annotations
@@ -98,6 +116,7 @@ import json
 import math
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -117,8 +136,11 @@ from sightline.data.splits import (
     PUBLIC_NAMES,
     TRAIN_FRAC,
     VAL_FRAC,
+    frames_sha256,
     make_split,
+    paired_frames,
 )
+from sightline.data.verify import label_sha256
 from sightline.export.onnx_export import (
     ANGLE_TOLERANCE_DEG,
     INPUT_NAME,
@@ -128,7 +150,7 @@ from sightline.export.onnx_export import (
 )
 from sightline.leakage import LOOKUP_PROTOCOLS, frame_gaps
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
-from sightline.reporting import checkpoint_sha256, load_run_model, load_split_indices, write_report
+from sightline.reporting import PAIRED_PROTOCOLS, checkpoint_sha256, load_run_model, load_split_indices, write_report
 from sightline.train import code_version
 
 __all__ = [
@@ -148,13 +170,18 @@ __all__ = [
     "SHIPPED_SALIENCY_TOLERANCE",
     "build_site_data",
     "choose_window",
+    "clip_times",
     "decode_sheets",
     "drive_profile",
     "encode_video",
+    "export_parity",
     "frame_digests",
     "jpeg_bytes",
+    "leakage_pairs",
     "load_reports",
     "min_gap_to_training",
+    "missing_key",
+    "require_what_the_site_reads",
     "site_results",
     "split_rules",
     "split_sizes",
@@ -170,7 +197,9 @@ CLIP_STEP = 10
 #: a clip shows road following: every label of its window, lead-in included, stays within
 #: this many degrees either way (larger angles are parking and intersection manoeuvres)
 CLIP_MAX_ABS_DEG = 90.0
-#: the clips' playback rate, frames per second (the 2018 drive's median frame interval is 57 ms)
+#: the clips' playback rate, frames per second: the 2018 drive's measured rate, one over the
+#: median interval between its timestamps (57.0 ms, so 17.54 fps), to one decimal, as the demo
+#: command plays; the 2017 drive has no timestamps and plays at the same rate
 CLIP_FPS = 17.5
 #: the demo clips by id: the training drive's blocked test frames, and the other drive
 CLIP_TITLES = {"c2018": "2018: minutes it never trained on", "c2017": "2017: another day"}
@@ -182,8 +211,9 @@ CAMERA_SIZE = (455, 256)
 #: the largest model the page downloads, bytes
 MAX_MODEL_BYTES = 2_000_000
 #: the parity the shipped models must meet against PyTorch on every clip and self-test input.
-#: Trained models land near 2e-4 deg (float32 rounding ahead of the output scale) and 1e-5 in
-#: saliency; a structural export fault is off by whole degrees.
+#: The trained SightlineNet checkpoints measure 1.2e-4 to 1.8e-4 deg on those inputs and up to
+#: 3.4e-4 deg on their own test frames (float32 rounding ahead of the output scale), and under
+#: 2e-5 in saliency; a structural export fault is off by whole degrees.
 SHIPPED_ANGLE_TOLERANCE_DEG = 5e-4
 SHIPPED_SALIENCY_TOLERANCE = 1e-4
 #: a drive profile averages this many consecutive frames into one point: 998 points for the
@@ -218,21 +248,6 @@ GENERATED = {
     "data/selftest": ("frames.bin", "expected.json"),
 }
 FIXED_FILES = ("data/results.json", *MODEL_FILES.values())
-#: what each kind of report must hold (dotted paths), and the command that writes it
-REQUIRED = {
-    "summary": (("shipped.run", "shipped.seed", "twin.run", "groups", "ladder", "paired_leakage",
-                 "regimes.models", "regimes.zero", "drives", "versions", "train_config", "runs"), "sightline report"),
-    "run": (("run", "model", "protocol", "seed", "frame_lags", "checkpoint_sha256", "drive", "splits.firewall",
-             "splits.block", "val.model.mae_deg", "test.n", "test.model", "test.baselines", "test.regimes",
-             "test.zero_regimes", "test.pearson_r", "test.skill_vs_zero", "paired.n", "paired.model.mae_deg",
-             "cross_drive.drive", "cross_drive.n", "cross_drive.model", "cross_drive.baselines",
-             "cross_drive.pearson_r", "cross_drive.skill_vs_zero"), "sightline eval --all"),
-    #: what the split sizes read from every run report the summary lists
-    "splits": (("run", "model", "protocol", "seed", "drive", "drives", "splits.train_n", "splits.val_n",
-                "splits.test_n", "splits.firewall", "splits.block"), "sightline eval --all"),
-    "leakage": (("drive", "seed", "dt_s", "splits", "paired", "gaps", "memoriser", "pairs"), "sightline leakage"),
-    "legacy": (LEGACY_KEYS, "sightline legacy"),
-}
 #: the per-seed statistics of a summary group, and where a run report holds each
 GROUP_STATS = {
     "val_mae_deg": "val.model.mae_deg",
@@ -242,6 +257,81 @@ GROUP_STATS = {
     "cross_mae_deg": "cross_drive.model.mae_deg",
     "cross_r": "cross_drive.pearson_r",
     "cross_skill": "cross_drive.skill_vs_zero",
+}
+#: a split score's steering regimes and baselines, by their keys in the reports
+REGIME_KEYS = ("straight", "gentle", "sharp")
+BASELINE_KEYS = ("zero", "mean", "zoh", "extrap")
+#: what each example frame pair of the leakage report gives for each split searched
+PAIR_KEYS = ("nn_frame", "gap_frames", "gap_s", "pixel_rmse", "nn_angle_deg")
+
+
+def _regimes(prefix: str) -> tuple[str, ...]:
+    """The keys of a regime breakdown under ``prefix``."""
+    return (*(f"{prefix}.{regime}.{key}" for regime in REGIME_KEYS for key in ("n", "mae_deg")),
+            f"{prefix}.balanced_mae_deg")
+
+
+def _scores(split: str) -> tuple[str, ...]:
+    """What the site reads of a run report's score on ``split`` (``test`` or ``cross_drive``)."""
+    return (f"{split}.n", f"{split}.model.n", f"{split}.model.mae_deg",
+            *(f"{split}.baselines.{name}.mae_deg" for name in BASELINE_KEYS), f"{split}.pearson_r",
+            f"{split}.skill_vs_zero")
+
+
+#: everything the site reads of each kind of report, as dotted paths, with the command that writes
+#: the report: what this module reads, and what the page reads of the values results.json copies
+#: whole. ``*`` stands for every key of a mapping or every item of a list, of which there must be
+#: one at least. ``load_reports`` checks the reports before anything is computed, and
+#: ``export_parity`` the export record, so a report made by an older command is refused in one
+#: line naming what it lacks, never read half-way. Every key the site reads is listed here, and
+#: only here; which drives, groups or models must be there is the checks' business, not a key's.
+REQUIRED = {
+    "summary": ((
+        "shipped.run", "shipped.seed", "shipped.model", "shipped.protocol", "twin.run", "runs", "versions",
+        "train_config", "cutoffs.regime_bins_deg", "cutoffs.sign_min_abs_deg", "cutoffs.tolerances_deg",
+        *(f"drives.*.{key}" for key in ("frames", "label_sha256", "repaired_labels", "median_dt_s")),
+        *(f"groups.*.{key}" for key in ("model", "protocol", "runs", "seeds", "test_zero_mae_deg",
+                                        "cross_zero_mae_deg")),
+        *(f"groups.*.{stat}.{part}" for stat in GROUP_STATS for part in ("mean", "sd", "values")),
+        *(f"ladder.*.*.{key}" for key in ("rung", "protocol", "split", "drive", "seeds", "mae_deg.mean",
+                                          "mae_deg.sd", "zero_mae_deg")),
+        *(f"paired_leakage.*.per_seed.*.{key}" for key in ("seed", "n", "shuffled_mae_deg", "blocked_mae_deg",
+                                                            "ratio", "difference_deg", "zero_mae_deg")),
+        *(f"paired_leakage.*.{stat}.{part}" for stat in ("ratio", "difference_deg", "shuffled_mae_deg",
+                                                          "blocked_mae_deg") for part in ("mean", "sd")),
+        "regimes.protocol", "regimes.split", *_regimes("regimes.zero"), "regimes.models.*.run",
+        "regimes.models.*.seed", *_regimes("regimes.models.*.regimes"),
+    ), "sightline report"),
+    #: the shipped run's report and its twin's
+    "run": ((
+        "run", "model", "protocol", "seed", "frame_lags", "checkpoint_sha256", "drive", "splits.firewall",
+        "splits.block", "val.model.mae_deg", *_scores("test"), *_regimes("test.regimes"),
+        *_regimes("test.zero_regimes"), "paired.n", "paired.frames_sha256", "paired.model.mae_deg",
+        "cross_drive.drive", *_scores("cross_drive"),
+    ), "sightline eval --all"),
+    #: every run report the summary lists, for the split sizes and the checks on them
+    "splits": (("run", "model", "protocol", "seed", "drive", "drives.*.frames", "splits.train_n", "splits.val_n",
+                "splits.test_n", "splits.firewall", "splits.block"), "sightline eval --all"),
+    #: every run report of a protocol scored on the paired frames too (``PAIRED_PROTOCOLS``)
+    "paired": (("paired.n", "paired.frames_sha256"), "sightline eval --all"),
+    "leakage": ((
+        "drive", "seed", "dt_s", "splits.firewall", "splits.block", "paired.n", "paired.frames_sha256", "gaps.*.*",
+        *(f"memoriser.{protocol}.{key}" for protocol in LOOKUP_PROTOCOLS for key in ("n", "mae_deg")),
+        "pairs.*.frame", "pairs.*.angle_deg",
+        *(f"pairs.*.{protocol}.{key}" for protocol in LOOKUP_PROTOCOLS for key in PAIR_KEYS),
+    ), "sightline leakage"),
+    "legacy": ((
+        *LEGACY_KEYS, "splits.firewall", "splits.block", "drives.*.label_sha256", "port_parity.frames",
+        "port_parity.max_abs_diff_deg", "eval.*.model.n", "eval.*.model.mae_deg", "eval.*.zero_mae_deg",
+        "atan_cap.max_abs_pred_deg", "atan_cap.labels_beyond_180.*.n",
+    ), "sightline legacy"),
+    #: what results.json's ``parity`` copies of an export record (export.json), for each page model
+    "export": ((
+        *(f"models.{key}.{field}" for key in MODEL_FILES for field in (
+            "run", "checkpoint_sha256", "parity.frames", "parity.max_angle_diff_deg", "parity.max_saliency_diff",
+            "parity.angle_tolerance_deg", "parity.saliency_tolerance")),
+        "versions.onnxruntime",
+    ), "sightline site-data"),
 }
 
 
@@ -267,23 +357,61 @@ def _at(tree, dotted: str):
     return tree
 
 
-def _lacks(report: dict, dotted: str) -> bool:
-    node = report
-    for key in dotted.split("."):
+def missing_key(tree, dotted: str) -> str | None:
+    """Where ``tree`` lacks the dotted path ``dotted`` (``*`` stands for every key of a mapping or
+    every item of a list, and needs one at least): the path as far as its first missing key, or
+    ``<path>.*`` for an empty mapping or list; None when ``tree`` holds all of it."""
+    def walk(node, keys: list[str], walked: list[str]) -> str | None:
+        if not keys:
+            return None
+        key, rest = keys[0], keys[1:]
+        if key == "*":
+            if isinstance(node, dict) and node:
+                children = node.items()
+            elif isinstance(node, list) and node:
+                children = enumerate(node)
+            else:
+                return ".".join([*walked, "*"])
+            return next((found for name, child in children
+                         if (found := walk(child, rest, [*walked, str(name)])) is not None), None)
         if not isinstance(node, dict) or key not in node:
-            return True
-        node = node[key]
-    return False
+            return ".".join([*walked, key])
+        return walk(node[key], rest, [*walked, key])
+
+    return walk(tree, dotted.split("."), [])
 
 
 def _require(report: dict, kind: str, label: str) -> None:
-    """A ValueError naming what ``report`` lacks of what ``kind`` must hold, and the command
-    that writes it again."""
+    """A ValueError naming the first places where ``report`` lacks what ``kind`` must hold
+    (``REQUIRED``), and the command that writes it again."""
     paths, made_by = REQUIRED[kind]
-    missing = [path for path in paths if _lacks(report, path)]
+    missing = []
+    for path in paths:
+        where = missing_key(report, path)
+        if where is not None and not any(where == m or where.startswith(f"{m}.") for m in missing):
+            missing.append(where)
     if missing:
         named = ", ".join(repr(path) for path in missing[:3]) + (" and more" if len(missing) > 3 else "")
         raise ValueError(f"{label} lacks {named}; write it again with `{made_by}`")
+
+
+def require_what_the_site_reads(reports: Reports) -> None:
+    """Refuse reports that lack anything the site reads of them (``REQUIRED``): the summary, the
+    shipped run's and its twin's reports in full, every run report what its split needs, the
+    leakage and standard-recipe reports. A ValueError names the report, where it lacks a key and
+    the command that writes it again."""
+    folder = reports.files[-2].rsplit("/", 1)[0]  # where leakage.json is, beside runs/
+    _require(reports.summary, "summary", reports.files[0])
+    chosen = (reports.summary["shipped"]["run"], reports.summary["twin"]["run"])
+    for name, report in reports.runs.items():
+        label = f"{folder}/runs/{name}.json"
+        if name in chosen:
+            _require(report, "run", label)
+        _require(report, "splits", label)
+        if report["protocol"] in PAIRED_PROTOCOLS:
+            _require(report, "paired", label)
+    _require(reports.leakage, "leakage", reports.files[-2])
+    _require(reports.legacy, "legacy", reports.files[-1])
 
 
 def _read_report(path: Path, made_by: str) -> dict:
@@ -301,28 +429,21 @@ def _read_report(path: Path, made_by: str) -> dict:
 def load_reports(summary_path: str | Path, reports_dir: str | Path) -> Reports:
     """The summary, the run report of every run it lists (``<reports_dir>/runs/<run>.json``),
     and ``leakage.json`` and ``legacy.json`` from ``reports_dir``, each checked for every key
-    the site data reads (a ValueError names what is missing). The shipped run and its twin
-    must hold everything the site data reads of a run, the others what their split needs."""
+    the site data reads (``require_what_the_site_reads``)."""
     summary_path, reports_dir = Path(summary_path), Path(reports_dir)
     folder = reports_dir.name
     summary_label = f"{summary_path.parent.name}/{summary_path.name}"
     summary = _read_report(summary_path, "sightline report")
-    _require(summary, "summary", summary_label)
-    chosen = (summary["shipped"]["run"], summary["twin"]["run"])
-    names = list(dict.fromkeys((*chosen, *summary["runs"])))
-    runs = {}
-    for name in names:
-        runs[name] = _read_report(reports_dir / "runs" / f"{name}.json", "sightline eval --all")
-        if name in chosen:
-            _require(runs[name], "run", f"{folder}/runs/{name}.json")
-        _require(runs[name], "splits", f"{folder}/runs/{name}.json")
+    _require(summary, "summary", summary_label)  # it names the run reports to read
+    names = list(dict.fromkeys((summary["shipped"]["run"], summary["twin"]["run"], *summary["runs"])))
+    runs = {name: _read_report(reports_dir / "runs" / f"{name}.json", "sightline eval --all") for name in names}
     leakage = _read_report(reports_dir / "leakage.json", "sightline leakage")
-    _require(leakage, "leakage", f"{folder}/leakage.json")
     legacy = _read_report(reports_dir / "legacy.json", "sightline legacy")
-    _require(legacy, "legacy", f"{folder}/legacy.json")
     files = [summary_label, *(f"{folder}/runs/{name}.json" for name in names),
              f"{folder}/leakage.json", f"{folder}/legacy.json"]
-    return Reports(summary=summary, runs=runs, leakage=leakage, legacy=legacy, files=files)
+    reports = Reports(summary=summary, runs=runs, leakage=leakage, legacy=legacy, files=files)
+    require_what_the_site_reads(reports)
+    return reports
 
 
 def _mean_and_sd(value):
@@ -389,14 +510,16 @@ def split_rules(block: int, firewall: int) -> dict:
     """How each protocol cuts a drive, by protocol, each with its public name as ``label``. The
     blocked split cuts the drive into ``block``-frame blocks laid out by the repeating
     ``pattern`` (T train, V validation, E test) and drops ``firewall`` frames on each side of
-    every boundary between a training block and another. The forward split trains on the first
+    every boundary between a training block and a validation or test block (two training
+    blocks in a row are not cut apart). The forward split trains on the first
     ``train_frac`` of the drive, validates on the next ``val_frac`` and tests on the rest
     (``test_frac``), dropping ``firewall`` frames on each side of both boundaries. The
     shuffled split shuffles the frames, then slices them by the same three fractions.
 
     ``block`` and ``firewall`` are the settings the runs were made with (their reports record
-    them, and every run's must agree); the pattern and the fractions are the splits module's,
-    which no command changes. ``test_frac`` is rounded to ten places, so that the floating
+    them, and every run's must agree with the shipped run's, the leakage report's and the
+    standard-recipe report's); the pattern and the fractions are the splits module's, which no
+    command changes. ``test_frac`` is rounded to ten places, so that the floating
     point noise in ``1 - train_frac - val_frac`` does not reach the page.
     """
     shares = {"train_frac": TRAIN_FRAC, "val_frac": VAL_FRAC, "test_frac": round(1.0 - TRAIN_FRAC - VAL_FRAC, 10)}
@@ -474,22 +597,73 @@ def split_sizes(reports: Reports) -> dict:
     return sizes
 
 
-def site_results(reports: Reports, drives: dict) -> dict:
-    """results.json: what the page shows, copied from the reports value for value, with the
-    drive profiles, split rules and split sizes added (see the module docstring).
+def _check_labels(name: str, labels: DriveLabels, recorded: dict) -> None:
+    """Refuse labels of drive ``name`` that are not the ones the reports were scored on: another
+    number of frames, of repaired dropouts or another label file than ``recorded`` (the
+    summary's record of the drive) gives."""
+    if len(labels) != recorded.get("frames"):
+        raise ValueError(f"drive {name!r} has {len(labels)} labelled frames, but summary.json "
+                         f"describes {recorded.get('frames')}")
+    repaired = int(labels.repaired_indices.size)
+    if repaired != recorded.get("repaired_labels"):
+        raise ValueError(f"drive {name!r} has {repaired} repaired dropouts, but summary.json records "
+                         f"{recorded.get('repaired_labels')}; the profile is made from the labels as "
+                         "repair_dropouts leaves them")
+    label_file = labels.root / "data.txt"
+    digest = label_sha256(label_file) if label_file.is_file() else None
+    if digest != recorded.get("label_sha256"):
+        raise ValueError(f"drive {name!r}: its label file {label_file} (sha256 {str(digest)[:12]}) is not the "
+                         f"one the reports were made from ({str(recorded.get('label_sha256'))[:12]})")
 
+
+def _check_inputs(reports: Reports, drives: dict) -> dict:
+    """The setting every report agrees on (``_check_reports``), once the labels in ``drives`` are
+    those the reports were scored on (``_check_labels``)."""
+    setting = _check_reports(reports)
+    for name, labels in sorted(drives.items()):
+        _check_labels(name, labels, reports.summary["drives"].get(name) or {})
+    return setting
+
+
+def export_parity(reports: Reports, export: dict) -> dict:
+    """results.json's ``parity``: for each of the page's models, how closely onnxruntime reproduced
+    PyTorch when the model was exported, as ``export`` (what export.json holds) records it: the run,
+    the largest angle and saliency differences over the frame stacks checked (``stacks``), the gates
+    they met and the onnxruntime version. ``export`` must describe the shipped run and its twin, each
+    with the checkpoint its run report describes."""
+    _require(export, "export", "export.json")
+    parity = {}
+    for key, role in (("sightline", "shipped"), ("shuffled", "twin")):
+        model, run = export["models"][key], reports.summary[role]["run"]
+        if (model["run"], model["checkpoint_sha256"]) != (run, reports.runs[run]["checkpoint_sha256"]):
+            raise ValueError(f"export.json's {key} model is run {model['run']!r} (checkpoint "
+                             f"{str(model['checkpoint_sha256'])[:12]}), not the {role} run {run!r} as its report "
+                             "describes it; write the site data again with `sightline site-data`")
+        checked = model["parity"]
+        parity[key] = {"run": run, "stacks": checked["frames"], "max_abs_angle_deg": checked["max_angle_diff_deg"],
+                       "max_abs_saliency": checked["max_saliency_diff"],
+                       "angle_tolerance_deg": checked["angle_tolerance_deg"],
+                       "saliency_tolerance": checked["saliency_tolerance"],
+                       "onnxruntime": export["versions"]["onnxruntime"]}
+    return parity
+
+
+def site_results(reports: Reports, drives: dict, export: dict) -> dict:
+    """results.json: what the page shows, copied from the reports value for value, with the
+    drive profiles, split rules and split sizes added (see the module docstring), and the export
+    parity copied from ``export``, what export.json holds: the build passes the record it is about
+    to write, never the file a previous build left.
+
+    The reports must agree with one another as ``build_site_data`` requires (``_check_reports``),
+    so the split rules and the split sizes come from the one firewall and block they share.
     ``drives`` maps each drive the page describes to its dropout-repaired labels
-    (``repair_dropouts``); each must have the number of frames the summary records for it.
+    (``repair_dropouts``); each must have as many frames and repaired dropouts as the summary
+    records for it, and come from the label file it records (sha256).
     """
+    setting = _check_inputs(reports, drives)
     summary, leakage = reports.summary, reports.leakage
     shipped = reports.runs[summary["shipped"]["run"]]
-    profiles = {}
-    for name, labels in sorted(drives.items()):
-        recorded = (summary["drives"].get(name) or {}).get("frames")
-        if len(labels) != recorded:
-            raise ValueError(f"drive {name!r} has {len(labels)} labelled frames, but summary.json "
-                             f"describes {recorded}")
-        profiles[name] = drive_profile(labels)
+    profiles = {name: drive_profile(labels) for name, labels in sorted(drives.items())}
     results = {
         "assets": ASSETS,
         "baselines": {
@@ -497,6 +671,7 @@ def site_results(reports: Reports, drives: dict) -> dict:
             "test": {key: shipped["test"][key] for key in ("n", "model", "baselines")},
             "cross_drive": {key: shipped["cross_drive"][key] for key in ("drive", "n", "model", "baselines")},
         },
+        "cutoffs": summary["cutoffs"],
         "drive_profile": {"bucket_frames": BUCKET_FRAMES, "drives": profiles},
         "drives": summary["drives"],
         "generated_from": reports.files,
@@ -516,10 +691,11 @@ def site_results(reports: Reports, drives: dict) -> dict:
         },
         "legacy": {key: reports.legacy[key] for key in LEGACY_KEYS},
         "paired_leakage": summary["paired_leakage"],
+        "parity": export_parity(reports, export),
         "protocol_names": PUBLIC_NAMES,
         "regimes": summary["regimes"],
         "shipped": summary["shipped"],
-        "split_rules": split_rules(shipped["splits"]["block"], shipped["splits"]["firewall"]),
+        "split_rules": split_rules(setting["block"], setting["firewall"]),
         "split_sizes": split_sizes(reports),
         "train_config": summary["train_config"],
         "twin": summary["twin"],
@@ -570,11 +746,27 @@ def _check_summary_against_runs(reports: Reports) -> None:
                          f"in its run report; {redo}")
 
 
+def _paired_problem(recorded: dict, frames: int, seed: int, setting: dict) -> str | None:
+    """How ``recorded`` (a report's ``paired``: ``n`` and ``frames_sha256``) differs from the
+    paired frames the splits module makes of ``frames`` frames for ``seed`` with the shared
+    settings, or None when it does not."""
+    paired = paired_frames(make_split("blocked", frames, firewall=setting["firewall"], block=setting["block"]),
+                           make_split("leaky", frames, seed=seed))
+    found = (recorded["n"], recorded["frames_sha256"])
+    expected = (int(paired.size), frames_sha256(paired))
+    if found == expected:
+        return None
+    return (f"{found[0]} paired frames (sha256 {str(found[1])[:12]}), but the splits module pairs {expected[0]} "
+            f"(sha256 {expected[1][:12]}) of the same {frames} frames for seed {seed} with the same settings")
+
+
 def _check_runs(reports: Reports, setting: dict) -> None:
     """Refuse a run report made on another drive or with other split settings than the shipped
-    run's, one that describes the drive with another frame count than the summary does, and
-    one whose split sizes are not the ones the splits module makes from its drive's frames,
-    its protocol, its seed and the settings it records."""
+    run's, one that describes the drive with another frame count than the summary does, one
+    whose split sizes are not the ones the splits module makes from its drive's frames, its
+    protocol, its seed and the settings it records, and a blocked or shuffled run, or the
+    leakage report, whose paired frames are not the ones the splits module pairs: equal sizes
+    do not show that the splits are the same, the frames they pair do."""
     drive = setting["drive"]
     shipped_with = {"firewall": setting["firewall"], "block": setting["block"]}
     recorded = (reports.summary["drives"].get(drive) or {}).get("frames")
@@ -604,6 +796,14 @@ def _check_runs(reports: Reports, setting: dict) -> None:
                              f"for its {label} split, but the splits module makes "
                              f"{'/'.join(map(str, expected))} of the same {frames} frames with the same "
                              "settings; the split rules are not the ones it was trained with")
+        if protocol in PAIRED_PROTOCOLS:
+            problem = _paired_problem(report["paired"], frames, report["seed"], setting)
+            if problem is not None:
+                raise ValueError(f"run {name!r} recorded {problem}; the split rules are not the ones it was "
+                                 "trained with")
+    problem = _paired_problem(reports.leakage["paired"], recorded, reports.leakage["seed"], setting)
+    if problem is not None:
+        raise ValueError(f"leakage.json analyses {problem}; analyse the drive again with `sightline leakage`")
 
 
 def _check_reports(reports: Reports) -> dict:
@@ -768,6 +968,42 @@ def twin_exposure(frames: np.ndarray, trained: np.ndarray) -> dict:
             "twin_neighbour_frac": float((frame_gaps(trained, frames) <= 1).mean())}
 
 
+def clip_times(labels: DriveLabels, first_frame: int, n: int) -> dict:
+    """``first_s`` and ``last_s``: the times of a clip's first and last scored frames (``first_frame``
+    and the ``n - 1`` after it) in seconds since the drive's first frame, rounded to the millisecond
+    like the drive profile's times; both None for a drive without timestamps."""
+    if not (n >= 1 and 0 <= first_frame and first_frame + n <= len(labels)):
+        raise ValueError(f"a clip of {n} frames from frame {first_frame} does not fit in the {len(labels)} "
+                         f"frames of drive {labels.root.name!r}")
+    if labels.timestamps_s is None:
+        return {"first_s": None, "last_s": None}
+    stamps = labels.timestamps_s
+    return {"first_s": _rounded(float(stamps[first_frame] - stamps[0]), PROFILE_TIME_DECIMALS),
+            "last_s": _rounded(float(stamps[first_frame + n - 1] - stamps[0]), PROFILE_TIME_DECIMALS)}
+
+
+def leakage_pairs(leakage: dict) -> dict:
+    """pairs.json: the leakage report's example frame pairs as the page shows them, each frame
+    named by the image file the build writes for it, the gaps in seconds rounded to the
+    millisecond (timestamps are epoch seconds, so their differences carry float noise)."""
+    pairs = []
+    for pair in leakage["pairs"]:
+        entry = {"frame": pair["frame"], "image": f"frame-{pair['frame']}.jpg", "angle_deg": pair["angle_deg"]}
+        for protocol in LOOKUP_PROTOCOLS:
+            side = pair[protocol]
+            entry[protocol] = {
+                "nn_frame": side["nn_frame"],
+                "image": f"frame-{side['nn_frame']}.jpg",
+                "gap_frames": side["gap_frames"],
+                "gap_s": None if side["gap_s"] is None else round(side["gap_s"], 3),
+                "pixel_rmse": side["pixel_rmse"],
+                "nn_angle_deg": side["nn_angle_deg"],
+            }
+        pairs.append(entry)
+    return {"drive": leakage["drive"], "seed": leakage["seed"], "median_frame_interval_s": leakage["dt_s"],
+            "pairs": pairs}
+
+
 def _rule(where: str, n: int, lead_in: int) -> str:
     return (f"the {n}-frame window with the largest standard deviation of its steering labels, among the "
             f"windows that fit, with the {lead_in} frames before them, inside {where} and whose labels, those "
@@ -888,22 +1124,26 @@ def _move(source: Path, target: Path, created: list[Path]) -> None:
 
 
 def _swap_in(new_root: Path, out_dir: Path, new_export: Path, export_path: Path) -> None:
-    """Put a staged build in place: the previous build's files and export.json are moved into
-    a folder beside ``out_dir``, then the files under ``new_root`` into ``out_dir`` and
-    ``new_export`` to ``export_path``. If anything fails, every new file and folder is removed
-    and the old files are moved back, so ``out_dir`` and ``export_path`` are as they were; the
-    folder of old files is removed either way, unless moving them back failed, and then the
-    error names it."""
+    """Put a staged build in place, every move a rename within one folder's volume: the previous
+    build's files are moved into a folder beside ``out_dir`` and the previous export.json to a
+    hidden name beside itself, then the files under ``new_root`` (a folder beside ``out_dir``)
+    into ``out_dir`` and ``new_export`` (a file beside ``export_path``) to ``export_path``. If
+    anything fails, every new file and folder is removed and the old files are moved back, so
+    ``out_dir`` and ``export_path`` are as they were; the old files are removed either way,
+    unless moving them back failed, and then the error says where they are."""
     old = sorted({path for folder, patterns in GENERATED.items() for pattern in patterns
                   for path in (out_dir / folder).glob(pattern) if path.is_file()}
-                 | {out_dir / name for name in FIXED_FILES if (out_dir / name).is_file()}
-                 | ({export_path} if export_path.is_file() else set()))
+                 | {out_dir / name for name in FIXED_FILES if (out_dir / name).is_file()})
     aside = Path(tempfile.mkdtemp(dir=out_dir.parent, prefix=f".{out_dir.name}-previous-"))
+    old_export = export_path.with_name(f".{export_path.name}.{os.getpid()}-{secrets.token_hex(4)}.previous")
     moved, placed, created = [], [], []
     try:
         for k, path in enumerate(old):
             os.replace(path, aside / str(k))
             moved.append((aside / str(k), path))
+        if export_path.is_file():
+            os.replace(export_path, old_export)
+            moved.append((old_export, export_path))
         for path in sorted(p for p in new_root.rglob("*") if p.is_file()):
             target = out_dir / path.relative_to(new_root)
             _move(path, target, created)
@@ -921,11 +1161,14 @@ def _swap_in(new_root: Path, out_dir: Path, new_export: Path, export_path: Path)
             for kept, path in reversed(moved):
                 os.replace(kept, path)
         except OSError as exc:
+            where = f"{aside}" + (f" and {old_export}" if old_export.exists() else "")
             raise RuntimeError(f"the new site data could not be put in place ({failure}), and the previous "
-                               f"files could not all be put back ({exc}); they are in {aside}") from failure
+                               f"files could not all be put back ({exc}); they are in {where}") from failure
         shutil.rmtree(aside, ignore_errors=True)
         raise
     shutil.rmtree(aside, ignore_errors=True)
+    with contextlib.suppress(OSError):
+        old_export.unlink(missing_ok=True)
 
 
 def _versions(ffmpeg: str | None) -> dict:
@@ -945,13 +1188,14 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
     what export.json holds.
 
     Refuses, before writing anything: a missing ffmpeg when ``video`` is on; a report that
-    lacks a key the site data reads; reports that disagree on the runs, the drive or the split
-    settings, a run report whose split sizes are not the ones the splits module makes from its
-    settings, or a summary whose figures for the shipped run or its twin differ from their run
-    reports; a run whose best.pt is not the checkpoint its report describes; a cache that is
-    missing or not built from the drive's labels as they are now; a drive whose labels are not
-    the ones the reports were made from; a 2018 clip closer than 2·firewall + 1 frames to a
-    frame the shipped run trained on.
+    lacks a key the site data reads (``REQUIRED``); reports that disagree on the runs, the drive
+    or the split settings, a run report whose split sizes or paired frames are not the ones the
+    splits module makes from its settings, or a summary whose figures for the shipped run or its
+    twin differ from their run reports; a run whose best.pt is not the checkpoint its report
+    describes; a cache that is missing or not built from the drive's labels as they are now; a
+    drive whose labels are not the ones the reports were made from; a 2018 clip closer than
+    ``2 * firewall + 1`` frames to a frame the shipped run trained on. A model whose parity or size
+    fails its gate is refused after the build was staged, and nothing of it is kept.
     """
     if clip_frames < SELFTEST_INPUTS:
         raise ValueError(f"a clip needs at least {SELFTEST_INPUTS} frames (the self-test inputs), got {clip_frames}")
@@ -967,7 +1211,8 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
     drives = {"c2018": setting["drive"], "c2017": setting["cross_drive"]}
     opened = {drive: _open_drive(workspace, drive, summary) for drive in dict.fromkeys(drives.values())}
     # the labels of each drive are the repaired ones its cache was just checked against
-    results = site_results(reports, {drive: labels for drive, (labels, _) in opened.items()})
+    labels_by_drive = {drive: labels for drive, (labels, _) in opened.items()}
+    _check_inputs(reports, labels_by_drive)
 
     firewall = setting["firewall"]
     train_cache = opened[setting["drive"]][1]
@@ -1060,6 +1305,7 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
                 "n": clip_frames,
                 "lead_in": lead_in,
                 "first_frame": first,
+                **clip_times(labels, first, clip_frames),
                 "frame_lags": list(lags),
                 "rule": clip["rule"],
                 "labels_deg": [float(a) for a in truth],
@@ -1098,25 +1344,8 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
                        | {pair[p]["nn_frame"] for pair in leakage["pairs"] for p in LOOKUP_PROTOCOLS})
         for frame in named:
             (folder / f"frame-{frame}.jpg").write_bytes(jpeg_bytes(_camera_frame(labels, frame), PAIR_QUALITY))
-        pairs = []
-        for pair in leakage["pairs"]:
-            entry = {"frame": pair["frame"], "image": f"frame-{pair['frame']}.jpg", "angle_deg": pair["angle_deg"]}
-            for protocol in LOOKUP_PROTOCOLS:
-                side = pair[protocol]
-                entry[protocol] = {
-                    "nn_frame": side["nn_frame"],
-                    "image": f"frame-{side['nn_frame']}.jpg",
-                    "gap_frames": side["gap_frames"],
-                    # timestamps are epoch seconds, so their differences carry float noise
-                    "gap_s": None if side["gap_s"] is None else round(side["gap_s"], 3),
-                    "pixel_rmse": side["pixel_rmse"],
-                    "nn_angle_deg": side["nn_angle_deg"],
-                }
-            pairs.append(entry)
-        write_report(folder / "pairs.json", {"drive": leakage["drive"], "seed": leakage["seed"],
-                                             "median_frame_interval_s": leakage["dt_s"], "pairs": pairs})
+        write_report(folder / "pairs.json", leakage_pairs(leakage))
 
-        write_report(staging / "data" / "results.json", results)
         export = {
             "code_version": code_version(),
             "device": "cpu",
@@ -1150,6 +1379,14 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
             "selftest": {"clip": "c2018", "frames": [int(f) for f in selftest_frames]},
             "versions": _versions(ffmpeg),
         }
-        write_report(Path(tmp) / "export.json", export)
-        _swap_in(staging, out_dir, Path(tmp) / "export.json", reports_dir / "export.json")
+        # results.json carries this build's own export record, the one export.json is about to get
+        write_report(staging / "data" / "results.json", site_results(reports, labels_by_drive, export))
+        # staged beside its final path, so putting it in place is a rename on the reports' own volume
+        staged_export = reports_dir / f".export.json.{os.getpid()}-{secrets.token_hex(4)}.new"
+        try:
+            write_report(staged_export, export)
+            _swap_in(staging, out_dir, staged_export, reports_dir / "export.json")
+        finally:
+            with contextlib.suppress(OSError):
+                staged_export.unlink(missing_ok=True)
     return export

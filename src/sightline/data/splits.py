@@ -23,8 +23,10 @@ of generalization. Three protocols are provided:
 
 The rules every split is made with unless a caller names others are the module
 constants ``FIREWALL``, ``BLOCK``, ``BLOCK_PATTERN``, ``TRAIN_FRAC`` and
-``VAL_FRAC``; the functions below take their defaults from them, and the site
-data states them as the split rules.
+``VAL_FRAC``; the functions below and the commands take their defaults from
+them. The site data states the split rules: the pattern and the fractions are
+these constants, which no command changes, and the block and the firewall are
+the values the runs recorded, which the commands can change.
 """
 
 from __future__ import annotations

@@ -1,8 +1,11 @@
+import json
+
 import numpy as np
 import pytest
 
-from sightline.evaluate import (baseline_predictions, contiguous_runs, pearson_r,
-                                regime_breakdown, regression_metrics, score_split, sign_agreement)
+from conftest import REPO
+from sightline.evaluate import (TOLERANCES_DEG, baseline_predictions, contiguous_runs, pearson_r,
+                                regime_breakdown, regression_metrics, score_split, sign_agreement, within_key)
 
 
 def test_zero_baseline_mae_is_mean_absolute_angle():
@@ -139,3 +142,23 @@ def test_split_scores_hold_only_plain_python_numbers():
             assert type(value) in (int, float, str, bool, type(None)), (type(value), value)
 
     walk(s)
+
+
+# --- the tolerances -------------------------------------------------------------------------
+
+def test_the_shares_within_a_tolerance_are_named_after_the_tolerances():
+    assert [within_key(t) for t in TOLERANCES_DEG] == ["within_1p5_deg", "within_5_deg", "within_15_deg"]
+    errors = np.array([0.0, 1.5, 1.6, 5.0, 14.9, 15.0, 15.1, 30.0])
+    metrics = regression_metrics(errors, np.zeros(errors.size))
+    assert {k: v for k, v in metrics.items() if k.startswith("within_")} == \
+        {"within_1p5_deg": 2 / 8, "within_5_deg": 4 / 8, "within_15_deg": 6 / 8}
+
+
+def test_the_committed_run_reports_were_scored_with_the_codes_tolerances():
+    names = {within_key(t) for t in TOLERANCES_DEG}
+    paths = sorted((REPO / "reports" / "runs").glob("*.json"))
+    assert paths
+    for path in paths:
+        report = json.loads(path.read_text())
+        for split in ("val", "test", "cross_drive"):
+            assert {k for k in report[split]["model"] if k.startswith("within_")} == names, (path.name, split)

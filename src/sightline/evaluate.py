@@ -28,8 +28,10 @@ __all__ = [
     "score_split",
     "sign_agreement",
     "smoothness",
+    "within_key",
     "REGIME_BINS",
     "SIGN_MIN_ABS_DEG",
+    "TOLERANCES_DEG",
 ]
 
 #: |angle| boundaries for regimes: straight < 5, gentle 5-30, sharp >= 30
@@ -38,6 +40,16 @@ REGIME_BINS = (5.0, 30.0)
 #: frames steered less than this are left out of the sign agreement: near
 #: straight, the sign of the wheel is noise
 SIGN_MIN_ABS_DEG = 5.0
+
+#: the errors, in degrees, that the shares of frames within them are given for
+#: (``within_1p5_deg``, ``within_5_deg``, ``within_15_deg``)
+TOLERANCES_DEG = (1.5, 5.0, 15.0)
+
+
+def within_key(tolerance_deg: float) -> str:
+    """The name of the share of frames whose error is at most ``tolerance_deg``:
+    ``within_1p5_deg`` for 1.5, ``within_5_deg`` for 5."""
+    return f"within_{tolerance_deg:g}_deg".replace(".", "p")
 
 
 def regression_metrics(pred: np.ndarray, target: np.ndarray) -> dict:
@@ -54,9 +66,7 @@ def regression_metrics(pred: np.ndarray, target: np.ndarray) -> dict:
         "mae_deg": float(err.mean()),
         "rmse_deg": float(np.sqrt(((pred - target) ** 2).mean())),
         "medae_deg": float(np.median(err)),
-        "within_1p5_deg": float((err <= 1.5).mean()),
-        "within_5_deg": float((err <= 5.0).mean()),
-        "within_15_deg": float((err <= 15.0).mean()),
+        **{within_key(tolerance): float((err <= tolerance).mean()) for tolerance in TOLERANCES_DEG},
     }
 
 

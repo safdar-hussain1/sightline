@@ -9,13 +9,17 @@ One JSON report per run.
 
 ``aggregate`` combines the run reports into the summary: statistics over
 seeds per model and protocol, the paired leakage measurement, the
-generalisation ladder (shuffled, blocked, later in the drive, another day)
-and the shipped model, chosen on validation MAE alone. It refuses reports
-that were not made and scored alike: different library versions, drives,
-split settings, evaluation device, training recipe (epochs, patience,
-learning rate, batch size and weight decay for every run; augmentation and
-dropout per model), frame history per model, frames behind a shared
-baseline, or a checkpoint that is no longer the run's best.pt.
+generalisation ladder (shuffled, blocked, later in the drive, another day),
+the shipped model, chosen on validation MAE alone, and the evaluation's
+cutoffs (``cutoffs``: the edges of the steering regimes, the smallest angle
+the sign agreement counts and the tolerances of the shares of frames within
+them, from ``sightline.evaluate``). It refuses reports that were not made
+and scored alike: different library versions, drives, split settings,
+evaluation device, training recipe (epochs, patience, learning rate, batch
+size and weight decay for every run; augmentation and dropout per model),
+frame history per model, frames behind a shared baseline, shares of frames
+within other tolerances than the evaluation code's, or a checkpoint that is
+no longer the run's best.pt.
 Published documents read their numbers from these reports, nowhere else.
 
 Reports are written as sorted, indented JSON of plain Python values with a
@@ -37,7 +41,14 @@ import torch
 from sightline.data.cache import build_cache
 from sightline.data.labels import load_labels, repair_dropouts
 from sightline.data.splits import PROTOCOLS, PUBLIC_NAMES, frames_sha256, make_split, paired_frames
-from sightline.evaluate import regression_metrics, score_split
+from sightline.evaluate import (
+    REGIME_BINS,
+    SIGN_MIN_ABS_DEG,
+    TOLERANCES_DEG,
+    regression_metrics,
+    score_split,
+    within_key,
+)
 from sightline.models import MODEL_SPECS, build_model
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
 from sightline.train import code_version, predict
@@ -49,6 +60,7 @@ __all__ = [
     "aggregate",
     "checkpoint_sha256",
     "evaluate_run",
+    "evaluation_cutoffs",
     "finished_runs",
     "frames_sha256",
     "load_run_model",
@@ -166,6 +178,15 @@ def write_report(path: Path, data: dict) -> None:
     partial = path.with_name(path.name + ".partial")
     partial.write_text(text)
     os.replace(partial, path)
+
+
+def evaluation_cutoffs() -> dict:
+    """The cutoffs every split is scored with, in degrees: the edges of the steering regimes
+    (``regime_bins_deg``: straight below the first, sharp from the second on), the smallest
+    |angle| the sign agreement counts (``sign_min_abs_deg``) and the tolerances of the shares of
+    frames within them (``tolerances_deg``)."""
+    return {"regime_bins_deg": [float(edge) for edge in REGIME_BINS], "sign_min_abs_deg": float(SIGN_MIN_ABS_DEG),
+            "tolerances_deg": [float(tolerance) for tolerance in TOLERANCES_DEG]}
 
 
 def _versions() -> dict:
@@ -475,6 +496,11 @@ def aggregate(run_reports: list[dict], runs_dir: Path | None = None) -> dict:
     if runs_dir is not None:
         _check_checkpoints(reports, runs_dir)
     versions = _require_one(reports, lambda r: r["versions"], "library versions")
+    within = _require_one(reports, lambda r: sorted(k for k in r["test"]["model"] if k.startswith("within_")),
+                          "shares of frames within a tolerance")
+    if within != sorted(within_key(tolerance) for tolerance in TOLERANCES_DEG):
+        raise ValueError(f"the reports give the shares {', '.join(within)}, but the evaluation code scores "
+                         f"{', '.join(within_key(tolerance) for tolerance in TOLERANCES_DEG)}; evaluate them again")
     train_drive = _require_one(reports, lambda r: r["drive"], "training drive")
     device = _require_one(reports, lambda r: r["device"], "evaluation device")
     _require_one(reports, lambda r: {"firewall": r["splits"]["firewall"], "block": r["splits"]["block"]},
@@ -545,4 +571,5 @@ def aggregate(run_reports: list[dict], runs_dir: Path | None = None) -> dict:
         "twin": {"run": twin["run"], "model": twin["model"], "protocol": twin["protocol"], "seed": twin["seed"]},
         "regimes": regimes,
         "drives": drives,
+        "cutoffs": evaluation_cutoffs(),
     }

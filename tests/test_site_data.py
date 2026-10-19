@@ -20,7 +20,9 @@ when it is tracked but missing or unreadable.
 """
 import base64
 import copy
+import errno
 import hashlib
+import inspect
 import itertools
 import json
 import math
@@ -43,8 +45,10 @@ from sightline.cli import main
 from sightline.data import splits
 from sightline.data.cache import DriveCache
 from sightline.data.labels import DriveLabels, load_labels, repair_dropouts
-from sightline.data.splits import make_split
+from sightline.data.splits import frames_sha256, make_split, paired_frames
+from sightline.demo import render_demo
 from sightline.export import site_data
+from sightline.export.onnx_export import ANGLE_TOLERANCE_DEG, SALIENCY_TOLERANCE
 from sightline.legacy import TENSOR_SHAPES
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
 from sightline.reporting import load_run_model
@@ -431,6 +435,39 @@ def test_twin_exposure_counts_frames_trained_on_and_their_neighbours():
         {"twin_trained_frac": 0.0, "twin_neighbour_frac": 0.0}
 
 
+def test_each_clip_gives_the_times_of_its_first_and_last_scored_frames(site):
+    clip = site.clips["c2018"]
+    stamps = site.labels["drive2018"].timestamps_s
+    first, last = clip["first_frame"], clip["first_frame"] + CLIP - 1
+    assert (clip["first_s"], clip["last_s"]) == \
+        (round(stamps[first] - stamps[0], 3), round(stamps[last] - stamps[0], 3))
+    assert (clip["first_s"], clip["last_s"]) == (round(first * 0.057, 3), round(last * 0.057, 3))  # 57 ms apart
+    # the 2017 stand-in, like the 2017 drive, has no timestamps
+    assert (site.clips["c2017"]["first_s"], site.clips["c2017"]["last_s"]) == (None, None)
+
+
+def test_clip_times_are_seconds_since_the_first_frame_to_the_millisecond():
+    stamps = 1530445184.912 + np.array([0.0, 0.057, 0.115, 0.171, 0.228, 0.3])
+    assert stamps[2] - stamps[0] != 0.115  # epoch seconds leave float noise in their differences
+    labels = _labels(np.zeros(6), stamps)
+    assert site_data.clip_times(labels, 2, 3) == {"first_s": 0.115, "last_s": 0.228}
+    assert site_data.clip_times(labels, 0, 6) == {"first_s": 0.0, "last_s": 0.3}
+    assert site_data.clip_times(_labels(np.zeros(6)), 2, 3) == {"first_s": None, "last_s": None}
+    for first, n in ((4, 3), (-1, 2), (0, 0)):
+        with pytest.raises(ValueError, match="does not fit in the 6 frames of drive 'drivex'"):
+            site_data.clip_times(labels, first, n)
+
+
+def test_the_clips_play_at_the_rate_drive2018_was_recorded_at():
+    # sightline report records the median interval between the drive's timestamps
+    interval = json.loads((REPO / "reports" / "summary.json").read_text())["drives"]["drive2018"]["median_dt_s"]
+    assert site_data.CLIP_FPS == pytest.approx(1 / interval, rel=0.005)
+    drives = committed_drives()
+    if drives is not None:  # the drive itself is here: its own timestamps give that interval
+        assert drives["drive2018"].median_dt_s() == interval
+    assert site_data.CLIP_FPS == inspect.signature(render_demo).parameters["fps"].default  # as the demo plays
+
+
 @needs_ffmpeg
 def test_each_clip_video_is_h264_at_17_5_fps_of_its_scored_camera_frames(site):
     for cid, clip in site.clips.items():
@@ -552,6 +589,7 @@ COVERAGE = [
     ("leakage.drive", "leakage", "drive"),
     ("leakage.seed", "leakage", "seed"),
     ("leakage.median_frame_interval_s", "leakage", "dt_s"),
+    ("cutoffs", "summary", "cutoffs"),
     ("baselines.run", "shipped_report", "run"),
     ("baselines.test.n", "shipped_report", "test.n"),
     ("baselines.test.model", "shipped_report", "test.model"),
@@ -679,6 +717,16 @@ def test_results_json_copies_the_reports_value_for_value(site):
     # the drive profile is the repaired labels averaged over buckets, recomputed here with numpy
     assert_profile_matches(results["drive_profile"], site.labels)
     covered |= {("drive_profile", *leaf) for leaf, _ in _leaves(results["drive_profile"])}
+    # the export parity is export.json's, value for value, under the page's names
+    for key, run in (("sightline", site.shipped), ("shuffled", site.twin)):
+        checked = site.export["models"][key]["parity"]
+        assert results["parity"][key] == {
+            "run": run, "stacks": checked["frames"], "max_abs_angle_deg": checked["max_angle_diff_deg"],
+            "max_abs_saliency": checked["max_saliency_diff"], "angle_tolerance_deg": checked["angle_tolerance_deg"],
+            "saliency_tolerance": checked["saliency_tolerance"],
+            "onnxruntime": site.export["versions"]["onnxruntime"]} and site.export["models"][key]["run"] == run
+        assert results["parity"][key]["onnxruntime"] == ort.__version__
+        covered |= {("parity", key, field) for field in results["parity"][key]}
     numeric = {leaf for leaf, value in _leaves(results)
                if isinstance(value, (int, float)) and not isinstance(value, bool)}
     assert len(numeric) > 150
@@ -693,7 +741,144 @@ def test_results_json_names_the_protocols_as_the_page_does(site):
         "reports/leakage.json", "reports/legacy.json"]
 
 
-def test_no_string_the_page_shows_has_a_middle_dot(site):
+@pytest.mark.parametrize("tree, path, missing", [
+    ({"a": {"b": 1}}, "a.b", None),
+    ({"a": {"b": None}}, "a.b", None),  # a null value is there
+    ({"a": {"b": 1}}, "a.c", "a.c"),
+    ({"a": 1}, "a.b", "a.b"),  # not a mapping
+    ({}, "a.b.c", "a"),
+    ({"a": {"x": {"b": 1}, "y": {"c": 2}}}, "a.*.b", "a.y.b"),
+    ({"a": [{"b": 1}, {"b": 2}, {}]}, "a.*.b", "a.2.b"),
+    ({"a": []}, "a.*.b", "a.*"),
+    ({"a": {}}, "a.*", "a.*"),
+    ({"a": {"x": []}}, "a.*.*", "a.x.*"),
+])
+def test_missing_key_names_the_first_place_a_report_lacks_a_path(tree, path, missing):
+    assert site_data.missing_key(tree, path) == missing
+
+
+def _key_paths(tree, prefix=()):
+    """The path of every key of every mapping under ``tree``; in a list, the first item's only."""
+    if isinstance(tree, dict):
+        for key, value in tree.items():
+            yield (*prefix, key)
+            yield from _key_paths(value, (*prefix, key))
+    elif isinstance(tree, list) and tree:
+        yield from _key_paths(tree[0], (*prefix, 0))
+
+
+def _an_entry_a_star_stands_for(path: tuple, patterns) -> bool:
+    """Whether ``path`` names a whole entry of a mapping or list that some pattern of ``patterns``
+    (``REQUIRED`` paths) walks with ``*``: a drive, a group, a model, rather than a field."""
+    for pattern in patterns:
+        parts = pattern.split(".")
+        if len(path) <= len(parts) and parts[len(path) - 1] == "*" and \
+                all(part in ("*", str(key)) for part, key in zip(parts, path)):
+            return True
+    return False
+
+
+def test_every_key_the_site_reads_is_one_it_requires(site):
+    """Every key of every report, taken away in turn. A field is either one ``REQUIRED`` lists, and
+    the reports are refused for lacking it in one line, or one the site never reads, and every check
+    and the results go through without it. A whole entry of a mapping the site walks (a drive, a
+    group) may instead be refused in one line by the checks that match the reports to each other.
+    Anything else (a KeyError, a TypeError, a refusal for another reason) is a key the site reads but
+    ``REQUIRED`` does not list, and is named here."""
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    sources = {"summary": reports.summary, "leakage": reports.leakage, "legacy": reports.legacy,
+               "export": site.export, **{name: report for name, report in reports.runs.items()}}
+    patterns = {"summary": site_data.REQUIRED["summary"][0], "leakage": site_data.REQUIRED["leakage"][0],
+                "legacy": site_data.REQUIRED["legacy"][0], "export": site_data.REQUIRED["export"][0]}
+    run_patterns = [*site_data.REQUIRED["run"][0], *site_data.REQUIRED["splits"][0], *site_data.REQUIRED["paired"][0]]
+    unlisted, outcomes = [], {"refused": 0, "refused by a check": 0, "read nothing": 0}
+    for source, report in sources.items():
+        for path in _key_paths(report):
+            changed = copy.deepcopy(report)
+            _at(changed, path[:-1]).pop(path[-1])
+            trial, export = reports, site.export
+            if source == "export":
+                export = changed
+            elif source in ("summary", "leakage", "legacy"):
+                trial = replace(reports, **{source: changed})
+            else:
+                trial = replace(reports, runs={**reports.runs, source: changed})
+            where = f"{source}: {'.'.join(map(str, path))}"
+            try:
+                site_data.require_what_the_site_reads(trial)
+                site_data._require(export, "export", "export.json")
+            except ValueError as exc:
+                if " lacks " in str(exc) and "\n" not in str(exc):
+                    outcomes["refused"] += 1
+                else:
+                    unlisted.append(f"{where} ({exc})")
+                continue
+            try:
+                site_data.site_results(trial, site.labels, export)
+                site_data.leakage_pairs(trial.leakage)
+                outcomes["read nothing"] += 1
+            except ValueError as exc:
+                entry = _an_entry_a_star_stands_for(path, patterns.get(source, run_patterns))
+                if entry and "\n" not in str(exc):
+                    outcomes["refused by a check"] += 1
+                else:
+                    unlisted.append(f"{where} (ValueError: {exc})")
+            except Exception as exc:  # noqa: BLE001 - every other way of failing names an unlisted key
+                unlisted.append(f"{where} ({type(exc).__name__}: {exc})")
+    assert unlisted == [], "keys the site reads but REQUIRED does not list:\n" + "\n".join(unlisted)
+    assert outcomes["refused"] > 300 and outcomes["refused by a check"] > 0 and outcomes["read nothing"] > 100, outcomes
+
+
+def test_an_export_record_of_another_run_or_checkpoint_is_refused(site):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    for key, field, value in (("sightline", "run", site.twin), ("shuffled", "checkpoint_sha256", "0" * 64)):
+        export = copy.deepcopy(site.export)
+        export["models"][key][field] = value
+        with pytest.raises(ValueError, match=f"export.json's {key} model is run .*; write the site data again with "
+                                             "`sightline site-data`") as exc:
+            site_data.site_results(reports, {}, export)
+        assert "\n" not in str(exc.value)
+
+
+#: characters no key or string of the site data may hold: the middle dot and the bullet, separators
+#: the page never uses, and the thin and narrow no-break spaces, which the page's font subset lacks
+BANNED_CHARACTERS = {"\u00b7": "middle dot", "\u2022": "bullet", "\u2009": "thin space",
+                     "\u202f": "narrow no-break space"}
+
+
+def banned_characters(tree, where: str = "") -> list[str]:
+    """Each key or string of ``tree`` (a parsed JSON file) that holds one of ``BANNED_CHARACTERS``,
+    as ``<where it is>: <which>``."""
+    found = []
+    if isinstance(tree, dict):
+        for key, value in tree.items():
+            found += [f"{where}.{key} (key): {name}" for char, name in BANNED_CHARACTERS.items() if char in key]
+            found += banned_characters(value, f"{where}.{key}")
+    elif isinstance(tree, list):
+        for i, value in enumerate(tree):
+            found += banned_characters(value, f"{where}[{i}]")
+    elif isinstance(tree, str):
+        found += [f"{where}: {name}" for char, name in BANNED_CHARACTERS.items() if char in tree]
+    return found
+
+
+def site_data_files(public: Path) -> list[Path]:
+    """The JSON files of the site data under ``public``: results.json, every clip.json, the leakage
+    pairs and the self-test's expected outputs."""
+    data = public / "data"
+    return [data / "results.json", *sorted((data / "clips").glob("*/clip.json")), data / "leakage" / "pairs.json",
+            data / "selftest" / "expected.json"]
+
+
+def test_the_character_check_finds_each_banned_character_in_a_key_or_a_string():
+    assert set(BANNED_CHARACTERS) == {"\u00b7", "\u2022", "\u2009", "\u202f"}
+    assert banned_characters({"a": ["x", {"b": "fine"}], "c": 1.5, "d": None}) == []
+    for char, name in BANNED_CHARACTERS.items():
+        assert banned_characters({"a": [f"x{char}y"]}) == [f".a[0]: {name}"]
+        assert banned_characters({"a": {f"k{char}": 1}}) == [f".a.k{char} (key): {name}"]
+
+
+def test_no_string_the_page_shows_holds_a_middle_dot_a_bullet_or_a_thin_space(site):
     # the protocols' labels and the block pattern the page prints are among the strings checked below
     def strings_of(tree):
         return {value for _, value in _leaves(tree) if isinstance(value, str)}
@@ -701,22 +886,19 @@ def test_no_string_the_page_shows_has_a_middle_dot(site):
     assert strings_of(site.results["split_rules"]) == \
         {"blocked", "later in the drive", "shuffled", splits.BLOCK_PATTERN}
     assert strings_of(site.results["split_sizes"]) == {"blocked", "shuffled", "drive2018"}
-    shown = [site.out / "data" / "results.json", site.out / "data" / "leakage" / "pairs.json",
-             site.out / "data" / "selftest" / "expected.json"]
-    shown += [_clip_dir(site, cid) / "clip.json" for cid in TITLES]
-    for path in shown:
-        text = path.read_text()
-        assert "\\u00b7" not in text and "\u00b7" not in text, path.name  # escaped or not
-        strings = [value for _, value in _leaves(json.loads(text)) if isinstance(value, str)]
-        assert strings and not any("\u00b7" in s for s in strings), path.name
+    files = site_data_files(site.out)
+    assert len(files) == 5 and all(path.is_file() for path in files)
+    for path in files:
+        assert banned_characters(json.loads(path.read_text())) == [], path
 
 
 def results_out_of_sync(results: dict, summary_path: Path, reports_dir: Path, drives: dict | None) -> list[str]:
-    """The paths at which ``results`` differs from the results.json the reports and the drives'
-    repaired labels (``drives``: a drive's name to its labels) give now. Where the drives are
-    not on this machine ``drives`` is None: the drive profile, which only they can recompute, is
-    then left out of the comparison, apart from its bucket size."""
-    fresh = site_data.site_results(site_data.load_reports(summary_path, reports_dir), drives or {})
+    """The paths at which ``results`` differs from the results.json the reports, export.json and
+    the drives' repaired labels (``drives``: a drive's name to its labels) give now. Where the
+    drives are not on this machine ``drives`` is None: the drive profile, which only they can
+    recompute, is then left out of the comparison, apart from its bucket size."""
+    export = json.loads((reports_dir / "export.json").read_text())
+    fresh = site_data.site_results(site_data.load_reports(summary_path, reports_dir), drives or {}, export)
     a, b = dict(_leaves(results)), dict(_leaves(fresh))
     if drives is None:
         a, b = ({leaf: v for leaf, v in tree.items() if leaf[:2] != ("drive_profile", "drives")} for tree in (a, b))
@@ -748,6 +930,8 @@ def test_the_sync_check_finds_a_drifted_drive_profile_split_rule_or_split_size(s
         ("split_sizes", "blocked", "train"): 1,
         ("split_sizes", "leaky", "dropped"): 1,
         ("split_sizes", "blocked", "seeds", 0): 1,
+        ("parity", "sightline", "max_abs_angle_deg"): 1e-9,
+        ("parity", "shuffled", "stacks"): 1,
     }
     for path, delta in drifts.items():
         drifted = copy.deepcopy(site.results)
@@ -773,11 +957,11 @@ def test_the_drive_profile_cannot_be_made_for_a_drive_of_another_length(site):
                     angles_deg=site.labels["drive2017"].angles_deg[:-1])
     with pytest.raises(ValueError, match=f"drive 'drive2017' has {N_CROSS - 1} labelled frames, but summary.json "
                                          f"describes {N_CROSS}") as exc:
-        site_data.site_results(reports, {"drive2017": short})
+        site_data.site_results(reports, {"drive2017": short}, site.export)
     assert "\n" not in str(exc.value)
     with pytest.raises(ValueError, match="drive 'drive2019' has 1 labelled frames, but summary.json describes None"):
         site_data.site_results(reports, {"drive2019": DriveLabels(
-            root=Path("drive2019"), filenames=["0.jpg"], angles_deg=np.zeros(1))})
+            root=Path("drive2019"), filenames=["0.jpg"], angles_deg=np.zeros(1))}, site.export)
 
 
 def sprite_hash_mismatches(clip_dir: Path) -> list[int]:
@@ -863,6 +1047,15 @@ def test_a_drive_profile_does_not_depend_on_the_order_a_bucket_is_added_in():
     values = [1e16, 1.0, -1e16]  # added left to right, the 1.0 is lost between the large values
     for order in itertools.permutations(values):
         assert site_data.drive_profile(_labels(order), 3)["mean_deg"] == [0.33]
+    # the builtin sum of Python 3.12 on compensates its rounding and gets the bucket above right in
+    # any order; this one defeats that compensation, and plain left-to-right addition too: only an
+    # exactly rounded sum gives it one mean whatever the order
+    hard = [3087808415424627.5, 3666406176012145.0, -4866849293776619.0, -3.2723348642660356e-17,
+            5983383604037270.0]
+    assert len({round(sum(order) / 5, 2) for order in itertools.permutations(hard)}) > 1
+    means = {mean for order in itertools.permutations(hard)
+             for mean in site_data.drive_profile(_labels(order), 5)["mean_deg"]}
+    assert means == {round(math.fsum(hard) / 5, 2)}
 
 
 def test_a_drive_profile_leaves_its_labels_alone_and_repeats_itself():
@@ -883,6 +1076,29 @@ def test_a_drive_profile_refuses_what_it_cannot_chart():
         site_data.drive_profile(_labels([1.0]), 0)
     with pytest.raises(ValueError, match="a drive without frames has no profile"):
         site_data.drive_profile(_labels([]), 4)
+
+
+def test_the_profile_is_refused_for_labels_the_reports_were_not_scored_on(site, tmp_path):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    assert site_data.site_results(reports, site.labels, site.export)["drive_profile"]["drives"].keys() == \
+        {"drive2018", "drive2017"}
+    # the label file as recorded, its dropouts left as zeros: the frames agree, the repairs do not
+    with pytest.raises(ValueError, match="drive 'drive2017' has 0 repaired dropouts, but summary.json records 1; "
+                                         "the profile is made from the labels as repair_dropouts leaves them") as exc:
+        site_data.site_results(reports, {"drive2017": site.raw_labels["drive2017"]}, site.export)
+    assert "\n" not in str(exc.value)
+    # another label file with as many frames and repairs: one angle differs in its last digit
+    edited = tmp_path / "drive2017"
+    edited.mkdir()
+    lines = (site.data / "drive2017" / "data.txt").read_text().splitlines()
+    name, angle = lines[5].split()
+    lines[5] = f"{name} {angle[:-1]}{'1' if angle[-1] != '1' else '2'}"
+    (edited / "data.txt").write_text("\n".join(lines) + "\n")
+    labels = repair_dropouts(load_labels(edited))
+    assert (len(labels), labels.repaired_indices.size) == (N_CROSS, 1)
+    with pytest.raises(ValueError, match=r"drive 'drive2017': its label file .*data\.txt \(sha256 [0-9a-f]{12}\) is "
+                                         r"not the one the reports were made from \([0-9a-f]{12}\)"):
+        site_data.site_results(reports, {"drive2017": labels}, site.export)
 
 
 def test_the_split_rules_state_the_settings_given_and_the_splits_modules_pattern_and_fractions():
@@ -913,13 +1129,77 @@ def test_the_split_rules_of_the_fixture_are_its_recorded_settings(site):
     assert site.results["split_rules"]["forward"]["firewall"] == FIREWALL
 
 
+def test_the_split_rules_and_sizes_come_from_the_settings_every_run_shares(site):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    shipped = reports.runs[site.shipped]
+    # later-in-the-drive runs made with a wider firewall, their counts the splits module's for it:
+    # every run of the protocol agrees on its sizes, but not with the firewall the rules state
+    wide = []
+    for seed in (0, 1):
+        report = _run_report(shipped, "forward", seed)
+        made = make_split("forward", N, seed=seed, firewall=FIREWALL + 10, block=BLOCK)
+        report["splits"].update(firewall=FIREWALL + 10, train_n=int(made.train.size), val_n=int(made.val.size),
+                                test_n=int(made.test.size))
+        wide.append(report)
+    mixed = replace(reports, runs={**reports.runs, **{r["run"]: r for r in wide}})
+    assert site_data.split_sizes(mixed)["forward"]["train"] == made.train.size != HAND_COUNTS["forward"]["train"]
+    with pytest.raises(ValueError, match=re.escape(
+            f"run 'drive2018_sightlinenet_forward_s0' made its splits with {{'firewall': {FIREWALL + 10}, "
+            f"'block': {BLOCK}}}, but the shipped run with {{'firewall': {FIREWALL}, 'block': {BLOCK}}}")):
+        site_data.site_results(mixed, {}, site.export)
+
+
+def _blocks_swapped(protocol, n, seed=0, firewall=splits.FIREWALL, block=splits.BLOCK):
+    """``make_split`` with the blocked split's validation and test blocks swapped (TTETTVT)."""
+    if protocol == "blocked":
+        return splits.blocked_split(n, block=block, firewall=firewall, pattern="TTETTVT")
+    return make_split(protocol, n, seed=seed, firewall=firewall, block=block)
+
+
+def test_a_split_pattern_that_keeps_the_sizes_is_found_by_the_paired_frames(site, monkeypatch):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    site_data._check_reports(reports)  # the splits the runs recorded: accepted
+
+    def sizes(made):
+        return made.train.size, made.val.size, made.test.size
+
+    swapped = _blocks_swapped("blocked", N, firewall=FIREWALL, block=BLOCK)
+    original = make_split("blocked", N, firewall=FIREWALL, block=BLOCK)
+    assert sizes(swapped) == sizes(original) and not np.array_equal(swapped.test, original.test)
+    monkeypatch.setattr(site_data, "make_split", _blocks_swapped)
+    with pytest.raises(ValueError, match=rf"run '{site.shipped}' recorded \d+ paired frames \(sha256 [0-9a-f]{{12}}\), "
+                                         rf"but the splits module pairs \d+ \(sha256 [0-9a-f]{{12}}\) of the same {N} "
+                                         "frames for seed 0 with the same settings") as exc:
+        site_data._check_reports(reports)
+    assert "\n" not in str(exc.value)
+
+
+def test_a_leakage_report_of_other_paired_frames_is_refused(site, tmp_path):
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    leakage = copy.deepcopy(reports.leakage)
+    leakage["paired"]["frames_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match=r"leakage.json analyses \d+ paired frames \(sha256 000000000000\), but the "
+                                         "splits module pairs .*; analyse the drive again with `sightline leakage`"):
+        site_data._check_reports(replace(reports, leakage=leakage))
+
+
+def _paired(seed: int, firewall: int = FIREWALL, block: int = BLOCK) -> dict:
+    """The paired frames of the fixture's drive for ``seed``: their count and digest."""
+    both = paired_frames(make_split("blocked", N, firewall=firewall, block=block), make_split("leaky", N, seed=seed))
+    return {"n": int(both.size), "frames_sha256": frames_sha256(both)}
+
+
 def _run_report(shipped: dict, protocol: str, seed: int, model: str = "sightlinenet") -> dict:
     """A copy of the shipped run's report for another run of the fixture's drive, with the split
-    sizes the splits module makes for it."""
+    sizes the splits module makes for it and, for a blocked or shuffled run, its paired frames."""
     report = copy.deepcopy(shipped)
     made = make_split(protocol, N, seed=seed, firewall=FIREWALL, block=BLOCK)
     report.update(run=f"drive2018_{model}_{protocol}_s{seed}", model=model, protocol=protocol, seed=seed)
     report["splits"].update(train_n=int(made.train.size), val_n=int(made.val.size), test_n=int(made.test.size))
+    if protocol == "forward":
+        report.pop("paired")
+    else:
+        report["paired"].update(seed=seed, **_paired(seed))
     return report
 
 
@@ -1127,12 +1407,14 @@ def test_a_leakage_report_of_other_splits_is_refused(site, tmp_path):
 
 
 def _reports_with(site, tmp_path, change) -> Path:
-    """A copy of the fixture's reports in which ``change`` alters the summary (``"summary"``)
-    or the shipped run's or the twin's report (``"shipped"``, ``"twin"``)."""
+    """A copy of the fixture's reports in which ``change`` alters the summary (``"summary"``),
+    the shipped run's or the twin's report (``"shipped"``, ``"twin"``), or the leakage or the
+    standard-recipe report (``"leakage"``, ``"legacy"``)."""
     reports = tmp_path / "reports"
     shutil.copytree(site.reports, reports)
     files = {"summary": reports / "summary.json", "shipped": reports / "runs" / f"{site.shipped}.json",
-             "twin": reports / "runs" / f"{site.twin}.json"}
+             "twin": reports / "runs" / f"{site.twin}.json", "leakage": reports / "leakage.json",
+             "legacy": reports / "legacy.json"}
     loaded = {key: json.loads(path.read_text()) for key, path in files.items()}
     change(loaded)
     for key, path in files.items():
@@ -1178,12 +1460,25 @@ def test_a_summary_that_disagrees_with_the_run_reports_is_refused(site, tmp_path
 
 
 @pytest.mark.parametrize("change, named, command", [
-    (lambda r: r["summary"].pop("regimes"), "'regimes.models'", "sightline report"),
+    (lambda r: r["summary"].pop("regimes"), "'regimes'", "sightline report"),
     (lambda r: r["summary"].pop("train_config"), "'train_config'", "sightline report"),
     (lambda r: r["summary"].pop("runs"), "'runs'", "sightline report"),
     (lambda r: r["shipped"]["splits"].pop("block"), "'splits.block'", "sightline eval --all"),
     (lambda r: r["shipped"]["splits"].pop("train_n"), "'splits.train_n'", "sightline eval --all"),
     (lambda r: r["twin"].pop("drives"), "'drives'", "sightline eval --all"),
+    (lambda r: r["summary"].pop("cutoffs"), "'cutoffs'", "sightline report"),
+    (lambda r: r["summary"]["groups"]["sightlinenet/blocked"].pop("seeds"), "'groups.sightlinenet/blocked.seeds'",
+     "sightline report"),
+    (lambda r: r["summary"]["ladder"]["sightlinenet"][2].pop("zero_mae_deg"),
+     "'ladder.sightlinenet.2.zero_mae_deg'", "sightline report"),
+    (lambda r: r["summary"]["paired_leakage"]["sightlinenet"]["per_seed"].clear(),
+     "'paired_leakage.sightlinenet.per_seed.*'", "sightline report"),
+    (lambda r: r["shipped"]["test"]["zero_regimes"]["sharp"].pop("n"), "'test.zero_regimes.sharp.n'",
+     "sightline eval --all"),
+    (lambda r: r["twin"]["paired"].pop("frames_sha256"), "'paired.frames_sha256'", "sightline eval --all"),
+    (lambda r: r["leakage"]["pairs"][1]["blocked"].pop("gap_s"), "'pairs.1.blocked.gap_s'", "sightline leakage"),
+    (lambda r: r["legacy"]["drives"]["drive2017"].pop("label_sha256"), "'drives.drive2017.label_sha256'",
+     "sightline legacy"),
 ])
 def test_a_report_lacking_a_key_the_site_reads_is_a_one_line_error(site, tmp_path, capsys, change, named, command):
     reports = _reports_with(site, tmp_path, change)
@@ -1220,6 +1515,7 @@ def test_a_build_that_fails_before_its_swap_leaves_the_previous_one(site, tmp_pa
         _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
     assert _snapshot(out) == before and (reports / "export.json").read_bytes() == export
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".public-")] == []
+    assert sorted(p.name for p in reports.iterdir()) == sorted(p.name for p in site.reports.iterdir())
 
 
 def test_a_build_that_fails_while_swapping_in_puts_the_previous_one_back(site, tmp_path):
@@ -1235,6 +1531,46 @@ def test_a_build_that_fails_while_swapping_in_puts_the_previous_one_back(site, t
         _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports)
     assert _snapshot(out) == before and (reports / "export.json").read_bytes() == export
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".public-")] == []
+    assert sorted(p.name for p in reports.iterdir()) == sorted(p.name for p in site.reports.iterdir())
+
+
+def test_results_json_carries_the_export_parity_of_its_own_build_not_the_previous_ones(site, tmp_path):
+    out, reports = _previous_build(site, tmp_path)
+    previous = json.loads((reports / "export.json").read_text())
+    # a build of shorter clips checks fewer frame stacks than the build whose export.json is on disk
+    export = site_data.build_site_data(reports / "summary.json", _workspace_with(site, tmp_path, _untouched),
+                                       out_dir=out, reports_dir=reports, clip_frames=CLIP - 10, video=False)
+    parity = json.loads((out / "data" / "results.json").read_text())["parity"]
+    assert json.loads((reports / "export.json").read_text()) == export
+    for key in ("sightline", "shuffled"):
+        checked = export["models"][key]["parity"]
+        assert checked["frames"] == 2 * (CLIP - 10) + 8 != previous["models"][key]["parity"]["frames"]
+        assert (parity[key]["stacks"], parity[key]["max_abs_angle_deg"], parity[key]["max_abs_saliency"]) == \
+            (checked["frames"], checked["max_angle_diff_deg"], checked["max_saliency_diff"]), key
+
+
+def test_export_json_is_staged_beside_itself_so_the_reports_can_sit_on_another_volume(site, tmp_path, monkeypatch):
+    out, reports = tmp_path / "volume-a" / "public", tmp_path / "volume-b" / "reports"
+    shutil.copytree(site.out, out)
+    shutil.copytree(site.reports, reports)
+    other_volume = reports.parent.resolve()
+    replace_file = os.replace
+
+    def renames_within_one_volume(src, dst):
+        # volume b holds the reports; a rename between it and anywhere else fails as it would across volumes
+        if Path(src).resolve().is_relative_to(other_volume) != Path(dst).resolve().is_relative_to(other_volume):
+            raise OSError(errno.EXDEV, os.strerror(errno.EXDEV), str(src), None, str(dst))
+        replace_file(src, dst)
+
+    monkeypatch.setattr(os, "replace", renames_within_one_volume)
+    export = site_data.build_site_data(reports / "summary.json", _workspace_with(site, tmp_path, _untouched),
+                                       out_dir=out, reports_dir=reports, clip_frames=CLIP, video=False)
+    assert json.loads((reports / "export.json").read_text()) == export
+    assert json.loads((out / "data" / "results.json").read_text())["parity"]["sightline"]["max_abs_angle_deg"] == \
+        export["models"]["sightline"]["parity"]["max_angle_diff_deg"]
+    # nothing staged or set aside is left beside the reports or the public folder
+    assert sorted(p.name for p in reports.iterdir()) == sorted(p.name for p in site.reports.iterdir())
+    assert [p.name for p in out.parent.iterdir()] == ["public"]
 
 
 def test_a_missing_ffmpeg_is_named_before_anything_is_written(site, tmp_path, monkeypatch):
@@ -1277,7 +1613,7 @@ def test_reports_of_many_runs_are_checked_and_listed_and_give_every_protocol_its
                              "reports/leakage.json", "reports/legacy.json"]
     assert list(reports.runs) == [site.shipped, site.twin, *sorted(r["run"] for r in extra)]
     site_data._check_reports(reports)  # the runs agree with the shipped run and with the splits module
-    results = site_data.site_results(reports, site.labels)
+    results = site_data.site_results(reports, site.labels, site.export)
     assert {p: (s["runs"], s["seeds"]) for p, s in results["split_sizes"].items()} == \
         {"leaky": (2, [0, 1]), "blocked": (3, [0, 1, 2]), "forward": (2, [0, 1])}
     assert results["generated_from"] == reports.files
@@ -1310,6 +1646,9 @@ def test_a_build_from_the_reports_of_many_runs_writes_the_sizes_of_every_protoco
      "recorded 1120/160/159 train/validation/test frames for its blocked split"),
     (lambda r: r.update(protocol="honest"),
      "the splits module cannot make its honest split of 1600 frames: unknown protocol 'honest'"),
+    (lambda r: r["paired"].update(frames_sha256="0" * 64),
+     "paired frames (sha256 000000000000), but the splits module pairs"),
+    (lambda r: r["paired"].update(n=r["paired"]["n"] + 1), "but the splits module pairs"),
 ])
 def test_a_run_report_that_disagrees_with_the_shipped_run_or_the_splits_module_is_refused(
         site, tmp_path, change, message):
@@ -1491,6 +1830,72 @@ def test_the_committed_split_rules_and_sizes_are_the_splits_modules_and_the_run_
 
 
 @needs_published
+def test_no_string_of_the_committed_site_data_holds_a_middle_dot_a_bullet_or_a_thin_space():
+    files = site_data_files(PUBLISHED)
+    assert len(files) == 5 and all(path.is_file() for path in files)
+    for path in files:
+        assert banned_characters(json.loads(path.read_text())) == [], path.relative_to(REPO)
+
+
+@needs_published
+def test_the_committed_2018_profile_is_of_the_labels_the_forward_runs_were_scored_on():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    rules, sizes = results["split_rules"]["forward"], results["split_sizes"]["forward"]
+    frames, test = sizes["frames"], sizes["test"]
+    # the later-in-the-drive split tests on the end of the drive, from a firewall after its validation frames
+    start = frames - test
+    assert start == int(frames * (rules["train_frac"] + rules["val_frac"])) + rules["firewall"]
+    profile, bucket = results["drive_profile"]["drives"][sizes["drive"]], results["drive_profile"]["bucket_frames"]
+
+    def mean_abs_over_the_test_frames(drive: dict) -> tuple[float, float]:
+        """The frame-weighted mean |angle| of the buckets over the test frames, and how far that can
+        be from the frames' own mean: a bucket's mean rounded to 0.01 deg moves it by 0.005 deg at
+        most, and a bucket only partly inside the stretch can average there anything from 0 up to
+        its size over the part inside times its mean."""
+        weighted, bound = 0.0, 0.005
+        for first, mean_abs in zip(drive["start_frame"], drive["mean_abs_deg"]):
+            size = min(bucket, frames - first)
+            inside = max(0, first + size - max(first, start))
+            weighted += inside * mean_abs
+            if 0 < inside < size:
+                bound += inside / test * (mean_abs + 0.005) * max(1.0, size / inside - 1.0)
+        return weighted / test, bound
+
+    weighted, bound = mean_abs_over_the_test_frames(profile)
+    (straight,) = {g["test_zero_mae_deg"] for key, g in results["groups"].items() if key.endswith("/forward")}
+    # always steering straight ahead errs by the mean |angle| of the forward test frames, so the two agree
+    # within the bound (0.011 deg here: 9.4049 against 9.4064), plus 1e-4 deg for the cache's float32
+    # labels; a profile of the labels as recorded, dropouts left as zeros, gives 9.3038 and is found
+    assert abs(weighted - straight) <= bound + 1e-4 and bound < 0.02
+    if (REPO / "data" / sizes["drive"] / "data.txt").is_file():
+        raw = site_data.drive_profile(load_labels(REPO / "data" / sizes["drive"]))
+        assert abs(mean_abs_over_the_test_frames(raw)[0] - straight) > 5 * (bound + 1e-4)
+
+
+@needs_published
+def test_the_committed_clips_give_their_times_on_the_drive_profiles_time_axis():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    profile, drives = results["drive_profile"], committed_drives()
+    timed = {}
+    for cid, path in results["assets"]["clips"].items():
+        clip = json.loads((PUBLISHED / path).read_text())
+        starts = profile["drives"][clip["drive"]]["start_s"]
+        timed[cid] = clip["first_s"] is not None
+        if starts is None:  # a drive without timestamps
+            assert (clip["first_s"], clip["last_s"]) == (None, None), cid
+            continue
+        # each time lies between the start of its frame's bucket and the start of the next one
+        last = clip["first_frame"] + clip["n"] - 1
+        for frame, time in ((clip["first_frame"], clip["first_s"]), (last, clip["last_s"])):
+            k = frame // profile["bucket_frames"]
+            assert starts[k] <= time and (k + 1 == len(starts) or time <= starts[k + 1]), (cid, frame, time)
+        if drives is not None:  # the drive is here: the times are its own timestamps'
+            assert site_data.clip_times(drives[clip["drive"]], clip["first_frame"], clip["n"]) == \
+                {"first_s": clip["first_s"], "last_s": clip["last_s"]}
+    assert timed == {"c2018": True, "c2017": False}
+
+
+@needs_published
 def test_the_committed_sprites_decode_to_their_recorded_hashes():
     clips = sorted((PUBLISHED / "data" / "clips").glob("*/clip.json"))
     assert [p.parent.name for p in clips] == ["c2017", "c2018"]
@@ -1514,9 +1919,10 @@ def test_the_committed_models_reproduce_each_committed_clip_from_its_sprites():
     assert sorted(results["assets"]["clips"]) == ["c2017", "c2018"]
     for cid, path in results["assets"]["clips"].items():
         clip_dir = (PUBLISHED / path).parent
-        tolerance = json.loads((clip_dir / "clip.json").read_text())["tolerance"]["angle_deg"]
+        # the tolerance the page holds a browser to is the export's, and the check uses the export's own
+        assert json.loads((clip_dir / "clip.json").read_text())["tolerance"] == {"angle_deg": ANGLE_TOLERANCE_DEG}
         gaps = clip_prediction_gaps(clip_dir, models)
-        assert max(gaps.values()) <= tolerance, (cid, gaps)
+        assert max(gaps.values()) <= ANGLE_TOLERANCE_DEG, (cid, gaps)
 
 
 @needs_published
@@ -1525,11 +1931,12 @@ def test_the_committed_models_are_the_exported_ones_and_reproduce_the_self_test(
     expected = json.loads((PUBLISHED / "data" / "selftest" / "expected.json").read_text())
     inputs = np.frombuffer((PUBLISHED / "data" / "selftest" / "frames.bin").read_bytes(), np.uint8)
     inputs = inputs.reshape(expected["shape"])
+    assert expected["tolerance"] == {"angle_deg": ANGLE_TOLERANCE_DEG, "saliency": SALIENCY_TOLERANCE}
     for key, entry in export["models"].items():
         data = (PUBLISHED / entry["file"]).read_bytes()
         assert len(data) == entry["bytes"] <= 2_000_000 and hashlib.sha256(data).hexdigest() == entry["sha256"]
         session = ort.InferenceSession(data, providers=["CPUExecutionProvider"])
         angle, saliency = session.run(None, {"frames": inputs})
         maps = np.frombuffer(base64.b64decode(expected["saliency_f32_b64"][key]), "<f4").reshape(saliency.shape)
-        assert np.abs(angle[:, 0] - np.asarray(expected["angles"][key])).max() <= expected["tolerance"]["angle_deg"]
-        assert np.abs(saliency - maps).max() <= expected["tolerance"]["saliency"]
+        assert np.abs(angle[:, 0] - np.asarray(expected["angles"][key])).max() <= ANGLE_TOLERANCE_DEG
+        assert np.abs(saliency - maps).max() <= SALIENCY_TOLERANCE

@@ -7,6 +7,18 @@
       "493b3b8a1ecdc95fa843221cd59937950d2b3184"
     ]
   },
+  "cutoffs": {
+    "regime_bins_deg": [
+      5.0,
+      30.0
+    ],
+    "sign_min_abs_deg": 5.0,
+    "tolerances_deg": [
+      1.5,
+      5.0,
+      15.0
+    ]
+  },
   "device": "cpu",
   "drives": {
     "drive2017": {

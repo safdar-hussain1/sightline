@@ -47,7 +47,7 @@ from tqdm import tqdm
 
 from sightline.data.labels import DriveLabels, load_labels, repair_dropouts
 from sightline.data.preprocess import CROP_BOTTOM, INPUT_HEIGHT, INPUT_WIDTH
-from sightline.data.splits import make_split
+from sightline.data.splits import BLOCK, FIREWALL, make_split
 from sightline.data.verify import label_sha256
 from sightline.evaluate import pearson_r, regime_breakdown, regression_metrics
 from sightline.models.pilotnet import PilotNet
@@ -271,7 +271,7 @@ def _spread(indices: np.ndarray, count: int) -> np.ndarray:
 
 
 def evaluate_legacy(weights_path: str | Path, workspace: Workspace, device: str = "cpu",
-                    firewall: int = 250, block: int = 1500) -> dict:
+                    firewall: int = FIREWALL, block: int = BLOCK) -> dict:
     """Score the standard-recipe PilotNet and return its report.
 
     The evaluation sets are the blocked and forward test frames of ``OTHER_DAY``,

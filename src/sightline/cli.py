@@ -424,7 +424,7 @@ def _positive_float(text: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    from sightline.data.splits import PROTOCOLS
+    from sightline.data.splits import BLOCK, FIREWALL, PROTOCOLS
     from sightline.models import MODEL_SPECS
     from sightline.train import DEVICES
 
@@ -455,9 +455,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--patience", type=_int_from(0), default=0,
                    help="stop after this many epochs without a better validation MAE; "
                         "0 trains every epoch (the best-validation checkpoint is kept either way)")
-    p.add_argument("--firewall", type=_int_from(0), default=250,
+    p.add_argument("--firewall", type=_int_from(0), default=FIREWALL,
                    help="frames dropped on each side of every train/evaluation boundary")
-    p.add_argument("--block", type=_int_from(1), default=1500,
+    p.add_argument("--block", type=_int_from(1), default=BLOCK,
                    help="block length of the blocked split (recorded for every protocol)")
     p.add_argument("--device", default="auto", choices=DEVICES)
     p.add_argument("--overwrite", action="store_true", help="replace an existing run of the same name")
@@ -494,9 +494,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("leakage", help="measure how close training frames sit to test frames, in time and pixels")
     p.add_argument("--drive", required=True, help="drive name under --data-dir")
     p.add_argument("--seed", type=_int_from(0), default=0, help="seed of the shuffled split")
-    p.add_argument("--firewall", type=_int_from(0), default=250,
+    p.add_argument("--firewall", type=_int_from(0), default=FIREWALL,
                    help="frames dropped on each side of every train/evaluation boundary, as in training")
-    p.add_argument("--block", type=_int_from(1), default=1500,
+    p.add_argument("--block", type=_int_from(1), default=BLOCK,
                    help="block length of the blocked split, as in training")
     p.add_argument("--out", default="reports/leakage.json", help="where to write the report")
     _add_locations(p)
@@ -505,9 +505,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("legacy", help="score the standard-recipe PilotNet from its TF1 weights")
     p.add_argument("--weights", default=None,
                    help="the .npz of its TF1 tensors (default: $SIGHTLINE_LEGACY_WEIGHTS)")
-    p.add_argument("--firewall", type=_int_from(0), default=250,
+    p.add_argument("--firewall", type=_int_from(0), default=FIREWALL,
                    help="firewall of the drive2018 test splits, as in training")
-    p.add_argument("--block", type=_int_from(1), default=1500,
+    p.add_argument("--block", type=_int_from(1), default=BLOCK,
                    help="block length of the drive2018 blocked split, as in training")
     p.add_argument("--out", default="reports/legacy.json", help="where to write the report")
     p.add_argument("--data-dir", default="data", help="folder holding the drive folders")

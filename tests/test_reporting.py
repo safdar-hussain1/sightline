@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import torch
 
-from conftest import make_drive
+from conftest import REPO, make_drive
 from sightline import train
 from sightline.cli import build_parser, main
 from sightline.data.cache import DriveCache
@@ -402,6 +402,8 @@ def _with_change(ctx, run, change):
      lambda r: r["train_config"].update(augment="standard")),
     ("augmentation and dropout of pilotnet", _name("pilotnet", "blocked", 0),
      lambda r: r["train_config"].update(dropout=0.5)),
+    ("shares of frames within a tolerance", _name("sightlinenet", "forward", 0),
+     lambda r: r["test"]["model"].update(within_2_deg=0.5)),
 ])
 def test_summary_refuses_runs_made_or_scored_differently(ctx, what, run, change):
     from sightline.reporting import aggregate
@@ -490,6 +492,35 @@ def test_summary_records_the_drives_and_the_shipped_regimes(ctx, summary):
     assert regimes["zero"] == shipped["test"]["zero_regimes"]
 
 
+def test_summary_records_the_cutoffs_of_the_evaluation_code(summary):
+    from sightline.evaluate import REGIME_BINS, SIGN_MIN_ABS_DEG, TOLERANCES_DEG
+    from sightline.reporting import evaluation_cutoffs
+
+    assert summary["cutoffs"] == evaluation_cutoffs() == {
+        "regime_bins_deg": list(REGIME_BINS), "sign_min_abs_deg": SIGN_MIN_ABS_DEG,
+        "tolerances_deg": list(TOLERANCES_DEG)}
+    assert all(type(v) is float for v in [*summary["cutoffs"]["regime_bins_deg"], summary["cutoffs"]["sign_min_abs_deg"],
+                                          *summary["cutoffs"]["tolerances_deg"]])
+
+
+def test_summary_refuses_reports_scored_with_other_tolerances_than_the_code(ctx):
+    from sightline.reporting import aggregate
+
+    reports = copy.deepcopy(list(ctx.reports.values()))
+    for r in reports:
+        r["test"]["model"]["within_20_deg"] = r["test"]["model"].pop("within_15_deg")
+    with pytest.raises(ValueError, match="within_15_deg; evaluate them again") as exc:
+        aggregate(reports)
+    assert "within_20_deg" in str(exc.value) and "\n" not in str(exc.value)
+
+
+def test_the_committed_summary_records_the_cutoffs_of_the_evaluation_code():
+    from sightline.reporting import evaluation_cutoffs
+
+    summary = json.loads((REPO / "reports" / "summary.json").read_text())
+    assert summary["cutoffs"] == evaluation_cutoffs()
+
+
 def test_report_and_figures_name_a_missing_input(tmp_path, capsys):
     assert main(["report", "--in-dir", str(tmp_path / "none"), "--out", str(tmp_path / "s.json")]) == 2
     assert "none" in _error_line(capsys.readouterr().err)
@@ -541,6 +572,28 @@ def test_each_ladder_bar_gets_the_zero_tick_of_its_own_frames():
     assert [y for _, _, y in spans] == [10.0, 12.0, 20.0]
     subtitle = ax.get_title(loc="left")
     assert "test split" in subtitle and "another day" in subtitle  # every rung's frames are named
+    # another day is scored from frame CROSS_FIRST_FRAME on, the drive's third frame: the subtitle says so
+    from sightline.reporting import CROSS_FIRST_FRAME
+
+    ordinals = {1: "second", 2: "third", 3: "fourth"}
+    assert f"another day on the other drive from its {ordinals[CROSS_FIRST_FRAME]} frame" in subtitle
+    assert "all of the other drive" not in subtitle
+
+
+def test_the_regime_labels_state_the_edges_the_evaluation_cuts_at():
+    from sightline.evaluate import REGIME_BINS
+    from sightline.figures import REGIMES, draw
+
+    assert [key for key, _ in REGIMES] == ["straight", "gentle", "sharp"]
+    edges = [[float(x) for x in re.findall(r"\d+(?:\.\d+)?", label)] for _, label in REGIMES]
+    assert edges == [[REGIME_BINS[0]], list(REGIME_BINS), [REGIME_BINS[1]]]
+    assert ["<", "–", "≥"] == [next(c for c in label if c in "<–≥") for _, label in REGIMES]
+    regimes = {k: {"n": 10, "mae_deg": 1.0} for k, _ in REGIMES}
+    summary = {"shipped": {"model": "sightlinenet", "seed": 0},
+               "regimes": {"protocol": "blocked", "split": "test", "zero": regimes,
+                           "models": {"sightlinenet": {"regimes": regimes}}}}
+    shown = [t.get_text() for t in draw(summary, "regimes.png").axes[0].get_xticklabels()]
+    assert shown == [f"{label}\n10 frames" for _, label in REGIMES]
 
 
 def test_the_paired_ratio_is_printed_to_two_decimals():

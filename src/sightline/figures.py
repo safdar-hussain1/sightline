@@ -1,13 +1,15 @@
 """Figures drawn from the summary.
 
 * ``ladder.png`` -- MAE on each rung of the generalisation ladder per model
-  (the test split; for "another day" all of the other drive), error bars one
-  seed standard deviation, and on every bar a black tick at what always
-  predicting 0 deg scores on that bar's own frames (its model's seeds).
+  (the test split; for "another day" the other drive from its third frame on,
+  as the run reports score it), error bars one seed standard deviation, and on
+  every bar a black tick at what always predicting 0 deg scores on that bar's
+  own frames (its model's seeds).
 * ``paired-leakage.png`` -- the paired measurement: per seed, the MAE of the
   shuffled-split model and of the blocked-split model on identical frames.
 * ``regimes.png`` -- MAE on straight, gentle and sharp frames of the blocked
-  test split for the shipped model, PilotNet and always predicting 0 deg.
+  test split for the shipped model, PilotNet and always predicting 0 deg; the
+  regimes' labels state the edges ``sightline.evaluate.REGIME_BINS`` cuts at.
 
 Every plotted value is read from the summary; nothing is recomputed. Sizes
 are fixed (``FIGURE_SIZES``, in pixels at ``DPI``) and the PNGs carry no
@@ -23,6 +25,8 @@ import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+
+from sightline.evaluate import REGIME_BINS
 
 __all__ = ["DPI", "FIGURE_SIZES", "MODEL_COLOURS", "draw", "write_figures"]
 
@@ -46,8 +50,11 @@ MODEL_COLOURS = {"sightlinenet": "#2a78d6", "pilotnet": "#eb6834", "sightlinenet
 MODEL_LABELS = {"sightlinenet": "SightlineNet", "pilotnet": "PilotNet",
                 "sightlinenet-1f": "SightlineNet, single frame"}
 RUNGS = ("shuffled", "blocked", "later in the drive", "another day")
-REGIMES = (("straight", "straight\n|angle| < 5°"), ("gentle", "gentle\n5–30°"),
-           ("sharp", "sharp\n≥ 30°"))
+#: the steering regimes by their key in the reports, each with the label under its bars, which
+#: states the regime's edges as the evaluation cuts them
+REGIMES = (("straight", f"straight\n|angle| < {REGIME_BINS[0]:g}°"),
+           ("gentle", f"gentle\n{REGIME_BINS[0]:g}–{REGIME_BINS[1]:g}°"),
+           ("sharp", f"sharp\n≥ {REGIME_BINS[1]:g}°"))
 ZERO_LABEL = "always predicting 0°"
 
 _RC = {
@@ -101,7 +108,7 @@ def _ladder(summary: dict, name: str) -> Figure:
         raise ValueError("the summary has no ladder")
     fig, ax = _figure(name, "Steering error on each rung of the generalisation ladder",
                       "MAE, mean over seeds (±1 sd); on the test split, "
-                      "or for another day on all of the other drive")
+                      "or for another day on the other drive from its third frame")
     width, gap = 0.2, 0.03
     offsets = {m: (j - (len(models) - 1) / 2) * (width + gap) for j, m in enumerate(models)}
     for model in models:

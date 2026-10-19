@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 
 from sightline.data.labels import median_interval_s
-from sightline.data.splits import PROTOCOLS, SplitIndices, frames_sha256, make_split, paired_frames
+from sightline.data.splits import BLOCK, FIREWALL, PROTOCOLS, SplitIndices, frames_sha256, make_split, paired_frames
 from sightline.evaluate import regression_metrics
 
 __all__ = [
@@ -191,7 +191,7 @@ def pair_positions(angles_deg: np.ndarray) -> list[int]:
 
 
 def leakage_report(cache, drive: str, seed: int, timestamps_s: np.ndarray | None,
-                   firewall: int = 250, block: int = 1500) -> dict:
+                   firewall: int = FIREWALL, block: int = BLOCK) -> dict:
     """The leakage report of a cached drive (see the module docstring).
 
     ``cache`` is a drive cache (``inputs`` and ``angles_deg``); ``seed`` picks the
