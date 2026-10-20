@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,7 +46,7 @@ from sightline.cli import main
 from sightline.data import splits
 from sightline.data.cache import DriveCache
 from sightline.data.labels import DriveLabels, load_labels, repair_dropouts
-from sightline.data.splits import frames_sha256, make_split, paired_frames
+from sightline.data.splits import SplitIndices, frames_sha256, make_split, paired_frames
 from sightline.demo import render_demo
 from sightline.export import site_data
 from sightline.export.onnx_export import ANGLE_TOLERANCE_DEG, SALIENCY_TOLERANCE
@@ -717,6 +718,12 @@ def test_results_json_copies_the_reports_value_for_value(site):
     # the drive profile is the repaired labels averaged over buckets, recomputed here with numpy
     assert_profile_matches(results["drive_profile"], site.labels)
     covered |= {("drive_profile", *leaf) for leaf, _ in _leaves(results["drive_profile"])}
+    # the timing is the drives' timestamps worked out again here, apart from the builder, with the
+    # shipped run's frame lags and split settings
+    shipped = site.run_reports[site.shipped]
+    expected = expected_timing(site.labels, shipped["frame_lags"], shipped["splits"], trained_on=shipped["drive"])
+    assert leaf_differences(results["timing"], expected) == []
+    covered |= {("timing", *leaf) for leaf, _ in _leaves(results["timing"])}
     # the export parity is export.json's, value for value, under the page's names
     for key, run in (("sightline", site.shipped), ("shuffled", site.twin)):
         checked = site.export["models"][key]["parity"]
@@ -892,18 +899,31 @@ def test_no_string_the_page_shows_holds_a_middle_dot_a_bullet_or_a_thin_space(si
         assert banned_characters(json.loads(path.read_text())) == [], path
 
 
+def _differing_leaves(a: dict, b: dict) -> list[str]:
+    """The leaves (path to value, as ``_leaves`` gives them) at which ``a`` and ``b`` differ: in value,
+    in type (an int is not a float) or in being there at all (an empty mapping is not a null)."""
+    return sorted(".".join(map(str, leaf)) for leaf in a.keys() | b.keys()
+                  if leaf not in a or leaf not in b or a[leaf] != b[leaf] or type(a[leaf]) is not type(b[leaf]))
+
+
+def leaf_differences(got, want) -> list[str]:
+    """The paths at which the parsed JSON trees ``got`` and ``want`` differ (``_differing_leaves``)."""
+    return _differing_leaves(dict(_leaves(got)), dict(_leaves(want)))
+
+
 def results_out_of_sync(results: dict, summary_path: Path, reports_dir: Path, drives: dict | None) -> list[str]:
     """The paths at which ``results`` differs from the results.json the reports, export.json and
     the drives' repaired labels (``drives``: a drive's name to its labels) give now. Where the
-    drives are not on this machine ``drives`` is None: the drive profile, which only they can
-    recompute, is then left out of the comparison, apart from its bucket size."""
+    drives are not on this machine ``drives`` is None: the drive profile and the timing, which only
+    they can recompute, are then left out of the comparison, apart from the profile's bucket size
+    (``timing_problems`` checks the timing against the rest of results.json instead)."""
     export = json.loads((reports_dir / "export.json").read_text())
     fresh = site_data.site_results(site_data.load_reports(summary_path, reports_dir), drives or {}, export)
     a, b = dict(_leaves(results)), dict(_leaves(fresh))
     if drives is None:
-        a, b = ({leaf: v for leaf, v in tree.items() if leaf[:2] != ("drive_profile", "drives")} for tree in (a, b))
-    return sorted(".".join(map(str, leaf)) for leaf in a.keys() | b.keys()
-                  if leaf not in a or leaf not in b or a[leaf] != b[leaf] or type(a[leaf]) is not type(b[leaf]))
+        a, b = ({leaf: v for leaf, v in tree.items()
+                 if leaf[:2] != ("drive_profile", "drives") and leaf[:1] != ("timing",)} for tree in (a, b))
+    return _differing_leaves(a, b)
 
 
 def test_the_sync_check_finds_a_value_that_drifted_from_its_report(site):
@@ -932,6 +952,11 @@ def test_the_sync_check_finds_a_drifted_drive_profile_split_rule_or_split_size(s
         ("split_sizes", "blocked", "seeds", 0): 1,
         ("parity", "sightline", "max_abs_angle_deg"): 1e-9,
         ("parity", "shuffled", "stacks"): 1,
+        ("timing", "drive2018", "frame_interval_s", "p95"): 0.001,
+        ("timing", "drive2018", "lag_gap_s", 0, "median"): 0.001,
+        ("timing", "drive2018", "lag_gap_s", 0, "lag"): 1,
+        ("timing", "drive2018", "closest_eval_s", "blocked", "val", "eval_frame"): 1,
+        ("timing", "drive2018", "closest_eval_s", "forward", "test", "gap_s"): 0.001,
     }
     for path, delta in drifts.items():
         drifted = copy.deepcopy(site.results)
@@ -942,13 +967,18 @@ def test_the_sync_check_finds_a_drifted_drive_profile_split_rule_or_split_size(s
     drifted["split_sizes"]["leaky"]["label"] = "random"
     assert results_out_of_sync(drifted, summary, site.reports, site.labels) == \
         ["split_rules.blocked.pattern", "split_sizes.leaky.label"]
-    # a drive profile whose drives are not on this machine cannot be recomputed there, but its
-    # bucket size, the split rules and the split sizes still can
+    # the drive without timestamps has a null timing, not an empty one
+    drifted = copy.deepcopy(site.results)
+    drifted["timing"]["drive2017"] = {}
+    assert results_out_of_sync(drifted, summary, site.reports, site.labels) == ["timing.drive2017"]
+    # a drive profile or a timing whose drives are not on this machine cannot be recomputed there,
+    # but the profile's bucket size, the split rules and the split sizes still can
     for path, delta in drifts.items():
         drifted = copy.deepcopy(site.results)
         _at(drifted, path[:-1])[path[-1]] += delta
         found = results_out_of_sync(drifted, summary, site.reports, None)
-        assert found == ([] if path[:2] == ("drive_profile", "drives") else [".".join(map(str, path))]), path
+        local = path[:2] == ("drive_profile", "drives") or path[0] == "timing"
+        assert found == ([] if local else [".".join(map(str, path))]), path
 
 
 def test_the_drive_profile_cannot_be_made_for_a_drive_of_another_length(site):
@@ -1314,6 +1344,392 @@ def test_the_drive_profile_fits_the_rest_of_results_json(site):
         broken = copy.deepcopy(site.results)
         change(broken)
         assert drive_profile_problems(broken), change
+
+
+# --- the frame timing -------------------------------------------------------------------------
+
+#: what a spread of frame times gives
+SPREAD = ("max", "mean", "median", "min", "p05", "p95")
+
+
+def _whole_ms(stamps) -> list[int]:
+    """Timestamps in seconds as whole milliseconds since the first, the resolution the label files
+    record them at."""
+    first = float(stamps[0])
+    return [round((float(stamp) - first) * 1000) for stamp in stamps]
+
+
+def _exact_percentile(values: list[int], p: int) -> Fraction:
+    """The ``p``-th percentile of ``values``, interpolated linearly between the two nearest values in
+    order (Hyndman and Fan's type 7, numpy's "linear"), in exact arithmetic."""
+    ordered = sorted(values)
+    h = Fraction(len(ordered) - 1) * Fraction(p, 100)
+    lo = math.floor(h)
+    hi = min(lo + 1, len(ordered) - 1)
+    return ordered[lo] + (h - lo) * (ordered[hi] - ordered[lo])
+
+
+def _exact_spread(values: list[int]) -> dict:
+    """What a spread of ``values`` (whole milliseconds) must hold: each statistic worked out exactly,
+    then rounded to the millisecond with an exact half going to the even one, in seconds."""
+    def seconds(ms) -> float:
+        return round(ms) / 1000  # round() of an int or a Fraction: exact, a half to the even one
+
+    return {"min": seconds(min(values)), "max": seconds(max(values)),
+            "mean": seconds(Fraction(sum(values), len(values))), "p05": seconds(_exact_percentile(values, 5)),
+            "median": seconds(_exact_percentile(values, 50)), "p95": seconds(_exact_percentile(values, 95))}
+
+
+def _exact_closest(ms: list[int], held, trained) -> dict:
+    """The pair of a frame of ``held`` and a frame of ``trained`` closest in time by ``ms``, ties going
+    to the pair fewest frames apart, then to the earliest frame of ``held``, then to the earliest of
+    ``trained``. Found by sorting the training frames by their times and gathering every pair at the
+    least time apart, never assuming that the times increase with the frames."""
+    times = np.asarray(ms, dtype=np.int64)
+    held, trained = np.asarray(held, dtype=np.int64), np.asarray(trained, dtype=np.int64)
+    order = np.argsort(times[trained], kind="stable")
+    by_time, frames_by_time = times[trained][order], trained[order]
+    pos = np.searchsorted(by_time, times[held])
+    below, above = by_time[np.clip(pos - 1, 0, by_time.size - 1)], by_time[np.clip(pos, 0, by_time.size - 1)]
+    nearest = np.minimum(np.abs(times[held] - below), np.abs(above - times[held]))
+    gap = int(nearest.min())
+    pairs = []
+    for frame in held[nearest == gap]:
+        for target in {int(times[frame]) - gap, int(times[frame]) + gap}:
+            lo, hi = np.searchsorted(by_time, target, "left"), np.searchsorted(by_time, target, "right")
+            pairs += [(gap, abs(int(frame) - int(other)), int(frame), int(other)) for other in frames_by_time[lo:hi]]
+    gap, _, frame, other = min(pairs)
+    return {"eval_frame": frame, "gap_s": gap / 1000, "train_frame": other}
+
+
+def expected_timing(drives: dict, lags, settings: dict, trained_on: str) -> dict:
+    """results.json's ``timing``, worked out here apart from the builder: for each drive of ``drives``
+    (a drive's name to its labels) with timestamps, the spread of its frame intervals and of the gaps
+    of each of ``lags``, and, on the drive ``trained_on``, the closest validation and test frames of the
+    blocked and later-in-the-drive splits made with ``settings`` (a ``firewall`` and a ``block``)."""
+    timing = {}
+    for name, labels in drives.items():
+        if labels.timestamps_s is None:
+            timing[name] = None
+            continue
+        ms = _whole_ms(labels.timestamps_s)
+        closest = None
+        if name == trained_on:
+            closest = {}
+            for protocol in ("blocked", "forward"):
+                split = make_split(protocol, len(ms), firewall=settings["firewall"], block=settings["block"])
+                closest[protocol] = {which: _exact_closest(ms, getattr(split, which), split.train)
+                                     for which in ("val", "test")}
+        timing[name] = {
+            "closest_eval_s": closest,
+            "frame_interval_s": _exact_spread([b - a for a, b in zip(ms, ms[1:])]),
+            "lag_gap_s": [{"lag": lag, **_exact_spread([ms[i] - ms[i - lag] for i in range(lag, len(ms))])}
+                          for lag in lags],
+        }
+    return timing
+
+
+def _whole_ms_of(seconds) -> int | None:
+    """``seconds`` as whole milliseconds when it is a float of 0 or more on the millisecond grid and not
+    a negative zero, else None."""
+    if type(seconds) is not float or seconds < 0 or math.copysign(1.0, seconds) < 0 or round(seconds, 3) != seconds:
+        return None
+    return round(seconds * 1000)
+
+
+def _spread_problems(where: str, spread) -> list[str]:
+    """What is wrong with a spread of frame times: its keys, a value that is not seconds of whole
+    milliseconds, or values out of order."""
+    if not isinstance(spread, dict) or sorted(spread) != sorted(SPREAD):
+        return [f"{where}: not a spread of {', '.join(SPREAD)}"]
+    ms = {key: _whole_ms_of(value) for key, value in spread.items()}
+    if None in ms.values():
+        return [f"{where}: {', '.join(k for k, v in sorted(ms.items()) if v is None)} not seconds to the millisecond"]
+    if not (ms["min"] <= ms["p05"] <= ms["median"] <= ms["p95"] <= ms["max"] and ms["min"] <= ms["mean"] <= ms["max"]):
+        return [f"{where}: its values are out of order"]
+    return []
+
+
+def _closest_problems(where: str, entry, split: SplitIndices, which: str, closest_frames: int,
+                      interval_ms: tuple[int, int]) -> list[str]:
+    """What is wrong with a closest evaluation frame, ``entry``, of ``split``'s ``which`` frames: it
+    must pair one of them with a training frame, with neither a training frame nor another of them in
+    between (either would make a closer pair), no nearer in frames than ``closest_frames`` (the leakage
+    report's), and a time that ``interval_ms`` (the drive's least and largest frame intervals) allows
+    for that many frames."""
+    if not isinstance(entry, dict) or sorted(entry) != ["eval_frame", "gap_s", "train_frame"] or \
+            type(entry["eval_frame"]) is not int or type(entry["train_frame"]) is not int or \
+            _whole_ms_of(entry["gap_s"]) is None:
+        return [f"{where}: not an evaluation frame, a training frame and seconds to the millisecond"]
+    frame, trained, held = entry["eval_frame"], entry["train_frame"], getattr(split, which)
+    if not (np.isin(frame, held) and np.isin(trained, split.train)):
+        return [f"{where}: frame {frame} is not a {which} frame, or frame {trained} not a training frame"]
+    problems = []
+    between = np.arange(min(frame, trained) + 1, max(frame, trained))
+    if np.isin(between, split.train).any() or np.isin(between, held).any():
+        problems.append(f"{where}: a training frame or a {which} frame lies between frames {frame} and {trained}")
+    apart = abs(frame - trained)
+    if apart < closest_frames:
+        problems.append(f"{where}: {apart} frames from training, nearer than the leakage report's {closest_frames}")
+    least, largest = interval_ms
+    if not apart * least <= _whole_ms_of(entry["gap_s"]) <= apart * largest:
+        problems.append(f"{where}: {entry['gap_s']} s for {apart} frames, whose intervals run from {least} to "
+                        f"{largest} ms")
+    return problems
+
+
+def timing_problems(results: dict, lags) -> list[str]:
+    """What does not fit between the timing of ``results`` (a results.json) and the rest of it, which
+    needs no drive on disk: a timing for every drive and no other; null for a drive without timestamps
+    and only for one; spreads of seconds to the millisecond in order; a median interval the summary's,
+    and a mean the drive profile's duration over its intervals; a gap for each of ``lags`` (the shipped
+    run's frame lags) in turn, within ``lag`` times the least and the largest interval, with the mean
+    the drive's duration allows for it; and, on the drive the runs trained on alone, the closest
+    validation and test frames of the blocked and later-in-the-drive splits, each a pair of frames
+    those splits make (``_closest_problems``)."""
+    timing, problems = results["timing"], []
+    if sorted(timing) != sorted(results["drives"]):
+        problems.append(f"timing of {sorted(timing)}, drives {sorted(results['drives'])}")
+    trained_on, rules = results["leakage"]["drive"], results["split_rules"]
+    for name, info in results["drives"].items():
+        if name not in timing:
+            continue
+        got, timed = timing[name], info["median_dt_s"] is not None
+        if (got is not None) != timed:
+            problems.append(f"{name}: {'no' if timed else 'a'} timing for a drive {'with' if timed else 'without'} "
+                            "timestamps")
+            continue
+        if got is None:
+            continue
+        if not isinstance(got, dict) or sorted(got) != ["closest_eval_s", "frame_interval_s", "lag_gap_s"]:
+            problems.append(f"{name}: not a timing")
+            continue
+        interval = got["frame_interval_s"]
+        found = _spread_problems(f"{name}: frame_interval_s", interval)
+        problems += found
+        if found:
+            continue
+        least, largest = _whole_ms_of(interval["min"]), _whole_ms_of(interval["max"])
+        if least > 0 and abs(interval["median"] - info["median_dt_s"]) > 0.0005 + 1e-9:
+            problems.append(f"{name}: its median frame interval is not the summary's {info['median_dt_s']}")
+        duration, frames = round(results["drive_profile"]["drives"][name]["duration_s"] * 1000), info["frames"]
+        if round(Fraction(duration, frames - 1)) != _whole_ms_of(interval["mean"]):
+            problems.append(f"{name}: its mean frame interval is not the drive's duration over its intervals")
+        entries = got["lag_gap_s"]
+        if not isinstance(entries, list) or [e.get("lag") if isinstance(e, dict) else None for e in entries] != list(lags):
+            problems.append(f"{name}: lag gaps for other lags than the shipped run's {list(lags)}")
+        else:
+            for entry in entries:
+                where, lag = f"{name}: lag_gap_s of lag {entry['lag']}", entry["lag"]
+                spread = {key: value for key, value in entry.items() if key != "lag"}
+                found = _spread_problems(where, spread)
+                problems += found
+                if found:
+                    continue
+                if not lag * least <= _whole_ms_of(spread["min"]) <= _whole_ms_of(spread["max"]) <= lag * largest:
+                    problems.append(f"{where}: outside {lag} times the least and the largest frame interval")
+                # the gaps add up to the times between the drive's first lag frames and its last lag frames:
+                # the duration lag times over, less at most lag - 1 of the largest interval each time
+                top = Fraction(lag * duration, frames - lag)
+                bottom = Fraction(lag * duration - lag * (lag - 1) * largest, frames - lag)
+                if not bottom - Fraction(1, 2) <= _whole_ms_of(spread["mean"]) <= top + Fraction(1, 2):
+                    problems.append(f"{where}: its mean is not the drive's duration over its gaps")
+        closest = got["closest_eval_s"]
+        if name != trained_on:
+            if closest is not None:
+                problems.append(f"{name}: closest evaluation frames on a drive no run trained on")
+            continue
+        if not isinstance(closest, dict) or sorted(closest) != ["blocked", "forward"] or \
+                any(not isinstance(sides, dict) or sorted(sides) != ["test", "val"] for sides in closest.values()):
+            problems.append(f"{name}: not the closest validation and test frames of the blocked and "
+                            "later-in-the-drive splits")
+            continue
+        for protocol, sides in closest.items():
+            split = make_split(protocol, info["frames"], firewall=rules[protocol]["firewall"],
+                               block=rules["blocked"]["block"])
+            for which, entry in sides.items():
+                problems += _closest_problems(f"{name}: closest {protocol} {which} frame", entry, split, which,
+                                              results["leakage"]["gaps"][protocol][which]["min_frames"],
+                                              (least, largest))
+    return problems
+
+
+def test_the_timing_gives_the_stand_ins_frame_times(site):
+    timing = site.results["timing"]
+    assert list(timing) == ["drive2017", "drive2018"]
+    assert timing["drive2017"] is None  # the 2017 stand-in, like the 2017 drive, has no timestamps
+    drive = timing["drive2018"]
+    # the 2018 stand-in's frames are 57 ms apart: so is every pair of neighbours, and every pair the
+    # shipped run's lag of 2 frames apart is 114 ms apart
+    assert site.run_reports[site.shipped]["frame_lags"] == [2]
+    assert drive["frame_interval_s"] == dict.fromkeys(SPREAD, 0.057)
+    assert drive["lag_gap_s"] == [{"lag": 2, **dict.fromkeys(SPREAD, 0.114)}]
+    # the 20-frame firewall leaves 41 frames between training and evaluation: 2.337 s. The blocked
+    # validation and test blocks each have such a frame at both ends, and the earlier is given; the
+    # later-in-the-drive test frames start 281 frames after the last training frame
+    assert drive["closest_eval_s"] == {
+        "blocked": {"val": {"eval_frame": 420, "gap_s": 2.337, "train_frame": 379},
+                    "test": {"eval_frame": 1020, "gap_s": 2.337, "train_frame": 979}},
+        "forward": {"val": {"eval_frame": 1140, "gap_s": 2.337, "train_frame": 1099},
+                    "test": {"eval_frame": 1380, "gap_s": 16.017, "train_frame": 1099}},
+    }
+    shipped = site.run_reports[site.shipped]
+    assert timing == expected_timing(site.labels, shipped["frame_lags"], shipped["splits"], shipped["drive"])
+    # from the label file's timestamps through the loader, as the drive profile reads them
+    assert site_data.drive_timing(load_labels(site.data / "drive2018"), [2]) == {**drive, "closest_eval_s": None}
+
+
+def test_the_timing_fits_the_rest_of_results_json(site):
+    lags = site.run_reports[site.shipped]["frame_lags"]
+    assert timing_problems(site.results, lags) == []
+    for change in (
+        lambda t: t.update(drive2017={}),  # the drive without timestamps
+        lambda t: t.update(drive2017=copy.deepcopy(t["drive2018"])),
+        lambda t: t.update(drive2018=None),
+        lambda t: t.pop("drive2017"),
+        lambda t: t["drive2018"]["closest_eval_s"].update(blocked={
+            "val": t["drive2018"]["closest_eval_s"]["blocked"]["test"],
+            "test": t["drive2018"]["closest_eval_s"]["blocked"]["val"]}),
+        lambda t: t["drive2018"]["closest_eval_s"]["forward"]["val"].update(eval_frame=1139),  # a dropped frame
+        lambda t: t["drive2018"]["closest_eval_s"]["blocked"]["test"].update(train_frame=978),  # 979 is nearer
+        lambda t: t["drive2018"]["closest_eval_s"]["forward"]["test"].update(eval_frame=1381),  # 1380 is nearer
+        lambda t: t["drive2018"]["closest_eval_s"]["blocked"]["val"].update(gap_s=2.3),  # under 41 intervals
+        lambda t: t["drive2018"]["closest_eval_s"]["blocked"]["val"].update(gap_s=2337),  # milliseconds
+        lambda t: t["drive2018"]["closest_eval_s"]["blocked"]["val"].update(eval_frame=420.0),
+        lambda t: t["drive2018"]["closest_eval_s"].pop("forward"),
+        lambda t: t["drive2018"]["closest_eval_s"]["blocked"].pop("test"),
+        lambda t: t["drive2018"]["frame_interval_s"].update(p05=0.058),  # above the median
+        lambda t: t["drive2018"]["frame_interval_s"].update(median=0.0571),  # finer than a millisecond
+        lambda t: t["drive2018"]["frame_interval_s"].update(min=-0.0),
+        lambda t: t["drive2018"]["frame_interval_s"].pop("max"),
+        lambda t: t["drive2018"]["lag_gap_s"][0].update(lag=1),  # another lag than the shipped run's
+        lambda t: t["drive2018"]["lag_gap_s"].clear(),
+        lambda t: t["drive2018"]["lag_gap_s"][0].update(min=0.057),  # under twice the least interval
+        lambda t: t["drive2018"]["lag_gap_s"][0].update(max=0.2),  # over twice the largest
+    ):
+        broken = copy.deepcopy(site.results)
+        change(broken["timing"])
+        assert timing_problems(broken, lags), change
+    # a mean or a median that no longer matches the drive profile or the summary, the spread kept in order
+    for key, value in (("mean", 0.056), ("median", 0.056)):
+        broken = copy.deepcopy(site.results)
+        broken["timing"]["drive2018"]["frame_interval_s"].update({"min": 0.056, "p05": 0.056, key: value})
+        assert timing_problems(broken, lags), key
+
+
+def test_the_timing_measures_the_lags_the_shipped_run_records(site):
+    """Never a lag typed in: the shipped run's report names them, and its twin's must agree."""
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    runs = copy.deepcopy(reports.runs)
+    for run in (site.shipped, site.twin):
+        runs[run]["frame_lags"] = [1, 3]
+    timing = site_data.site_results(replace(reports, runs=runs), site.labels, site.export)["timing"]["drive2018"]
+    assert [(entry["lag"], entry["median"]) for entry in timing["lag_gap_s"]] == [(1, 0.057), (3, 0.171)]
+    runs[site.shipped]["frame_lags"] = []  # a model of one frame: no lag to time
+    runs[site.twin]["frame_lags"] = []
+    assert site_data.site_results(replace(reports, runs=runs), site.labels, site.export)["timing"]["drive2018"][
+        "lag_gap_s"] == []
+
+
+def test_a_spread_is_measured_from_every_interval_and_every_lag_gap():
+    # 14 frames whose 13 intervals are uneven and out of order in time; in order they run 20 30 31 38
+    # 40 41 57 58 60 66 70 91 121 ms: the 5th percentile lies 0.6 of the way from the first to the
+    # second (26), the median is the 7th, the 95th percentile lies 0.4 of the way from the 12th to the
+    # 13th (103), and the mean is 723 / 13 = 55.6
+    intervals = [57, 20, 91, 31, 40, 121, 38, 58, 30, 66, 41, 70, 60]
+    stamps = 1530445184.912 + np.cumsum([0, *intervals]) / 1000
+    labels = _labels(np.zeros(len(stamps)), stamps)
+    timing = site_data.drive_timing(labels, [1, 3])
+    assert timing["frame_interval_s"] == {"min": 0.02, "p05": 0.026, "median": 0.057, "mean": 0.056, "p95": 0.103,
+                                          "max": 0.121}
+    assert timing["lag_gap_s"][0] == {"lag": 1, **timing["frame_interval_s"]}
+    # each gap of 3 frames sums 3 intervals in a row; in order they run 126 137 142 154 162 168 171 177
+    # 192 199 217 ms, so the 5th and 95th percentiles fall halfway between two of them: 131.5 ms, whose
+    # half goes to the even millisecond, and 208 ms; the mean is 1845 / 11 = 167.7
+    assert timing["lag_gap_s"][1] == {"lag": 3, "min": 0.126, "p05": 0.132, "median": 0.168, "mean": 0.168,
+                                      "p95": 0.208, "max": 0.217}
+    assert timing["lag_gap_s"][1] == {"lag": 3, **_exact_spread([sum(intervals[i:i + 3]) for i in range(11)])}
+    assert timing["closest_eval_s"] is None  # no splits given: a drive no run trained on
+    # the epoch seconds' floating point noise never reaches the times: the same intervals from 0 s
+    assert site_data.drive_timing(_labels(np.zeros(len(stamps)), np.cumsum([0, *intervals]) / 1000), [1, 3]) == timing
+
+
+def test_a_spread_rounds_once_to_the_millisecond_an_exact_half_to_the_even_one():
+    def spread(intervals):
+        stamps = 1530445184.912 + np.cumsum([0, *intervals]) / 1000
+        return site_data.drive_timing(_labels(np.zeros(len(stamps)), stamps), [])["frame_interval_s"]
+
+    # 11 intervals: the 5th percentile is 20.5 ms, the 95th 91.5 ms, the mean 639 / 11 = 58.1 ms
+    assert spread([20, 21, 50, 55, 57, 60, 61, 62, 70, 90, 93]) == \
+        {"min": 0.02, "p05": 0.02, "median": 0.06, "mean": 0.058, "p95": 0.092, "max": 0.093}
+    # two intervals: the median and the mean are 57.5 ms, then 56.5 ms
+    assert (spread([57, 58])["median"], spread([57, 58])["mean"]) == (0.058, 0.058)
+    assert (spread([56, 57])["median"], spread([56, 57])["mean"]) == (0.056, 0.056)
+    # a value numpy leaves a hair to one side of a half is put back on it first
+    assert [site_data._ms_to_s(v) for v in (66.49999999999999, 66.50000000000001, 67.49999999999999)] == \
+        [0.066, 0.066, 0.068]
+    # frames at one instant: intervals of 0.0, never a negative zero
+    flat = site_data.drive_timing(_labels(np.zeros(4), np.full(4, 1530445184.912)), [2])
+    assert json.dumps(flat).count("-0.0") == 0 and flat["frame_interval_s"] == dict.fromkeys(SPREAD, 0.0)
+
+
+def _split(train, val, test) -> SplitIndices:
+    return SplitIndices(train=np.asarray(train, dtype=np.int64), val=np.asarray(val, dtype=np.int64),
+                        test=np.asarray(test, dtype=np.int64))
+
+
+def _closest(ms: list[int], split: SplitIndices) -> dict:
+    labels = _labels(np.zeros(len(ms)), 1530445184.912 + np.asarray(ms) / 1000)
+    return site_data.drive_timing(labels, [], {"split": split})["closest_eval_s"]["split"]
+
+
+def test_the_closest_evaluation_frame_is_the_nearest_in_time_not_in_frames():
+    ms = [0, 100, 200, 300, 310, 320, 330, 400, 420, 450]
+    split = _split(train=[0, 1, 9], val=[3, 6], test=[8])
+    # validation frame 3 is 2 frames and 200 ms from training frame 1; frame 6 is 3 frames but only
+    # 120 ms from training frame 9
+    assert _closest(ms, split) == {"val": {"eval_frame": 6, "gap_s": 0.12, "train_frame": 9},
+                                   "test": {"eval_frame": 8, "gap_s": 0.03, "train_frame": 9}}
+    for which in ("val", "test"):
+        assert _closest(ms, split)[which] == _exact_closest(ms, getattr(split, which), split.train)
+
+
+def test_ties_go_to_the_fewest_frames_apart_then_the_earliest_evaluation_frame_then_the_earliest_training_frame():
+    # frame 3 is 100 ms from training frame 1, 2 frames away, and from training frame 4, 1 frame away;
+    # frame 6 is 100 ms and 1 frame from training frame 7, and 200 ms from training frame 4
+    ms = [0, 100, 150, 200, 300, 400, 500, 600]
+    split = _split(train=[0, 1, 4, 7], val=[3], test=[6])
+    assert _closest(ms, split) == {"val": {"eval_frame": 3, "gap_s": 0.1, "train_frame": 4},
+                                   "test": {"eval_frame": 6, "gap_s": 0.1, "train_frame": 7}}
+    # evenly timed: validation frames 1 and 5 each sit 1 frame and 100 ms from two training frames, as
+    # does test frame 3; the earliest validation frame, and each one's earliest training frame, are given
+    ms = [0, 100, 200, 300, 400, 500, 600]
+    split = _split(train=[0, 2, 4, 6], val=[1, 5], test=[3])
+    assert _closest(ms, split) == {"val": {"eval_frame": 1, "gap_s": 0.1, "train_frame": 0},
+                                   "test": {"eval_frame": 3, "gap_s": 0.1, "train_frame": 2}}
+    for ms, split in (([0, 100, 150, 200, 300, 400, 500, 600], _split([0, 1, 4, 7], [3], [6])),
+                      ([0, 100, 200, 300, 400, 500, 600], _split([0, 2, 4, 6], [1, 5], [3]))):
+        for which in ("val", "test"):
+            assert _closest(ms, split)[which] == _exact_closest(ms, getattr(split, which), split.train)
+
+
+def test_the_timing_of_a_drive_without_timestamps_is_null_and_it_refuses_what_it_cannot_time():
+    assert site_data.drive_timing(_labels(np.zeros(5)), [2], {"blocked": _split([0], [2], [4])}) is None
+    with pytest.raises(ValueError, match="drive 'drivex': frame 3 is timed before frame 2, so its frames have no "
+                                         "intervals in time"):
+        site_data.drive_timing(_labels(np.zeros(5), [10.0, 10.057, 10.114, 10.1, 10.2]), [2])
+    with pytest.raises(ValueError, match=r"drive 'drivex' has too few timed frames \(3\) to time frames 3 apart"):
+        site_data.drive_timing(_labels(np.zeros(3), [10.0, 10.057, 10.1]), [3])
+    with pytest.raises(ValueError, match=r"has too few timed frames \(1\) to time frames 1 apart"):
+        site_data.drive_timing(_labels(np.zeros(1), [10.0]), [])
+    for lag in (0, -1, True, 1.5, "2"):
+        with pytest.raises(ValueError, match="a frame lag is a whole number of frames, 1 or more"):
+            site_data.drive_timing(_labels(np.zeros(5), 10.0 + 0.057 * np.arange(5)), [lag])
+    # and it leaves the labels alone and repeats itself
+    labels = _labels(np.zeros(6), 10.0 + np.array([0.0, 0.03, 0.09, 0.1, 0.16, 0.2]))
+    stamps = labels.timestamps_s.copy()
+    assert site_data.drive_timing(labels, [2]) == site_data.drive_timing(labels, [2])
+    assert np.array_equal(labels.timestamps_s, stamps)
 
 
 # --- the same bytes every time --------------------------------------------------------------
@@ -1876,6 +2292,19 @@ def test_the_committed_drive_profile_fits_the_committed_results():
     straight = results["baselines"]["cross_drive"]["baselines"]["zero"]["mae_deg"]
     assert results["baselines"]["cross_drive"]["drive"] == "drive2017"
     assert mean_abs == pytest.approx(straight, abs=0.01)
+
+
+@needs_published
+def test_the_committed_timing_fits_the_committed_results_and_is_the_drives_measured_times_when_they_are_here():
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    summary = json.loads((REPO / "reports" / "summary.json").read_text())
+    shipped = json.loads((REPO / "reports" / "runs" / f"{summary['shipped']['run']}.json").read_text())
+    assert timing_problems(results, shipped["frame_lags"]) == []
+    assert [name for name, timing in results["timing"].items() if timing is not None] == [shipped["drive"]]
+    drives = committed_drives()
+    if drives is not None:  # the drives are here: every value is worked out again, apart from the builder
+        expected = expected_timing(drives, shipped["frame_lags"], shipped["splits"], trained_on=shipped["drive"])
+        assert leaf_differences(results["timing"], expected) == []
 
 
 @needs_published

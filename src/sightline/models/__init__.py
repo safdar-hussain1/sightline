@@ -8,8 +8,11 @@
 * ``sightlinenet-1f`` -- the same network and recipe on the current frame
   alone: the single-frame baseline that isolates what history frames add.
 
-Frame lags count frames back from the current one; the drives are recorded
-at about one frame every 57 ms, so a lag of 2 is about 114 ms.
+Frame lags count frames back from the current one: a lag of 2 is the frame
+two frames before it. A lag is a number of frames, not a duration, as the
+time between frames varies along a drive; the site data records the measured
+spread of that time for each lag of the shipped model (``timing`` in
+``web/public/data/results.json``, written by ``sightline site-data``).
 """
 
 from __future__ import annotations

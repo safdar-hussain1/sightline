@@ -470,6 +470,23 @@ def test_the_data_notebook_gives_the_closest_blocked_evaluation_frames_in_second
             assert (f"{measured:.1f}", closest, nearest) == (line[3], frame, trained), title
 
 
+def test_the_data_notebook_prints_the_closest_blocked_frames_the_site_data_gives():
+    """The page reads the blocked split's closest validation and test frames from results.json's timing;
+    the data notebook prints them from the same timestamps. Both name the same two frames, and the same
+    time at the precision the notebook prints it to."""
+    results = json.loads((REPO / "web" / "public" / "data" / "results.json").read_text())
+    closest = results["timing"][DRIVE]["closest_eval_s"]["blocked"]
+    found = {m[1]: m for m in CLOSEST.finditer(_shown("01-data-and-leakage.ipynb"))}
+    assert sorted(found) == ["test", "validation"], "the closest validation and test frames, in seconds"
+    for which, title in (("val", "validation"), ("test", "test")):
+        line, entry = found[title], closest[which]
+        frame, trained, apart = (int(line[k].replace(",", "")) for k in (2, 4, 5))
+        assert (frame, trained, apart) == \
+            (entry["eval_frame"], entry["train_frame"], abs(entry["eval_frame"] - entry["train_frame"])), title
+        decimals = len(line[3].split(".")[1])
+        assert f"{entry['gap_s']:.{decimals}f}" == line[3], title
+
+
 def test_the_data_notebook_shows_the_reports_current_values():
     leakage, summary = _report("leakage.json"), _report("summary.json")
     expected = [f"paired frames: {leakage['paired']['n']}"]

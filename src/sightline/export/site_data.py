@@ -42,6 +42,23 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     the same counts, they must be the ones the splits module makes from those settings, and
     every blocked and shuffled run's paired frames (their count and digest) the ones it pairs;
     the build also checks the shipped run's and its twin's saved splits frame by frame.
+
+    ``timing`` gives, for each drive, how far apart in time its frames are, measured from the
+    timestamps of its label file (the labels ``drive_profile`` reads), never estimated from the
+    median frame interval: ``frame_interval_s``, the spread of the time from each frame to the
+    next over the whole drive; ``lag_gap_s``, for each frame lag of the shipped run (its
+    report's ``frame_lags``), the spread of the time from frame ``i - lag`` to frame ``i`` over
+    every frame ``i`` from ``lag`` on; and ``closest_eval_s``, on the drive the runs trained on
+    (null on any other): for the blocked and the later-in-the-drive split, as the splits module
+    makes them with the block and firewall every run recorded (``split_rules``), and for their
+    validation and test frames in turn, the evaluation frame closest in time to a training frame
+    (``eval_frame``), that training frame (``train_frame``) and the time between them
+    (``gap_s``). The shuffled split has none: its evaluation frames sit next to training frames
+    by design, and ``leakage.gaps`` gives that distance in frames. A spread is the least value,
+    the 5th percentile, the median, the mean, the 95th percentile and the largest (``min``,
+    ``p05``, ``median``, ``mean``, ``p95``, ``max``). A drive without timestamps (the 2017 one)
+    has null. Every time is in seconds to the millisecond, the resolution of the timestamps;
+    ``drive_timing`` says how they are worked out and rounded.
 ``data/clips/<id>/``
     A demo clip of ``clip_frames`` scored frames: ``c2018`` from the blocked test stretches
     of the drive the shipped run trained on (minutes it never trained on), ``c2017`` from
@@ -123,6 +140,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -167,17 +185,22 @@ __all__ = [
     "FRAMES_PER_SHEET",
     "MAX_MODEL_BYTES",
     "MODEL_FILES",
+    "PERCENTILE_METHOD",
     "Reports",
     "SHIPPED_ANGLE_TOLERANCE_DEG",
     "SHIPPED_SALIENCY_TOLERANCE",
+    "SPREAD_PERCENTILES",
+    "TIMED_PROTOCOLS",
     "build_site_data",
     "choose_window",
     "clip_times",
     "decode_sheets",
     "drive_profile",
+    "drive_timing",
     "encode_video",
     "export_parity",
     "frame_digests",
+    "frame_timing",
     "jpeg_bytes",
     "leakage_pairs",
     "load_reports",
@@ -226,6 +249,15 @@ BUCKET_FRAMES = 64
 #: and its times to the millisecond, the resolution of the timestamps
 PROFILE_ANGLE_DECIMALS = 2
 PROFILE_TIME_DECIMALS = 3
+#: the percentiles a spread of frame times gives besides its least, largest and mean values, by key
+SPREAD_PERCENTILES = {"p05": 5, "median": 50, "p95": 95}
+#: how numpy computes them: its default (linear interpolation between the two nearest values in
+#: order, Hyndman and Fan's type 7, whose 50th percentile is ``np.median``), named so that another
+#: default cannot change them
+PERCENTILE_METHOD = "linear"
+#: the splits whose closest evaluation frames the timing measures in seconds: the two that keep their
+#: evaluation frames away from training; the shuffled split puts them next to it by design
+TIMED_PROTOCOLS = ("blocked", "forward")
 #: stacked inputs in the self-test fixture
 SELFTEST_INPUTS = 8
 #: onnxruntime computes the expected outputs this many stacks at a time, on one thread
@@ -309,7 +341,8 @@ REQUIRED = {
         "paired_leakage.*.ratio.values", "regimes.protocol", "regimes.split", *_regimes("regimes.zero"),
         "regimes.models.*.run", "regimes.models.*.seed", *_regimes("regimes.models.*.regimes"),
     ), "sightline report"),
-    #: the shipped run's report and its twin's
+    #: the shipped run's report and its twin's; the shipped run's ``frame_lags`` are also the lags whose
+    #: gaps in time ``timing`` measures, and its ``drive`` and split settings the splits it times
     "run": ((
         "run", "model", "protocol", "seed", "frame_lags", "checkpoint_sha256", "drive", "splits.firewall",
         "splits.block", "val.model.mae_deg", *_scores("test"), *_regimes("test.regimes"),
@@ -514,6 +547,117 @@ def drive_profile(labels: DriveLabels, bucket_frames: int = BUCKET_FRAMES) -> di
     }
 
 
+def _whole_ms(labels: DriveLabels) -> np.ndarray:
+    """A timed drive's timestamps as whole milliseconds since its first frame (int64). The label files
+    record milliseconds and the loader adds them to epoch seconds, whose floating point noise (well
+    under a microsecond) the rounding takes away, so these are the times recorded, exactly. A drive
+    whose timestamps run backwards is refused."""
+    stamps = np.asarray(labels.timestamps_s, dtype=np.float64)
+    ms = np.rint((stamps - stamps[0]) * 1000.0).astype(np.int64)
+    backwards = np.flatnonzero(np.diff(ms) < 0)
+    if backwards.size:
+        raise ValueError(f"drive {labels.root.name!r}: frame {int(backwards[0]) + 1} is timed before frame "
+                         f"{int(backwards[0])}, so its frames have no intervals in time")
+    return ms
+
+
+def _ms_to_s(ms) -> float:
+    """``ms`` milliseconds as seconds, rounded to the millisecond with an exact half going to the even
+    one (Python's ``round``): a whole number as it is, a mean as an exact Fraction, and a float that
+    numpy interpolated snapped to a millionth of a millisecond first, as floating point can leave a
+    value that is exactly a half a hair to one side of it. The result is a whole number of
+    milliseconds over a thousand, so never a negative zero."""
+    if isinstance(ms, (float, np.floating)):
+        ms = round(float(ms), 6)
+    return round(ms) / 1000
+
+
+def _spread(ms: np.ndarray) -> dict:
+    """The least, the largest and the mean of ``ms`` (whole milliseconds) and its ``SPREAD_PERCENTILES``
+    (numpy, ``PERCENTILE_METHOD``), in seconds to the millisecond."""
+    keys, levels = zip(*SPREAD_PERCENTILES.items())
+    values = np.percentile(ms, levels, method=PERCENTILE_METHOD)
+    return {"min": _ms_to_s(ms.min()), "max": _ms_to_s(ms.max()),
+            "mean": _ms_to_s(Fraction(int(ms.sum()), int(ms.size))),
+            **{key: _ms_to_s(value) for key, value in zip(keys, values)}}
+
+
+def _closest_in_time(ms: np.ndarray, held: np.ndarray, trained: np.ndarray) -> dict:
+    """The pair of an evaluation frame of ``held`` and a training frame of ``trained`` closest in time
+    by ``ms`` (whole milliseconds that never decrease): ``eval_frame``, ``train_frame`` and ``gap_s``,
+    the time between them. Ties go to the pair fewest frames apart, then to the earliest evaluation
+    frame, then to the earliest training frame. The times never decrease, so the training frame
+    closest to a frame is the nearest training frame before it or after it, any other being as far
+    in time at least and further in frames: only those two are compared."""
+    held = np.asarray(held, dtype=np.int64)
+    trained = np.sort(np.asarray(trained, dtype=np.int64))
+    pos = np.searchsorted(trained, held)
+    eval_frames = np.concatenate([held, held])
+    train_frames = np.concatenate([trained[np.maximum(pos - 1, 0)], trained[np.minimum(pos, trained.size - 1)]])
+    apart_ms = np.abs(ms[eval_frames] - ms[train_frames])
+    apart_frames = np.abs(eval_frames - train_frames)
+    best = np.lexsort((train_frames, eval_frames, apart_frames, apart_ms))[0]
+    return {"eval_frame": int(eval_frames[best]), "gap_s": _ms_to_s(apart_ms[best]),
+            "train_frame": int(train_frames[best])}
+
+
+def drive_timing(labels: DriveLabels, lags, splits: dict | None = None) -> dict | None:
+    """How far apart in time a drive's frames are, from its timestamps: None for a drive without them.
+
+    ``frame_interval_s`` is the spread of the times from each frame to the next, and ``lag_gap_s``,
+    for each of ``lags`` in turn, ``lag`` and the spread of the times from frame ``i - lag`` to frame
+    ``i`` over every frame ``i`` from ``lag`` on. A spread is the ``min``, the ``max``, the ``mean``
+    and the ``SPREAD_PERCENTILES`` (``p05``, ``median``, ``p95``). ``closest_eval_s`` holds, for each
+    split of ``splits`` (a protocol's ``SplitIndices`` of this drive, by protocol) and for its ``val``
+    and ``test`` frames in turn, the evaluation frame and the training frame closest in time
+    (``_closest_in_time``); it is None without ``splits``, for a drive no run trained on.
+
+    The times are worked out in whole milliseconds, the resolution of the timestamps (``_whole_ms``),
+    so the floating point noise of epoch seconds never reaches them and every step is exact but the
+    last: intervals, gaps, the least and largest are whole numbers, the mean an exact fraction, and
+    the percentiles numpy's, with ``PERCENTILE_METHOD`` named. Each value is then rounded once, to the
+    millisecond (``_ms_to_s``), so the same timestamps give the same values on any machine.
+
+    Raises a ValueError for timestamps that run backwards, for a lag below 1 frame and for a drive
+    too short to time an interval or a lag.
+    """
+    lags = list(lags)
+    for lag in lags:
+        if isinstance(lag, bool) or not isinstance(lag, (int, np.integer)) or lag < 1:
+            raise ValueError(f"a frame lag is a whole number of frames, 1 or more, not {lag!r}")
+    if labels.timestamps_s is None:
+        return None
+    ms = _whole_ms(labels)
+    longest = max([1, *lags])
+    if ms.size <= longest:
+        raise ValueError(f"drive {labels.root.name!r} has too few timed frames ({ms.size}) to time frames "
+                         f"{longest} apart")
+    return {
+        "closest_eval_s": None if splits is None else {
+            protocol: {which: _closest_in_time(ms, getattr(split, which), split.train) for which in ("val", "test")}
+            for protocol, split in splits.items()},
+        "frame_interval_s": _spread(np.diff(ms)),
+        "lag_gap_s": [{"lag": int(lag), **_spread(ms[lag:] - ms[:-lag])} for lag in lags],
+    }
+
+
+def frame_timing(drives: dict, lags, setting: dict) -> dict:
+    """results.json's ``timing``: ``drive_timing`` of each drive of ``drives`` (a drive's name to its
+    dropout-repaired labels, as ``drive_profile`` reads them) with ``lags``, the shipped run's frame
+    lags; for the drive the runs trained on (``setting["drive"]``), with its ``TIMED_PROTOCOLS``
+    splits as the splits module makes them of its frames with the firewall and block of ``setting``,
+    the ones every run recorded."""
+    timing = {}
+    for name, labels in sorted(drives.items()):
+        splits = None
+        if name == setting["drive"]:
+            splits = {protocol: make_split(protocol, len(labels), firewall=setting["firewall"],
+                                           block=setting["block"])
+                      for protocol in TIMED_PROTOCOLS}
+        timing[name] = drive_timing(labels, lags, splits)
+    return timing
+
+
 def split_rules(block: int, firewall: int) -> dict:
     """How each protocol cuts a drive, by protocol, each with its public name as ``label``. The
     blocked split cuts the drive into ``block``-frame blocks laid out by the repeating
@@ -658,15 +802,15 @@ def export_parity(reports: Reports, export: dict) -> dict:
 
 def site_results(reports: Reports, drives: dict, export: dict) -> dict:
     """results.json: what the page shows, copied from the reports value for value, with the
-    drive profiles, split rules and split sizes added (see the module docstring), and the export
-    parity copied from ``export``, what export.json holds: the build passes the record it is about
-    to write, never the file a previous build left.
+    drive profiles, split rules, split sizes and frame timing added (see the module docstring), and
+    the export parity copied from ``export``, what export.json holds: the build passes the record it
+    is about to write, never the file a previous build left.
 
     The reports must agree with one another as ``build_site_data`` requires (``_check_reports``),
-    so the split rules and the split sizes come from the one firewall and block they share.
-    ``drives`` maps each drive the page describes to its dropout-repaired labels
-    (``repair_dropouts``); each must have as many frames and repaired dropouts as the summary
-    records for it, and come from the label file it records (sha256).
+    so the split rules, the split sizes and the splits the timing measures come from the one
+    firewall and block they share. ``drives`` maps each drive the page describes to its
+    dropout-repaired labels (``repair_dropouts``); each must have as many frames and repaired
+    dropouts as the summary records for it, and come from the label file it records (sha256).
     """
     setting = _check_inputs(reports, drives)
     summary, leakage = reports.summary, reports.leakage
@@ -705,6 +849,7 @@ def site_results(reports: Reports, drives: dict, export: dict) -> dict:
         "shipped": summary["shipped"],
         "split_rules": split_rules(setting["block"], setting["firewall"]),
         "split_sizes": split_sizes(reports),
+        "timing": frame_timing(drives, shipped["frame_lags"], setting),
         "train_config": summary["train_config"],
         "twin": summary["twin"],
         "versions": summary["versions"],
