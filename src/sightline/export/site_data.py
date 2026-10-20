@@ -23,7 +23,9 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     ``median_frame_interval_s``. ``parity`` gives, for each of the page's models, how closely
     onnxruntime reproduced PyTorch when this build exported it, as export.json records it: the
     run, the largest angle and saliency differences over the ``stacks`` frame stacks checked,
-    the gates they met and the onnxruntime version.
+    the gates they met and the onnxruntime version. ``generated_from`` names the files it is
+    made from: the summary, every run report it lists, the leakage and standard-recipe reports,
+    in the order they are read, and last the export record this build writes (export.json).
 
     Three more fields are made here. ``drive_profile`` holds, for each drive, its steering
     labels as ``repair_dropouts`` leaves them (read from the label files, never from the
@@ -53,12 +55,14 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     makes them with the block and firewall every run recorded (``split_rules``), and for their
     validation and test frames in turn, the evaluation frame closest in time to a training frame
     (``eval_frame``), that training frame (``train_frame``) and the time between them
-    (``gap_s``). The shuffled split has none: its evaluation frames sit next to training frames
-    by design, and ``leakage.gaps`` gives that distance in frames. A spread is the least value,
-    the 5th percentile, the median, the mean, the 95th percentile and the largest (``min``,
-    ``p05``, ``median``, ``mean``, ``p95``, ``max``). A drive without timestamps (the 2017 one)
-    has null. Every time is in seconds to the millisecond, the resolution of the timestamps;
-    ``drive_timing`` says how they are worked out and rounded.
+    (``gap_s``). ``gap_s`` is measured between the scored frames, rounded to the nearest
+    millisecond; with lag 2 the model's inputs reach two frames nearer, so any text that states
+    it as a lower bound must round down. The shuffled split has none: its evaluation frames sit
+    next to training frames by design, and ``leakage.gaps`` gives that distance in frames. A
+    spread is the least value, the 5th percentile, the median, the mean, the 95th percentile and
+    the largest (``min``, ``p05``, ``median``, ``mean``, ``p95``, ``max``). A drive without
+    timestamps (the 2017 one) has null. Every time is in seconds to the millisecond, the
+    resolution of the timestamps; ``drive_timing`` says how they are worked out and rounded.
 ``data/clips/<id>/``
     A demo clip of ``clip_frames`` scored frames: ``c2018`` from the blocked test stretches
     of the drive the shipped run trained on (minutes it never trained on), ``c2017`` from
@@ -618,8 +622,8 @@ def drive_timing(labels: DriveLabels, lags, splits: dict | None = None) -> dict 
     the percentiles numpy's, with ``PERCENTILE_METHOD`` named. Each value is then rounded once, to the
     millisecond (``_ms_to_s``), so the same timestamps give the same values on any machine.
 
-    Raises a ValueError for timestamps that run backwards, for a lag below 1 frame and for a drive
-    too short to time an interval or a lag.
+    Raises a ValueError for timestamps that run backwards, for a lag that is not a whole number of
+    frames, 1 or more, and for a drive too short to time an interval or a lag.
     """
     lags = list(lags)
     for lag in lags:
@@ -800,6 +804,14 @@ def export_parity(reports: Reports, export: dict) -> dict:
     return parity
 
 
+def generated_from(reports: Reports) -> list:
+    """results.json's ``generated_from``: the reports' files in the order they were read
+    (``load_reports``), then the export record the build writes beside them (export.json), whose
+    ``parity`` results.json copies."""
+    folder = reports.files[-1].rsplit("/", 1)[0]  # where legacy.json is, beside export.json
+    return [*reports.files, f"{folder}/export.json"]
+
+
 def site_results(reports: Reports, drives: dict, export: dict) -> dict:
     """results.json: what the page shows, copied from the reports value for value, with the
     drive profiles, split rules, split sizes and frame timing added (see the module docstring), and
@@ -826,7 +838,7 @@ def site_results(reports: Reports, drives: dict, export: dict) -> dict:
         "cutoffs": summary["cutoffs"],
         "drive_profile": {"bucket_frames": BUCKET_FRAMES, "drives": profiles},
         "drives": summary["drives"],
-        "generated_from": reports.files,
+        "generated_from": generated_from(reports),
         "groups": {key: {name: _mean_and_sd(value) for name, value in group.items()}
                    for key, group in summary["groups"].items()},
         "ladder": summary["ladder"],

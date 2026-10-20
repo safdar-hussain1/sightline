@@ -743,9 +743,12 @@ def test_results_json_copies_the_reports_value_for_value(site):
 def test_results_json_names_the_protocols_as_the_page_does(site):
     assert site.results["protocol_names"] == {"leaky": "shuffled", "blocked": "blocked",
                                               "forward": "later in the drive"}
+    # the reports in the order they are read, then the export record whose parity results.json copies
     assert site.results["generated_from"] == [
         "reports/summary.json", f"reports/runs/{site.shipped}.json", f"reports/runs/{site.twin}.json",
-        "reports/leakage.json", "reports/legacy.json"]
+        "reports/leakage.json", "reports/legacy.json", "reports/export.json"]
+    assert all((site.root / name).is_file() for name in site.results["generated_from"])
+    assert json.loads((site.root / "reports" / "export.json").read_text()) == site.export
 
 
 @pytest.mark.parametrize("tree, path, missing", [
@@ -1450,13 +1453,31 @@ def _spread_problems(where: str, spread) -> list[str]:
     return []
 
 
+def _bucket_times(profile: dict):
+    """For a timed drive's profile (``drive_profile.drives.<drive>``), a function from a frame to the
+    earliest and the latest time its bucket allows it, in whole milliseconds since the drive's first
+    frame: the time of the bucket's first frame and the time of the next bucket's first frame (of the
+    drive's last frame for the last bucket), as the times never run backwards. Both come from the
+    timestamps' own milliseconds, as the timing does, so the bounds are exact."""
+    starts = np.asarray(profile["start_frame"])
+    start_ms = [round(s * 1000) for s in profile["start_s"]]
+    end_ms = round(profile["duration_s"] * 1000)
+
+    def bounds(frame: int) -> tuple[int, int]:
+        k = int(np.searchsorted(starts, frame, side="right")) - 1
+        return start_ms[k], start_ms[k + 1] if k + 1 < len(start_ms) else end_ms
+
+    return bounds
+
+
 def _closest_problems(where: str, entry, split: SplitIndices, which: str, closest_frames: int,
-                      interval_ms: tuple[int, int]) -> list[str]:
+                      interval_ms: tuple[int, int], frame_ms) -> list[str]:
     """What is wrong with a closest evaluation frame, ``entry``, of ``split``'s ``which`` frames: it
     must pair one of them with a training frame, with neither a training frame nor another of them in
     between (either would make a closer pair), no nearer in frames than ``closest_frames`` (the leakage
     report's), and a time that ``interval_ms`` (the drive's least and largest frame intervals) allows
-    for that many frames."""
+    for that many frames and that ``frame_ms`` (a frame's earliest and latest time, from the drive
+    profile's buckets: ``_bucket_times``) allows between the two frames."""
     if not isinstance(entry, dict) or sorted(entry) != ["eval_frame", "gap_s", "train_frame"] or \
             type(entry["eval_frame"]) is not int or type(entry["train_frame"]) is not int or \
             _whole_ms_of(entry["gap_s"]) is None:
@@ -1472,9 +1493,16 @@ def _closest_problems(where: str, entry, split: SplitIndices, which: str, closes
     if apart < closest_frames:
         problems.append(f"{where}: {apart} frames from training, nearer than the leakage report's {closest_frames}")
     least, largest = interval_ms
-    if not apart * least <= _whole_ms_of(entry["gap_s"]) <= apart * largest:
+    gap = _whole_ms_of(entry["gap_s"])
+    if not apart * least <= gap <= apart * largest:
         problems.append(f"{where}: {entry['gap_s']} s for {apart} frames, whose intervals run from {least} to "
                         f"{largest} ms")
+    early, late = sorted((frame, trained))
+    (early_from, early_to), (late_from, late_to) = frame_ms(early), frame_ms(late)
+    low, high = max(0, late_from - early_to), late_to - early_from
+    if not low <= gap <= high:
+        problems.append(f"{where}: {entry['gap_s']} s, but the drive profile's buckets put frames {early} and "
+                        f"{late} from {low / 1000} to {high / 1000} s apart")
     return problems
 
 
@@ -1486,7 +1514,13 @@ def timing_problems(results: dict, lags) -> list[str]:
     run's frame lags) in turn, within ``lag`` times the least and the largest interval, with the mean
     the drive's duration allows for it; and, on the drive the runs trained on alone, the closest
     validation and test frames of the blocked and later-in-the-drive splits, each a pair of frames
-    those splits make (``_closest_problems``)."""
+    those splits make, at a time the drive profile's bucket times allow between them
+    (``_closest_problems``).
+
+    Nothing else in results.json bounds the percentiles of the lag gaps (``p05``, ``median``,
+    ``p95``), nor the frame intervals' ``p05`` and ``p95``: here they are only kept in order and
+    within the least and the largest, so they can only be checked where the drives are, against the
+    times worked out again from the timestamps (``expected_timing``)."""
     timing, problems = results["timing"], []
     if sorted(timing) != sorted(results["drives"]):
         problems.append(f"timing of {sorted(timing)}, drives {sorted(results['drives'])}")
@@ -1544,13 +1578,17 @@ def timing_problems(results: dict, lags) -> list[str]:
             problems.append(f"{name}: not the closest validation and test frames of the blocked and "
                             "later-in-the-drive splits")
             continue
+        profile = results["drive_profile"]["drives"][name]
+        if not isinstance(profile.get("start_s"), list) or len(profile["start_s"]) != len(profile["start_frame"]):
+            problems.append(f"{name}: no bucket times in the drive profile to bound the closest frames' times by")
+            continue
         for protocol, sides in closest.items():
             split = make_split(protocol, info["frames"], firewall=rules[protocol]["firewall"],
                                block=rules["blocked"]["block"])
             for which, entry in sides.items():
                 problems += _closest_problems(f"{name}: closest {protocol} {which} frame", entry, split, which,
                                               results["leakage"]["gaps"][protocol][which]["min_frames"],
-                                              (least, largest))
+                                              (least, largest), _bucket_times(profile))
     return problems
 
 
@@ -1615,6 +1653,22 @@ def test_the_timing_fits_the_rest_of_results_json(site):
         broken = copy.deepcopy(site.results)
         broken["timing"]["drive2018"]["frame_interval_s"].update({"min": 0.056, "p05": 0.056, key: value})
         assert timing_problems(broken, lags), key
+    # the drive profile's bucket times bound the time between a closest pair's frames, from both sides
+    bucket = site.results["drive_profile"]["bucket_frames"]
+    for protocol, which, bound in (("blocked", "val", "most"), ("forward", "test", "least")):
+        broken = copy.deepcopy(site.results)
+        entry = broken["timing"]["drive2018"]["closest_eval_s"][protocol][which]
+        start_s = broken["drive_profile"]["drives"]["drive2018"]["start_s"]
+        early, late = (frame // bucket for frame in sorted((entry["eval_frame"], entry["train_frame"])))
+        if bound == "most":  # the pair's two buckets, side by side, recorded within 2 s of each other
+            assert late == early + 1 and entry["gap_s"] > 2.0
+            start_s[late], start_s[late + 1] = start_s[early] + 1.0, start_s[early] + 2.0
+        else:  # the buckets from two after the earlier frame's on recorded 10 s later (the duration, which
+            # the mean interval is checked against, left alone)
+            assert late >= early + 2
+            start_s[early + 2:] = [round(s + 10.0, 3) for s in start_s[early + 2:]]
+            assert start_s[late] - start_s[early + 1] > entry["gap_s"]
+        assert timing_problems(broken, lags), (protocol, which)
 
 
 def test_the_timing_measures_the_lags_the_shipped_run_records(site):
@@ -2042,7 +2096,7 @@ def test_reports_of_many_runs_are_checked_and_listed_and_give_every_protocol_its
     results = site_data.site_results(reports, site.labels, site.export)
     assert {p: (s["runs"], s["seeds"]) for p, s in results["split_sizes"].items()} == \
         {"leaky": (2, [0, 1]), "blocked": (3, [0, 1, 2]), "forward": (2, [0, 1])}
-    assert results["generated_from"] == reports.files
+    assert results["generated_from"] == [*reports.files, "reports/export.json"]
 
 
 def test_a_build_from_the_reports_of_many_runs_writes_the_sizes_of_every_protocol(site, tmp_path):
@@ -2052,7 +2106,8 @@ def test_a_build_from_the_reports_of_many_runs_writes_the_sizes_of_every_protoco
     written = json.loads((tmp_path / "public" / "data" / "results.json").read_text())
     assert sorted(written["split_sizes"]) == ["blocked", "forward", "leaky"]
     assert {p: {k: s[k] for k in ("train", "val", "test")} for p, s in written["split_sizes"].items()} == HAND_COUNTS
-    assert len(written["generated_from"]) == 10  # the summary, seven run reports, the leakage and legacy reports
+    # the summary, seven run reports, the leakage and legacy reports, and the export record
+    assert len(written["generated_from"]) == 11 and written["generated_from"][-1] == "reports/export.json"
     assert written["drive_profile"] == site.results["drive_profile"]
 
 
@@ -2328,6 +2383,33 @@ def test_the_committed_timing_fits_the_committed_results_and_is_the_drives_measu
     if drives is not None:  # the drives are here: every value is worked out again, apart from the builder
         expected = expected_timing(drives, shipped["frame_lags"], shipped["splits"], trained_on=shipped["drive"])
         assert leaf_differences(results["timing"], expected) == []
+
+
+#: the time the committed drive profile's buckets allow between the frames of each closest pair of the
+#: committed timing, in seconds: from the latest time the earlier frame's bucket allows to the earliest
+#: the later frame's does, and from the earliest to the latest
+COMMITTED_BUCKET_RANGES_S = {("blocked", "val"): (21.939, 27.558), ("blocked", "test"): (18.816, 25.15),
+                             ("forward", "val"): (20.029, 27.033), ("forward", "test"): (530.253, 537.281)}
+
+
+@needs_published
+def test_without_the_drives_a_committed_closest_gap_must_fit_the_bucket_times_of_its_frames():
+    """Where the drives are not, as in a clone, the drive profile's bucket times bound the time between a
+    closest pair's frames: as many frames at the median interval falls outside for every pair, and so
+    does a gap a millisecond past either end, while both ends fit."""
+    results = json.loads((PUBLISHED / "data" / "results.json").read_text())
+    summary = json.loads((REPO / "reports" / "summary.json").read_text())
+    shipped = json.loads((REPO / "reports" / "runs" / f"{summary['shipped']['run']}.json").read_text())
+    drive, lags = shipped["drive"], shipped["frame_lags"]
+    median = results["timing"][drive]["frame_interval_s"]["median"]
+    for (protocol, which), (low, high) in COMMITTED_BUCKET_RANGES_S.items():
+        entry = results["timing"][drive]["closest_eval_s"][protocol][which]
+        estimate = round(abs(entry["eval_frame"] - entry["train_frame"]) * median, 3)
+        for gap_s, refused in ((entry["gap_s"], False), (low, False), (high, False), (estimate, True),
+                               (round(low - 0.001, 3), True), (round(high + 0.001, 3), True)):
+            planted = copy.deepcopy(results)
+            planted["timing"][drive]["closest_eval_s"][protocol][which]["gap_s"] = gap_s
+            assert bool(timing_problems(planted, lags)) is refused, (protocol, which, gap_s)
 
 
 @needs_published
