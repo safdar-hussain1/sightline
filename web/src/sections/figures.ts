@@ -17,6 +17,8 @@
  */
 
 import { AssetError } from "../data/load.ts";
+import { timedLags } from "../data/timing.ts";
+import { framesInKey } from "./names.ts";
 
 /** The two networks the paired measurement compares, by their keys in the data. */
 export const NETWORKS = ["sightlinenet", "pilotnet"] as const;
@@ -63,6 +65,18 @@ export interface Figures {
 }
 
 type Json = Readonly<Record<string, unknown>>;
+
+/** Two figures the reports worked out the same way agree to the last few bits
+ * of floating point, whatever their size. */
+const agrees = (a: number, b: number) => Math.abs(a - b) <= 1e-12 * Math.max(1, Math.abs(a), Math.abs(b));
+
+const meanOf = (values: readonly number[]) => values.reduce((sum, v) => sum + v, 0) / values.length;
+
+/** The sample standard deviation (one degree of freedom), as the reports take it. */
+function sdOf(values: readonly number[]): number {
+  const mean = meanOf(values);
+  return Math.sqrt(values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (values.length - 1));
+}
 
 /** Walks the file by dotted paths and says which one is wrong. */
 export class Reader {
@@ -136,15 +150,35 @@ export class Reader {
     return this.number(path, (v) => v >= 0 && v <= 1, "a share between 0 and 1");
   }
 
-  /** An error over training seeds: its mean, its spread, and each seed's. */
-  seeded(path: string, seeds: number): Seeded {
-    const values = this.list(`${path}.values`);
-    if (values.length !== seeds) this.fail(`${path}.values`, `one value per seed (${seeds})`);
-    return {
-      mean: this.error(`${path}.mean`),
-      sd: this.number(`${path}.sd`, (v) => v >= 0, "a spread of at least 0"),
-      values: values.map((_, i) => this.error(`${path}.values.${i}`)),
-    };
+  /** A figure over training seeds: its mean, its spread, and each seed's
+   * value, the mean and the spread checked to be made of the values. */
+  seeded(path: string, seeds: number, value: (path: string) => number = (at) => this.error(at)): Seeded {
+    const list = this.list(`${path}.values`);
+    if (list.length !== seeds) this.fail(`${path}.values`, `one value per seed (${seeds})`);
+    const values = list.map((_, i) => value(`${path}.values.${i}`));
+    const mean = this.number(`${path}.mean`);
+    const sd = this.number(`${path}.sd`, (v) => v >= 0, "a spread of at least 0");
+    if (!agrees(mean, meanOf(values))) this.fail(`${path}.mean`, "the mean of its values");
+    if (values.length > 1 && !agrees(sd, sdOf(values))) this.fail(`${path}.sd`, "the sample standard deviation of its values");
+    return { mean, sd, values };
+  }
+
+  /** A skill (1 - error / steering straight's, on the same frames) checked
+   * against the errors it comes from. Where every training was tested on the
+   * same frames it is exactly that; where each was tested on its own
+   * (`ownFrames`, the shuffled split) only its side of zero can be checked. */
+  skill(path: string, error: { readonly mean: number; readonly sd: number }, straight: number, ownFrames: boolean, names: readonly [mae: string, zero: string]): Omit<Spread, "runs"> {
+    const skill = this.spread(path);
+    if (ownFrames) {
+      const below = error.mean < straight;
+      if (skill.mean > 0 !== below) {
+        this.fail(`${path}.mean`, below ? "above 0, as its error is below steering straight’s" : "at most 0, as its error is not below steering straight’s");
+      }
+    } else {
+      if (!agrees(skill.mean, 1 - error.mean / straight)) this.fail(`${path}.mean`, `1 − ${names[0]}.mean / ${names[1]}`);
+      if (!agrees(skill.sd, error.sd / straight)) this.fail(`${path}.sd`, `${names[0]}.sd / ${names[1]}`);
+    }
+    return skill;
   }
 
   /** `value` must equal what the data says at `path`: a figure held twice. */
@@ -178,12 +212,13 @@ export function readFigures(raw: Json, url = "data/results.json"): Figures {
       const values = r.list(`${base}.ratio.values`);
       const seeds = r.list(`${base}.per_seed`);
       if (seeds.length !== values.length) r.fail(`${base}.per_seed`, `one entry per ratio value (${values.length})`);
+      const ratio = r.seeded(`${base}.ratio`, values.length, (at) => r.number(at, (v) => v >= 0, "a ratio of at least 0"));
       return [
         network,
         {
-          ratio: { ...r.spread(`${base}.ratio`), runs: values.length },
-          shuffled: r.error(`${base}.shuffled_mae_deg.mean`),
-          blocked: r.error(`${base}.blocked_mae_deg.mean`),
+          ratio: { mean: ratio.mean, sd: ratio.sd, runs: values.length },
+          shuffled: r.seeded(`${base}.shuffled_mae_deg`, values.length).mean,
+          blocked: r.seeded(`${base}.blocked_mae_deg`, values.length).mean,
           // Each seed's shuffled and blocked splits hold out different frames,
           // so each seed has its own paired set.
           frames: seeds.map((_, i) => r.count(`${base}.per_seed.${i}.n`)),
@@ -193,10 +228,13 @@ export function readFigures(raw: Json, url = "data/results.json"): Figures {
   ) as unknown as Figures["paired"];
 
   const group = "groups.sightlinenet/blocked";
+  const crossError = { mean: r.error(`${group}.cross_mae_deg.mean`), sd: r.number(`${group}.cross_mae_deg.sd`, (v) => v >= 0, "a spread of at least 0") };
+  const crossStraight = r.error(`${group}.cross_zero_mae_deg`);
+  const crossSkill = r.skill(`${group}.cross_skill`, crossError, crossStraight, false, ["cross_mae_deg", "cross_zero_mae_deg"]);
   const anotherDay = {
-    skill: { ...r.spread(`${group}.cross_skill`), runs: r.list(`${group}.runs`).length },
-    model: r.error(`${group}.cross_mae_deg.mean`),
-    straight: r.error(`${group}.cross_zero_mae_deg`),
+    skill: { ...crossSkill, runs: r.list(`${group}.runs`).length },
+    model: crossError.mean,
+    straight: crossStraight,
   };
 
   const memoriser = {
@@ -263,7 +301,7 @@ export function readPaired(raw: Json, url = "data/results.json"): Readonly<Recor
       }
       return { seed: r.index(`${at}.seed`), frames: r.count(`${at}.n`), shuffled, blocked, ratio, straight: r.error(`${at}.zero_mae_deg`) };
     });
-    const ratio = r.seeded(`${base}.ratio`, seeds.length);
+    const ratio = r.seeded(`${base}.ratio`, seeds.length, (at) => r.number(at, (v) => v >= 0, "a ratio of at least 0"));
     const shuffled = r.seeded(`${base}.shuffled_mae_deg`, seeds.length);
     const blocked = r.seeded(`${base}.blocked_mae_deg`, seeds.length);
     seeds.forEach((seed, i) => {
@@ -314,7 +352,7 @@ export interface Rung {
   readonly straight: number;
 }
 
-/** One network on one rung, over three trainings: its error and its skill,
+/** One network on one rung, over its trainings: its error and its skill,
  * how much better it is than always steering straight on the same frames
  * (1 - error / steering straight's), negative when it is worse. */
 export interface LadderBar {
@@ -374,8 +412,12 @@ export function readLadder(raw: Json, url = "data/results.json"): Ladder {
       const group = `groups.${model}/${protocol}`;
       const prefix = split === "test" ? "test" : "cross";
       r.same(`${group}.${prefix}_mae_deg.mean`, error.mean, "the ladder's mean error");
+      r.same(`${group}.${prefix}_mae_deg.sd`, error.sd, "the ladder's spread of the error");
       r.same(`${group}.${prefix}_zero_mae_deg`, rung.straight, "the ladder's steering straight");
-      own.set(kind, { error, skill: r.spread(`${group}.${prefix}_skill`), seeds });
+      // On the shuffled split each training is tested on its own draw of frames,
+      // so steering straight there is a mean over different frames.
+      const skill = r.skill(`${group}.${prefix}_skill`, error, rung.straight, kind === "shuffled", [`${prefix}_mae_deg`, `${prefix}_zero_mae_deg`]);
+      own.set(kind, { error, skill, seeds });
     });
     entries.set(model, own);
   }
@@ -397,6 +439,22 @@ export function readLadder(raw: Json, url = "data/results.json"): Ladder {
     }),
   ) as unknown as Ladder["bars"];
   return { rungs: ordered, bars };
+}
+
+/** How many frames each SightlineNet is shown. */
+export type FrameCounts = Readonly<Record<"sightlinenet" | "sightlinenet-1f", number>>;
+
+/** The frames each SightlineNet sees: the shipped network the frame on screen
+ * and one more for each frame lag its drives' timing lists (the shipped run's
+ * own lags), the other as many as its key names. Null when the shipped run is
+ * not a SightlineNet or no drive's timing lists its lags. */
+export function readFrames(raw: Json): FrameCounts | null {
+  const shipped = raw["shipped"];
+  const model = typeof shipped === "object" && shipped !== null ? (shipped as Json)["model"] : undefined;
+  const lags = timedLags(raw);
+  const fewer = framesInKey("sightlinenet-1f");
+  if (model !== "sightlinenet" || lags === null || fewer === null) return null;
+  return { sightlinenet: 1 + lags.length, "sightlinenet-1f": fewer };
 }
 
 /** The steering regimes: frames binned by how hard the driver was turning. */
@@ -485,6 +543,13 @@ export function readLegacy(raw: Json, url = "data/results.json"): Legacy {
   const blocked = find("_blocked_test");
   const later = find("_forward_test", blocked.drive);
   if (blocked.drive === own) r.fail("legacy.eval", `scores on a drive other than ${own}, its training drive`);
+  // Scored on the very test frames the page's own models are scored on: the
+  // same drive, split with the same block and firewall, as many frames.
+  r.same("split_sizes.blocked.drive", blocked.drive, "the drive the standard recipe was scored on");
+  r.same("legacy.splits.block", r.at("split_rules.blocked.block"), "the blocked split's block");
+  r.same("legacy.splits.firewall", r.at("split_rules.blocked.firewall"), "the blocked split's firewall");
+  r.same(`legacy.eval.${blocked.drive}_blocked_test.model.n`, r.at("split_sizes.blocked.test"), "the blocked split’s test frames");
+  r.same(`legacy.eval.${later.drive}_forward_test.model.n`, r.at("split_sizes.forward.test"), "the later-in-the-drive split’s test frames");
   const caps = Object.keys(r.object("legacy.atan_cap")).flatMap((key) => {
     const found = /^labels_beyond_(\d+(?:\.\d+)?)$/.exec(key);
     return found ? [Number(found[1])] : [];
@@ -501,6 +566,52 @@ export function readLegacy(raw: Json, url = "data/results.json"): Legacy {
     cap,
     beyond: r.index(`legacy.atan_cap.labels_beyond_${cap}.${blocked.drive}.n`),
   };
+}
+
+/** The rules the shipped model is measured against, by their keys in the
+ * data: always steering straight, always steering the training frames' mean
+ * angle, and two that read the answer stream -- the driver's true angles on
+ * the frames just before -- which the model never sees: holding the last
+ * one, and extending the line through the last two. */
+export const YARDSTICKS = ["zero", "mean", "zoh", "extrap"] as const;
+export type Yardstick = (typeof YARDSTICKS)[number];
+/** The rules that read the answer stream. */
+export const ORACLES: readonly Yardstick[] = ["zoh", "extrap"];
+
+/** The rules and the shipped model on one set of frames. */
+export interface YardstickSet {
+  /** The blocked split's test frames, or another day's drive. */
+  readonly kind: "held-back" | "another-day";
+  readonly drive: string;
+  readonly frames: number;
+  /** The shipped model's own error on them, degrees. */
+  readonly model: number;
+  readonly errors: Readonly<Record<Yardstick, number>>;
+}
+
+/** The shipped run's report: every rule and the model on the blocked split's
+ * test frames and on another day's drive, each scored on the very frames the
+ * model was, with steering straight the same figure the ladder holds. */
+export function readYardsticks(raw: Json, url = "data/results.json"): readonly YardstickSet[] {
+  // Annotated, so a failed check narrows what follows it.
+  const r: Reader = new Reader(raw, url);
+  r.same("baselines.run", r.at("shipped.run"), "the shipped run");
+  const read = (split: "test" | "cross_drive", kind: YardstickSet["kind"], drive: string): YardstickSet => {
+    const at = `baselines.${split}`;
+    const frames = r.count(`${at}.n`);
+    r.same(`${at}.model.n`, frames, "the frames the rules were scored on");
+    const errors = Object.fromEntries(
+      YARDSTICKS.map((name) => {
+        r.same(`${at}.baselines.${name}.n`, frames, "the frames the model was scored on");
+        return [name, r.error(`${at}.baselines.${name}.mae_deg`)];
+      }),
+    ) as Record<Yardstick, number>;
+    const prefix = split === "test" ? "test" : "cross";
+    r.same(`groups.sightlinenet/blocked.${prefix}_zero_mae_deg`, errors.zero, "steering straight on the same frames");
+    return { kind, drive, frames, model: r.error(`${at}.model.mae_deg`), errors };
+  };
+  r.same("baselines.test.n", r.at("split_sizes.blocked.test"), "the blocked split’s test frames");
+  return [read("test", "held-back", r.string("split_sizes.blocked.drive")), read("cross_drive", "another-day", r.string("baselines.cross_drive.drive"))];
 }
 
 /** How closely onnxruntime reproduced PyTorch when a page model was exported. */
@@ -584,22 +695,38 @@ export function readSplits(raw: Json, url = "data/results.json"): Splits {
   const blocked = size("blocked");
   const nearest = r.count("leakage.gaps.blocked.test.min_frames");
   if (nearest !== 2 * firewall + 1) r.fail("leakage.gaps.blocked.test.min_frames", `${2 * firewall + 1}, two firewalls and a frame`);
-  if (blocked.dropped % (2 * firewall) !== 0) r.fail("split_sizes.blocked.dropped", `a whole number of boundaries of ${2 * firewall} frames`);
+  // The boundaries between a training block and a held-out one, counted from
+  // the pattern laid along the drive; the firewalls drop both sides of each.
+  const block = r.count("split_rules.blocked.block");
+  const pattern = r.string("split_rules.blocked.pattern");
+  if (!/^[TVE]+$/.test(pattern)) r.fail("split_rules.blocked.pattern", "a pattern of T, V and E blocks");
+  const blocks = Math.ceil(frames / block);
+  let boundaries = 0;
+  for (let i = 1; i < blocks; i += 1) {
+    if ((pattern[(i - 1) % pattern.length] === "T") !== (pattern[i % pattern.length] === "T")) boundaries += 1;
+  }
+  if (blocked.dropped !== boundaries * 2 * firewall) {
+    r.fail("split_sizes.blocked.dropped", `${boundaries * 2 * firewall}: ${firewall} frames each side of the pattern’s ${boundaries} boundaries`);
+  }
   const later = size("forward");
   if (later.dropped !== 4 * firewall) r.fail("split_sizes.forward.dropped", `${4 * firewall}: a firewall each side of its two boundaries`);
+  // Each split's sizes follow its shares of the drive, to the frame.
+  const shuffled = size("leaky");
+  const shuffledShares = shares("leaky");
+  const near = (path: string, value: number, expected: number) => {
+    if (Math.abs(value - expected) > 1) r.fail(path, `about ${Math.round(expected)}, its share of the drive`);
+  };
+  near("split_sizes.leaky.train", shuffled.train, frames * shuffledShares[0]);
+  near("split_sizes.leaky.val", shuffled.val, frames * shuffledShares[1]);
+  const laterShares = shares("forward");
+  near("split_sizes.forward.train", later.train + firewall, frames * laterShares[0]);
+  near("split_sizes.forward.val", later.train + later.val + 3 * firewall, frames * (laterShares[0] + laterShares[1]));
   return {
     drive,
     frames,
-    shuffled: { ...size("leaky"), shares: shares("leaky"), withinOne: r.share("leakage.gaps.leaky.test.frac_within_1") },
-    blocked: {
-      ...blocked,
-      block: r.count("split_rules.blocked.block"),
-      firewall,
-      pattern: r.string("split_rules.blocked.pattern"),
-      nearest,
-      boundaries: blocked.dropped / (2 * firewall),
-    },
-    later: { ...later, shares: shares("forward"), firewall, nearest: r.count("leakage.gaps.forward.test.min_frames") },
+    shuffled: { ...shuffled, shares: shuffledShares, withinOne: r.share("leakage.gaps.leaky.test.frac_within_1") },
+    blocked: { ...blocked, block, firewall, pattern, nearest, boundaries },
+    later: { ...later, shares: laterShares, firewall, nearest: r.count("leakage.gaps.forward.test.min_frames") },
     anotherDay: { drive: r.string("baselines.cross_drive.drive"), frames: r.count("baselines.cross_drive.n") },
   };
 }

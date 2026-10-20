@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { readLadder, readPaired } from "../sections/figures.ts";
-import { patch, resultsFixture } from "../sections/fixture.ts";
+import { resultsFixture, setSkill } from "../sections/fixture.ts";
 import { barsLayout } from "./bars.ts";
 import { LADDER_GRID, ladderLayout, lerpLadder } from "./ladder.ts";
 import { SLOPE_NARROW, lerpSlope, nearestLine, slopeLayout, tickDecimals } from "./slope.ts";
@@ -175,7 +175,7 @@ describe("the ladder's layout", () => {
   });
 
   it("follows the data: a network that beats steering straight on a rung stands above the line", () => {
-    const json = patch(resultsFixture(), "groups.pilotnet/forward.test_skill", { mean: 0.12, sd: 0.02 });
+    const json = setSkill(resultsFixture(), "pilotnet", "forward", "test", 0.12);
     const layout = ladderLayout(readLadder(json), "skill", 1000, 0);
     const bar = layout.bars.find((b) => b.model === "pilotnet" && b.rung === 2);
     expect(bar?.end).toBeLessThan(bar?.base ?? 0);

@@ -18,6 +18,7 @@ import {
   injectSections,
   resultsHtml,
 } from "./markup.ts";
+import { networkName } from "./names.ts";
 
 /** The text a visitor reads in some markup: no tags, no attribute values,
  * no drawings, no scripts. */
@@ -42,6 +43,18 @@ describe("the sections' markup", () => {
     expect(text).not.toMatch(/\d/);
   });
 
+  it("serves the Results view without a count typed in words: counts of trainings and frames come with the data", () => {
+    const html = resultsHtml();
+    const said = [visibleText(html), ...[...html.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1] ?? "")].join(" ");
+    const counts = "two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
+    expect(said).not.toMatch(new RegExp(`\\b(${counts})\\s+(trainings?|frames?|seeds?|runs?|models?|drives?)\\b`, "i"));
+    expect(said).not.toMatch(/\b(half a turn|quarter turn|full turn|a second frame|a second drive|checked twice)\b/i);
+  });
+
+  it("names the one-frame network by its key, as the data does", () => {
+    expect(resultsHtml()).toContain(`</span>${networkName("sightlinenet-1f").name}</li>`);
+  });
+
   it("leaves no number anywhere in the body of the page as served", () => {
     const built = injectSections(injectCockpit(injectShell(page)));
     const body = built.slice(built.indexOf("<body>"));
@@ -56,7 +69,7 @@ describe("the sections' markup", () => {
     for (const plot of ["paired", "ladder"]) {
       expect(html).toMatch(new RegExp(`data-${plot}="plot">\\s*<svg[^>]*class="[^"]*--waiting`));
     }
-    expect(html.match(/data-card="(?:frames|regimes|recipe)-plot"><svg[^>]*card-chart--waiting/g)).toHaveLength(3);
+    expect(html.match(/data-card="(?:baselines|frames|regimes|recipe)-plot"><svg[^>]*card-chart--waiting/g)).toHaveLength(4);
   });
 
   it("holds every element the sections' code looks up", () => {
@@ -71,7 +84,7 @@ describe("the sections' markup", () => {
     for (const [source, attribute, html] of lookups) {
       const names = [...source.matchAll(/\.part(?:<[^>]+>)?\("([\w-]+)"\)/g)].map((m) => m[1]);
       // The cards look up some parts by a name made from the card's.
-      for (const card of ["frames", "regimes", "recipe"]) if (attribute === "card") names.push(`${card}-plot`, `${card}-lead`);
+      for (const card of ["baselines", "frames", "regimes", "recipe"]) if (attribute === "card") names.push(`${card}-plot`, `${card}-lead`);
       expect(names.length, attribute).toBeGreaterThan(3);
       for (const name of names) {
         expect(html, `${attribute}: ${name}`).toContain(`data-${attribute}="${name}"`);
@@ -98,6 +111,8 @@ describe("the sections' markup", () => {
       expect(links).toContain(`${base}/blob/main/${file}`);
     }
     expect(links).toContain(`${base}/tree/main/reports/runs`);
+    // And the README, beside them.
+    expect(resultsHtml()).toMatch(/<a\b[^>]*href="https:\/\/github\.com\/safdar-hussain1\/sightline#readme"/);
   });
 
   it("uses headings below the page's one h1", () => {
@@ -122,6 +137,11 @@ describe("the template the sections are written into", () => {
     expect(demo).toContain(HOW_ROOT);
     expect(demo).toContain(ACCURACY_ROOT);
     expect(page.slice(page.indexOf('data-view="results"'))).toContain(RESULTS_ROOT);
+  });
+
+  it("asks for results.json in the head, so its download starts with the page's own", () => {
+    const head = page.slice(0, page.indexOf("</head>"));
+    expect(head).toMatch(/<link rel="preload" href="\/data\/results\.json" as="fetch" type="application\/json" crossorigin \/>/);
   });
 
   it("serves the results view hidden: the demo is the page until the router says otherwise", () => {

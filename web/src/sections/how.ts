@@ -22,7 +22,7 @@
 import type { LiveCockpit, LiveFrame } from "../cockpit/live.ts";
 import { heatImageFromBytes } from "../cockpit/saliency.ts";
 import { renderWheel } from "../cockpit/wheel.ts";
-import { frameTiming } from "../data/timing.ts";
+import { frameTiming, type Gaps } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import { steerParts } from "../format.ts";
 import type { ViewName } from "../router.ts";
@@ -65,7 +65,7 @@ export class HowItWorks {
   private animations: Animation[] = [];
   /** Each drive's measured frame interval, from results.json: until it is
    * known, no clip's frames are timed. */
-  private intervals: Readonly<Record<string, number | null>> = {};
+  private gaps: Readonly<Record<string, Gaps | null>> = {};
   private readonly scratch: HTMLCanvasElement;
 
   constructor(
@@ -111,10 +111,10 @@ export class HowItWorks {
     window.setInterval(() => this.poll(), POLL_MS);
   }
 
-  /** Each drive's measured frame interval (`driveIntervals` of results.json),
-   * so the first step can say how far apart its frames were taken. */
-  setIntervals(intervals: Readonly<Record<string, number | null>>): void {
-    this.intervals = intervals;
+  /** Each drive's measured gaps (`driveGaps` of results.json), so the first
+   * step can say how far apart in time the drive's frames were taken. */
+  setGaps(gaps: Readonly<Record<string, Gaps | null>>): void {
+    this.gaps = gaps;
     const clip = this.clipId === null ? null : this.cockpit?.status().clip;
     if (clip && clip.id === this.clipId) this.describe(clip);
   }
@@ -225,7 +225,7 @@ export class HowItWorks {
 
   /** The words that depend on the clip: how many frames, how far apart. */
   private describe(clip: Clip): void {
-    const timing = frameTiming(this.intervals, clip.drive);
+    const timing = frameTiming(this.gaps, clip.drive);
     this.part("frames-title").textContent = framesTitle(clip, timing);
     this.part("frames-text").textContent = framesText(clip, timing);
     const ages = framesAges(clip, timing);

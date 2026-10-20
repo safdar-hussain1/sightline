@@ -18,7 +18,7 @@ import { attrs, easeInOut, easeOut, lines, local, svg, tween, watchWidth } from 
 import { ladderLayout, lerpLadder, type LadderLayout, type LadderView } from "../charts/ladder.ts";
 import { fmtDeg, fmtPct } from "../format.ts";
 import type { ViewName } from "../router.ts";
-import { NETWORK_NAMES, STRAIGHT, barWords, capitalised, ladderAlt, measurementsFailure, rungCaption, rungNote } from "./copy.ts";
+import { NETWORK_NAMES, STRAIGHT, barWords, capitalised, ladderAlt, ladderCaption, ladderLead, measurementsFailure, rungCaption, rungNote } from "./copy.ts";
 import { textAt, type Frames } from "./countup.ts";
 import { LADDER_MODELS, type Ladder, type LadderModel, type Splits } from "./figures.ts";
 import { onScreen, prefersReducedMotion } from "./motion.ts";
@@ -47,7 +47,9 @@ interface Marks {
   readonly bar: SVGPathElement;
   readonly label: SVGTextElement;
   readonly whisker: SVGPathElement;
-  readonly dots: readonly SVGCircleElement[];
+  /** Each training's error, a tick across the bar, on a halo that keeps it
+   * clear of the bar's fill and of the page behind it. */
+  readonly seeds: ReadonlyArray<readonly [halo: SVGPathElement, tick: SVGPathElement]>;
 }
 
 interface Drawing {
@@ -74,7 +76,7 @@ interface Frame {
   /** The labels' counts, eased: 1 is their final text. */
   readonly count: number;
   readonly whiskers: number;
-  readonly dots: number;
+  readonly seeds: number;
 }
 
 const key = (model: string, rung: number) => `${model}/${rung}`;
@@ -146,8 +148,10 @@ export class LadderSection {
     watchWidth(this.part("plot"), (width) => this.resize(width));
   }
 
+  /** Say why there is no ladder, in its lead, where it is seen: the figure
+   * is put away. */
   fail(error: unknown): void {
-    this.part("caption-text").textContent = measurementsFailure(error);
+    this.part("lead").textContent = measurementsFailure(error);
     this.root.dataset["state"] = "unavailable";
   }
 
@@ -168,6 +172,8 @@ export class LadderSection {
       input.name = "ladder-rung";
       input.value = String(i);
       input.checked = i === this.selected;
+      // The rung's sentence describes it, read when the button is reached.
+      input.setAttribute("aria-describedby", this.part("caption").id);
       const mark = document.createElement("span");
       mark.className = "stepper__mark";
       mark.setAttribute("aria-hidden", "true");
@@ -219,7 +225,7 @@ export class LadderSection {
 
   /** A frame with everything in place. */
   private still(layout: LadderLayout): Frame {
-    return { layout, grow: () => 1, words: layout, wordsOpacity: 1, count: 1, whiskers: layout.view === "skill" ? 1 : 0, dots: layout.view === "error" ? 1 : 0 };
+    return { layout, grow: () => 1, words: layout, wordsOpacity: 1, count: 1, whiskers: layout.view === "skill" ? 1 : 0, seeds: layout.view === "error" ? 1 : 0 };
   }
 
   private build(ladder: Ladder, layout: LadderLayout): void {
@@ -247,7 +253,7 @@ export class LadderSection {
         marks.set(key(model, rung), {
           bar: svg("path", { class: `ladder-chart__bar ${series}` }, bars),
           whisker: svg("path", { class: "ladder-chart__whisker" }, bars),
-          dots: bar.error.values.map(() => svg("circle", { class: `ladder-chart__dot ${series}`, r: 3.5 }, bars)),
+          seeds: bar.error.values.map(() => [svg("path", { class: "ladder-chart__seed-halo" }, bars), svg("path", { class: "ladder-chart__seed" }, bars)] as const),
           label: svg("text", { class: "chart__value chart__value--small", "text-anchor": "middle" }, bars),
         });
       }
@@ -259,17 +265,17 @@ export class LadderSection {
     this.describe();
   }
 
+  /** The words that follow the view: the lead says what a bar's height
+   * means in it, and the chart's title, caption and text alternative. */
   private describe(): void {
+    if (this.root.dataset["state"] !== "unavailable") this.part("lead").textContent = ladderLead(this.view);
+    this.part("chart-title").textContent =
+      this.view === "skill" ? "How much better than always steering straight" : "Mean error, in degrees of steering-wheel angle";
+    this.part("chart-caption").textContent = ladderCaption(this.ladder, this.view);
     if (!this.ladder || !this.drawing) return;
     const alt = ladderAlt(this.ladder, this.view);
     this.drawing.title.textContent = alt.title;
     this.drawing.desc.textContent = alt.desc;
-    this.part("chart-title").textContent =
-      this.view === "skill" ? "How much better than always steering straight" : "Mean error, in degrees of steering-wheel angle";
-    this.part("chart-caption").textContent =
-      this.view === "skill"
-        ? "Mean of three trainings; each whisker spans one standard deviation over them. The line is always steering straight."
-        : "Mean of three trainings; each dot is one training. Each rung’s grey line is always steering straight on its own frames.";
   }
 
   private paint(frame: Frame): void {
@@ -330,8 +336,8 @@ export class LadderSection {
       marks.label.textContent = textAt(label.text, shown, 0, count);
       marks.label.classList.toggle("is-lit", bar.rung === this.selected);
     }
-    // Whiskers belong to the skill view, dots to the error view; each is
-    // drawn where its own view puts it and faded in or out.
+    // Whiskers belong to the skill view, each training's tick to the error
+    // view; each is drawn where its own view puts it and faded in or out.
     const skill = this.layoutFor("skill");
     const error = this.layoutFor("error");
     for (const whisker of skill?.whiskers ?? []) {
@@ -341,14 +347,19 @@ export class LadderSection {
       attrs(marks.whisker, { d: `M${x - 4} ${y1}h8M${x} ${y1}V${y2}M${x - 4} ${y2}h8`, opacity: frame.whiskers });
     }
     const seen = new Map<string, number>();
+    const columns = new Map((error?.bars ?? []).map((bar) => [key(bar.model, bar.rung), bar]));
     for (const dot of error?.dots ?? []) {
-      const marks = d.marks.get(key(dot.model, dot.rung));
-      if (!marks) continue;
       const k = key(dot.model, dot.rung);
+      const marks = d.marks.get(k);
+      const column = columns.get(k);
+      if (!marks || !column) continue;
       const n = seen.get(k) ?? 0;
       seen.set(k, n + 1);
-      const el = marks.dots[n];
-      if (el) attrs(el, { cx: dot.cx, cy: dot.cy, opacity: frame.dots });
+      const pair = marks.seeds[n];
+      if (!pair) continue;
+      const y = Math.round(dot.cy * 100) / 100;
+      const tick = `M${Math.round((column.x - 2) * 100) / 100} ${y}h${Math.round((column.w + 4) * 100) / 100}`;
+      for (const el of pair) attrs(el, { d: tick, opacity: frame.seeds });
     }
     for (const note of words.missing) {
       const el = d.missing.get(key(note.model, note.rung));
@@ -389,7 +400,7 @@ export class LadderSection {
           const order = LADDER_MODELS.indexOf(model as LadderModel);
           return easeOut(local(p, (Number(rung) / rungs) * 0.42 + order * 0.05, 0.42));
         };
-        this.paint({ layout, grow, words: layout, wordsOpacity: 1, count: 1, whiskers: local(p, 0.78, 0.22), dots: layout.view === "error" ? local(p, 0.78, 0.22) : 0 });
+        this.paint({ layout, grow, words: layout, wordsOpacity: 1, count: 1, whiskers: local(p, 0.78, 0.22), seeds: layout.view === "error" ? local(p, 0.78, 0.22) : 0 });
       },
       { reduced: this.reduced(), frames: this.frames },
     );
@@ -416,17 +427,15 @@ export class LadderSection {
     }
   }
 
-  /** Morph the bars into the other view. */
+  /** Morph the bars into the other view; its words change at once, data or not. */
   private setView(view: LadderView): void {
     if (view === this.view) return;
     const before = this.layout;
     this.view = view;
+    this.describe();
     if (!this.ladder) return;
     this.point(null);
-    if (!before) {
-      this.describe();
-      return;
-    }
+    if (!before) return;
     this.stop();
     const after = ladderLayout(this.ladder, view, this.width, this.selected);
     this.layout = after;
@@ -447,7 +456,7 @@ export class LadderSection {
           // What belongs to the view being left goes early; what belongs to
           // the view arriving comes late, once the bars are nearly there.
           whiskers: view === "skill" ? local(p, 0.6, 0.4) : 1 - local(p, 0, 0.35),
-          dots: view === "error" ? local(p, 0.6, 0.4) : 1 - local(p, 0, 0.35),
+          seeds: view === "error" ? local(p, 0.6, 0.4) : 1 - local(p, 0, 0.35),
         });
       },
       { reduced: this.reduced(), frames: this.frames },
@@ -490,7 +499,7 @@ export class LadderSection {
     const rung = this.ladder.rungs[bar.rung];
     d.root.classList.add("is-pointing");
     for (const [k, marks] of d.marks) marks.bar.classList.toggle("is-hot", k === key(bar.model, bar.rung));
-    tip.textContent = `${rung?.name ?? ""}: ${barWords(bar.model, data, this.view)}`;
+    tip.textContent = `${capitalised(rung?.name ?? "")}: ${barWords(bar.model, data, this.view)}`;
     tip.hidden = false;
     const left = Math.min(Math.max(8, px + 14), Math.max(8, box.width - tip.offsetWidth - 8));
     const top = Math.max(4, py - tip.offsetHeight - 14);

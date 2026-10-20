@@ -10,7 +10,7 @@
  */
 
 import { AssetError } from "../data/load.ts";
-import { lagText, type FrameTiming } from "../data/timing.ts";
+import { driveName, framesBack, medianGap, type FrameTiming } from "../data/timing.ts";
 import type { Clip, ModelKey } from "../data/types.ts";
 import { fmtPct } from "../format.ts";
 import { CANNOT_RUN } from "./boot.ts";
@@ -63,17 +63,20 @@ export function splitTitle(title: string): [string, string] {
   return at > 0 ? [title.slice(0, at), title.slice(at + 2)] : ["", title];
 }
 
-/** The caption under the model's own input: its size, and how long before
- * this frame its history frames were taken -- in milliseconds on a drive whose
- * frames carry timestamps, in frames on one whose do not. */
+/** The caption under the model's own input: its size, and how many frames
+ * before this one its history frames are -- plus, on a drive whose frames
+ * carry timestamps, the drive's median time back to the oldest of them, said
+ * as the drive's: the clip's own frames have their own spread. */
 export function eyeCaption(clip: Clip, timing: FrameTiming): string {
   const size = `${clip.sprite.frame_w} × ${clip.sprite.frame_h} pixels`;
-  const ages = clip.frame_lags.map((lag) => lagText(lag, timing));
+  const lags = clip.frame_lags;
   const history =
-    ages.length === 0 ? ""
-    : ages.length === 1 ? ` and of the one ${ages[0]} before it`
-    : ` and of the ones ${ages.join(" and ")} before it`;
-  return `What the model gets: ${size} of this frame${history}, with where it looked.`;
+    lags.length === 0 ? ""
+    : lags.length === 1 ? ` and of the one ${framesBack(lags[0] as number)} before it`
+    : ` and of the ones ${lags.map(framesBack).join(" and ")} before it`;
+  const gap = lags.length === 0 ? null : medianGap(Math.max(...lags), timing.gaps);
+  const when = gap === null ? "" : `, ${lags.length === 1 ? "" : "the oldest "}${gap} earlier on ${driveName(timing.drive)}`;
+  return `What the model gets, with where it looked: ${size} of this frame${history}${when}.`;
 }
 
 /** Why the demo cannot run, for the visitor: what went wrong in plain words,

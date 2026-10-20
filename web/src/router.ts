@@ -13,10 +13,12 @@
  * the switch is instant. Following a link starts the new view at its top, or
  * at the place the link names, and moves focus there. Going back and forward
  * leaves the scroll position to the browser, which restores where the visitor
- * was; once it has, focus moves, without scrolling, to the heading or region
- * nearest the top of the screen in the view now shown, so the next Tab carries
- * on from where the visitor is rather than from a place in the view just
- * hidden. Focus already on something still on screen stays where it is. It
+ * was; once it has, focus moves, without scrolling, to the heading or control
+ * nearest the top of the screen in the view now shown -- or a labelled region
+ * whose top is on screen, when none of its own headings or controls is -- so
+ * the next Tab carries on from where the visitor is rather than from a place
+ * in the view just hidden. Focus already on something still on screen stays
+ * where it is. It
  * never changes the document's title: the title is what search engines index,
  * and it names the page, not the view.
  */
@@ -44,32 +46,54 @@ export interface RouterOptions {
   readonly afterRestore?: (callback: () => void) => void;
 }
 
-/** What focus may land on after Back or Forward: the view's headings and its
- * labelled regions. */
-const PLACES = "h2, h3, section[aria-label], section[aria-labelledby]";
+/** What focus may land on after Back or Forward: the view's headings, the
+ * controls a visitor tabs between, and its labelled regions. */
+const HEADINGS = "h2, h3";
+const CONTROLS =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), ' +
+  'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+const REGIONS = "section[aria-label], section[aria-labelledby]";
+
+/** A place focus may land on, by what it is: a heading says the most, then a
+ * control, then a region. */
+export type PlaceKind = "heading" | "control" | "region";
+const RANK: Readonly<Record<PlaceKind, number>> = { heading: 0, control: 1, region: 2 };
 
 /** Of `boxes`, the index of the one whose top is nearest the top of a
- * viewport `height` tall, among those at least partly in view; a heading wins
- * a tie with a region (it says more). Null when none is in view. */
+ * viewport `height` tall, among those at least partly in view -- a region
+ * only while its own top is on screen, since one that began far above says
+ * nothing of where the visitor is. A heading wins a tie with a control, a
+ * control with a region. Null when none qualifies. */
 export function nearestToTop(
-  boxes: ReadonlyArray<{ readonly top: number; readonly bottom: number; readonly heading: boolean }>,
+  boxes: ReadonlyArray<{ readonly top: number; readonly bottom: number; readonly kind: PlaceKind }>,
   height: number,
 ): number | null {
   let best: number | null = null;
   boxes.forEach((box, i) => {
     if (box.bottom <= 0 || box.top >= height) return;
-    const current = best === null ? null : boxes[best];
+    if (box.kind === "region" && box.top < 0) return;
+    const current = best === null ? undefined : boxes[best];
     const distance = Math.abs(box.top);
     if (
-      current === null ||
       current === undefined ||
       distance < Math.abs(current.top) ||
-      (distance === Math.abs(current.top) && box.heading && !current.heading)
+      (distance === Math.abs(current.top) && RANK[box.kind] < RANK[current.kind])
     ) {
       best = i;
     }
   });
   return best;
+}
+
+/** Whether a radio button is the one of its group that Tab reaches: the
+ * checked one, or the first when none is. */
+function tabbable(element: HTMLElement): boolean {
+  if (!(element instanceof HTMLInputElement) || element.type !== "radio" || element.name === "") return true;
+  if (element.checked) return true;
+  const group = [...(element.form ?? element.ownerDocument).querySelectorAll<HTMLInputElement>(`input[type="radio"]`)].filter(
+    (other) => other.name === element.name,
+  );
+  return !group.some((other) => other.checked) && group[0] === element;
 }
 
 const afterTwoFrames = (callback: () => void) => {
@@ -173,14 +197,16 @@ export class Router {
     if (panel && !this.reduced()) this.animate(panel);
   }
 
+  /** Focus `element` without scrolling; a heading or region is made
+   * focusable for it, a control keeps its own place in the Tab order. */
   private focusOn(element: HTMLElement): void {
-    if (!element.hasAttribute("tabindex")) element.tabIndex = -1;
+    if (!element.matches(CONTROLS) && !element.hasAttribute("tabindex")) element.tabIndex = -1;
     element.focus({ preventScroll: true });
   }
 
-  /** Focus, without scrolling, the heading or region nearest the top of the
-   * screen in `view` -- unless the visitor has moved on, or focus is on
-   * something still on screen. */
+  /** Focus, without scrolling, the heading or control nearest the top of the
+   * screen in `view` (see `nearestToTop`) -- unless the visitor has moved on,
+   * or focus is on something still on screen. */
   private refocus(view: ViewName): void {
     if (this.current !== view) return;
     const panel = this.panel(view);
@@ -188,13 +214,21 @@ export class Router {
     const active = document.activeElement;
     const lost = active === null || active === document.body || !active.isConnected || active.closest(".view[hidden]") !== null;
     if (!lost) return;
-    const places = [...panel.querySelectorAll<HTMLElement>(PLACES)];
-    const boxes = places.map((place) => {
-      const { top, bottom } = place.getBoundingClientRect();
-      return { top, bottom, heading: /^H\d$/.test(place.tagName) };
-    });
-    const nearest = nearestToTop(boxes, innerHeight);
-    const target = nearest === null ? document.querySelector<HTMLElement>(this.options.focus[view]) : places[nearest];
+    const found = (selector: string, kind: PlaceKind) =>
+      [...panel.querySelectorAll<HTMLElement>(selector)].flatMap((element) => {
+        const box = element.getBoundingClientRect();
+        // Nothing drawn (hidden, or in a closed disclosure) is a place to be.
+        if (box.width === 0 && box.height === 0) return [];
+        if (kind === "control" && !tabbable(element)) return [];
+        return [{ element, kind, top: box.top, bottom: box.bottom }];
+      });
+    const inView = (place: { top: number; bottom: number }) => place.bottom > 0 && place.top < innerHeight;
+    const inner = [...found(HEADINGS, "heading"), ...found(CONTROLS, "control")];
+    // A region is only a place of its own when nothing in it is on screen.
+    const regions = found(REGIONS, "region").filter((region) => !inner.some((place) => inView(place) && region.element.contains(place.element)));
+    const places = [...inner, ...regions];
+    const nearest = nearestToTop(places, innerHeight);
+    const target = nearest === null ? document.querySelector<HTMLElement>(this.options.focus[view]) : places[nearest]?.element;
     if (target) this.focusOn(target);
   }
 

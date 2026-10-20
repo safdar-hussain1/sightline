@@ -1,65 +1,62 @@
 /**
- * The Results view's cards: what the second frame buys, where the model
- * struggles, the standard-recipe PilotNet, and where every number comes from.
+ * The Results view's cards: the baselines every finding is measured against,
+ * what the extra frames buy, where the model struggles, the standard-recipe
+ * PilotNet, and where every number comes from.
  *
  * Each card reads its own part of results.json, so a malformed part costs
- * only its card. Each small chart is drawn at its values the moment the data
- * is in, and its bars grow from their zero line once, the first time the card
- * nears the screen in the Results view (instantly under reduced motion). The
- * trust card repeats the live check the headline band runs, without a second
- * announcement: only the band's verdict speaks to a screen reader.
+ * only its card. Each card's drawing (see drawings.ts) is drawn at its values
+ * the moment the data is in, and draws itself in once, the first time the
+ * card nears the screen in the Results view (instantly under reduced motion).
+ * The trust card repeats the live check the headline band runs, without a
+ * second announcement: only the band's verdict speaks to a screen reader.
  */
 
-import { barsLayout, type BarsLayout, type RowSpec } from "../charts/bars.ts";
-import { attrs, easeOut, lines, local, svg, tween, watchWidth } from "../charts/draw.ts";
-import { fmtCount, fmtDeg, fmtPct } from "../format.ts";
+import { attrs, easeOut, svg, tween, watchWidth } from "../charts/draw.ts";
 import type { ViewName } from "../router.ts";
 import {
+  driveTitle,
   exactDeg,
   exportText,
+  frameWords,
+  framesAlt,
+  framesTitleOf,
   legacyAlt,
   legacyText,
   measurementsFailure,
   protocolTexts,
   recipeNote,
-  regimeNames,
   regimesAlt,
   regimesText,
-  skillWords,
   twoFramesText,
-  driveTitle,
+  yardsticksAlt,
+  yardsticksVerdict,
   type ParityLook,
 } from "./copy.ts";
-import { textAt, type Frames } from "./countup.ts";
-import { REGIMES, type ExportCheck, type Ladder, type Legacy, type Regimes, type Splits } from "./figures.ts";
+import type { Frames } from "./countup.ts";
+import { framesDrawing, recipeDrawing, regimesDrawing, yardsticksDrawing, type CardDrawing, type FramesRow } from "./drawings.ts";
+import type { ExportCheck, FrameCounts, Ladder, Legacy, Regimes, Splits, YardstickSet } from "./figures.ts";
+import { fmtCount, fmtDeg } from "../format.ts";
 import { onScreen, prefersReducedMotion } from "./motion.ts";
 
 const GROW_MS = 1100;
 const LEAD_PX = 60;
 
-export type CardName = "frames" | "regimes" | "recipe" | "trust";
+export type CardName = "baselines" | "frames" | "regimes" | "recipe" | "trust";
 
-/** A card's chart: rows of bars, an optional drawing below them, and its
- * text alternative: a title and every number it draws. */
+/** A card's drawing and its text alternative: a title and every number it draws. */
 interface ChartSpec {
   /** Names its title and description elements: unique on the page. */
   readonly id: string;
-  readonly rows: readonly RowSpec[];
   readonly title: string;
   readonly alt: string;
-  /** How much room the labels need beyond the longest bar, px. */
-  readonly room: number;
-  /** Draws below the bars, from `top`, `width` wide; returns its height. */
-  readonly extra?: (group: SVGGElement, top: number, width: number) => number;
+  readonly draw: (group: SVGGElement, width: number) => CardDrawing;
 }
 
-/** One card's chart, drawn at its box's width. */
+/** One card's drawing, at its box's width. */
 class CardChart {
-  private layout: BarsLayout | null = null;
-  private root: SVGSVGElement | null = null;
-  private bars: SVGRectElement[] = [];
-  private labels: SVGTextElement[] = [];
+  private drawing: CardDrawing | null = null;
   private drawn: boolean;
+  private stop: () => void = () => undefined;
 
   constructor(
     private readonly plot: HTMLElement,
@@ -79,50 +76,27 @@ class CardChart {
 
   private draw(width: number): void {
     if (width <= 0) return;
-    const layout = barsLayout(this.spec.rows, width, this.spec.room);
-    this.layout = layout;
+    this.stop();
     const { id } = this.spec;
     const root = svg("svg", { class: "chart__svg card-chart", role: "img", "aria-labelledby": `${id}-chart-title ${id}-chart-desc` });
     svg("title", { id: `${id}-chart-title` }, root).textContent = this.spec.title;
     svg("desc", { id: `${id}-chart-desc` }, root).textContent = this.spec.alt;
-    for (const segment of layout.zero) svg("line", { class: "card-chart__zero", x1: segment.x, x2: segment.x, y1: segment.y1, y2: segment.y2 }, root);
-    for (const title of layout.titles) {
-      const text = svg("text", { class: "card-chart__title", x: title.x, y: title.y }, root);
-      text.textContent = title.text;
-    }
-    this.bars = layout.bars.map((bar) => svg("rect", { class: `card-chart__bar series--${bar.series}`, y: bar.y, height: bar.h, rx: 3 }, root));
-    this.labels = layout.bars.map((bar) => svg("text", { class: "chart__value chart__value--small", x: bar.labelX, y: bar.y + bar.h - 1.5, "text-anchor": bar.anchor }, root));
-    let height = layout.height;
-    if (this.spec.extra) height += this.spec.extra(svg("g", {}, root), height + 10, width) + 10;
-    attrs(root, { viewBox: `0 0 ${width} ${height}`, width, height });
+    const drawing = this.spec.draw(svg("g", {}, root), width);
+    attrs(root, { viewBox: `0 0 ${width} ${drawing.height}`, width, height: drawing.height });
     const old = this.plot.querySelector("svg");
     if (old) old.replaceWith(root);
     else this.plot.prepend(root);
-    this.root = root;
-    this.paint(() => 1);
+    this.drawing = drawing;
+    drawing.paint(1);
     this.maybeGrow();
   }
 
-  private paint(grow: (index: number) => number): void {
-    const layout = this.layout;
-    if (!layout) return;
-    layout.bars.forEach((bar, i) => {
-      const g = grow(i);
-      const end = bar.x0 + (bar.x1 - bar.x0) * g;
-      attrs(this.bars[i] as SVGRectElement, { x: Math.min(bar.x0, end), width: Math.abs(end - bar.x0) });
-      const label = this.labels[i] as SVGTextElement;
-      attrs(label, { x: bar.labelX + (end - bar.x1), opacity: g > 0 ? 1 : 0 });
-      const units = bar.text.endsWith("%") ? bar.value * 100 : bar.value;
-      label.textContent = textAt(bar.text, units, 0, g);
-    });
-  }
-
   maybeGrow(): void {
-    if (this.drawn || !this.layout || !this.root || !this.visible()) return;
+    const drawing = this.drawing;
+    if (this.drawn || !drawing || !this.visible()) return;
     if (!onScreen(this.plot, LEAD_PX)) return;
     this.drawn = true;
-    const count = this.layout.bars.length;
-    tween(GROW_MS, (p) => this.paint((i) => easeOut(local(p, (i / Math.max(1, count)) * 0.35, 0.6))), { reduced: this.reduced(), frames: this.frames });
+    this.stop = tween(GROW_MS, (p) => drawing.paint(easeOut(p)), { reduced: this.reduced(), frames: this.frames });
   }
 }
 
@@ -159,32 +133,38 @@ export class Cards {
     this.charts.push(new CardChart(this.part(`${name}-plot`), spec, this.reduced, this.frames, () => this.onView));
   }
 
-  /** What the second frame buys: SightlineNet with two frames and with one,
+  /** The baselines: every rule beside Sightline, on the blocked split's test
+   * frames and on another day's drive. */
+  showBaselines(sets: readonly YardstickSet[]): void {
+    this.part("baselines-verdict").textContent = yardsticksVerdict(sets);
+    this.chart("baselines", {
+      id: "baselines",
+      title: "Mean error of each baseline and of Sightline, on the same frames",
+      alt: yardsticksAlt(sets),
+      draw: (group, width) => yardsticksDrawing(group, width, sets),
+    });
+    this.part("baselines").dataset["state"] = "ready";
+  }
+
+  /** What the extra frames buy: SightlineNet with more frames and with fewer,
    * on another day and on held-back stretches of its own drive. */
-  showFrames(ladder: Ladder): void {
-    const text = twoFramesText(ladder);
+  showFrames(ladder: Ladder, frames: FrameCounts | null): void {
+    const text = twoFramesText(ladder, frames);
     if (!text) throw new Error("the ladder has no rung that holds both SightlineNets");
+    this.part("frames-title").textContent = framesTitleOf(frames);
     this.part("frames-lead").textContent = text.lead;
     this.part("frames-also").textContent = text.also;
-    const rows: RowSpec[] = [];
+    const rows: FramesRow[] = [];
     for (const kind of ["another-day", "blocked"] as const) {
       const i = ladder.rungs.findIndex((rung) => rung.kind === kind);
-      const two = ladder.bars.sightlinenet[i];
-      const one = ladder.bars["sightlinenet-1f"][i];
-      if (i < 0 || !two || !one) continue;
-      rows.push({
-        title: kind === "another-day" ? "Another day’s drive" : "Held-back stretches of its own drive",
-        bars: [
-          { series: "sightlinenet", value: two.skill.mean, text: fmtPct(two.skill.mean) },
-          { series: "oneframe", value: one.skill.mean, text: fmtPct(one.skill.mean) },
-        ],
-      });
+      const more = ladder.bars.sightlinenet[i];
+      const fewer = ladder.bars["sightlinenet-1f"][i];
+      if (i < 0 || !more || !fewer) continue;
+      rows.push({ title: kind === "another-day" ? "Another day’s drive" : "Held-back stretches of its own drive", more: more.skill.mean, fewer: fewer.skill.mean });
     }
-    const alt =
-      "How much better than always steering straight SightlineNet is with two frames and with one: " +
-      rows.map((row) => `${row.title}: two frames ${skillWords(row.bars[0]?.value ?? 0)}, one frame ${skillWords(row.bars[1]?.value ?? 0)}`).join("; ") +
-      ".";
-    this.chart("frames", { id: "frames", rows, title: "SightlineNet with two frames and with one, against always steering straight", alt, room: 48 });
+    const alt = framesAlt(rows, frames);
+    const words = frameWords(frames);
+    this.chart("frames", { id: "frames", title: alt.title, alt: alt.desc, draw: (group, width) => framesDrawing(group, width, rows, words) });
     this.part("frames").dataset["state"] = "ready";
   }
 
@@ -193,19 +173,17 @@ export class Cards {
     const text = regimesText(regimes);
     this.part("regimes-lead").textContent = text.lead;
     this.part("regimes-straight").textContent = text.straight;
-    const names = regimeNames(regimes.edges);
-    const rows: RowSpec[] = REGIMES.map((regime) => ({
-      title: `${names[regime]} (${fmtCount(regimes.frames[regime])} frames)`,
-      bars: [
-        { series: "sightlinenet", value: regimes.models.sightlinenet.errors[regime], text: fmtDeg(regimes.models.sightlinenet.errors[regime]) },
-        { series: "straight", value: regimes.straight[regime], text: fmtDeg(regimes.straight[regime]) },
-      ],
-    }));
-    this.chart("regimes", { id: "regimes", rows, title: "Mean error by how hard the driver was turning", alt: regimesAlt(regimes), room: 48 });
+    this.chart("regimes", {
+      id: "regimes",
+      title: "Mean error by how hard the driver was turning",
+      alt: regimesAlt(regimes),
+      draw: (group, width) => regimesDrawing(group, width, regimes),
+    });
     this.part("regimes").dataset["state"] = "ready";
   }
 
-  /** The standard-recipe PilotNet, and how far its output can turn the wheel. */
+  /** The standard-recipe PilotNet: how far its output can turn the wheel, and
+   * its errors beside steering straight's. */
   showRecipe(legacy: Legacy): void {
     const text = legacyText(legacy);
     this.part("recipe-lead").textContent = text.lead;
@@ -213,28 +191,19 @@ export class Cards {
     this.part("recipe-cap").textContent = text.cap;
     this.part("recipe-recipe").textContent = recipeNote(legacy.recipe);
     const other = driveTitle(legacy.blocked.drive);
-    const rows: RowSpec[] = [
-      [`Its own training drive (${fmtCount(legacy.own.frames)} frames)`, legacy.own],
-      [`Held-back stretches of ${other} (${fmtCount(legacy.blocked.frames)} frames)`, legacy.blocked],
-      [`The last part of ${other} (${fmtCount(legacy.later.frames)} frames)`, legacy.later],
-    ].map(([title, score]) => {
-      const s = score as Legacy["own"];
-      return {
-        title: title as string,
-        bars: [
-          { series: "pilotnet", value: s.model, text: fmtDeg(s.model) },
-          { series: "straight", value: s.straight, text: fmtDeg(s.straight) },
-        ],
-      };
-    });
-    const alt = `${legacyAlt(legacy)} Its largest answer is ${fmtDeg(legacy.largest)}; its output can never pass ${exactDeg(legacy.cap)}, and the driver turned past that on ${fmtCount(legacy.beyond)} frames of ${other}.`;
+    const sets = [
+      ["Its own training drive", legacy.own],
+      [`Held-back stretches of ${other}`, legacy.blocked],
+      [`The last part of ${other}`, legacy.later],
+    ] as const;
+    const alt =
+      `${legacyAlt(legacy)} Its largest answer is ${fmtDeg(legacy.largest)}; its output can never pass ${exactDeg(legacy.cap)}, ` +
+      `and the driver turned past that on ${fmtCount(legacy.beyond)} frames of ${other}.`;
     this.chart("recipe", {
       id: "recipe",
-      rows,
-      title: "The standard-recipe PilotNet against always steering straight, and its largest answer against its limit",
+      title: "The standard-recipe PilotNet: its largest answer against its limit, and its error against always steering straight",
       alt,
-      room: 48,
-      extra: (group, top, width) => reach(group, top, width, legacy),
+      draw: (group, width) => recipeDrawing(group, width, legacy, sets),
     });
     this.part("recipe").dataset["state"] = "ready";
   }
@@ -263,26 +232,4 @@ export class Cards {
     this.part(lead).textContent = measurementsFailure(error);
     this.part(card).dataset["state"] = "unavailable";
   }
-}
-
-/** The standard recipe's reach: its largest answer against the limit of its
- * arctangent output, and the frames where the driver turned past that limit.
- * Drawn into `group` from `top`; returns its height. */
-function reach(group: SVGGElement, top: number, width: number, legacy: Legacy): number {
-  const wall = width - 92;
-  const x = (angle: number) => 2 + (angle / legacy.cap) * (wall - 2);
-  const title = svg("text", { class: "card-chart__title", x: 0, y: top + 13 }, group);
-  title.textContent = "Its largest answer, against its limit";
-  const y = top + 38;
-  const limit = svg("text", { class: "chart__value chart__value--small", x: wall + 1, y: y - 9, "text-anchor": "middle" }, group);
-  limit.textContent = `limit ${exactDeg(legacy.cap)}`;
-  svg("rect", { class: "card-chart__track", x: 2, y, width: wall - 2, height: 12, rx: 3 }, group);
-  svg("rect", { class: "card-chart__bar series--pilotnet", x: 2, y, width: Math.max(0, x(legacy.largest) - 2), height: 12, rx: 3 }, group);
-  svg("rect", { class: "card-chart__beyond", x: wall + 5, y, width: width - wall - 7, height: 12, rx: 3 }, group);
-  svg("line", { class: "card-chart__wall", x1: wall + 1, x2: wall + 1, y1: y - 4, y2: y + 16 }, group);
-  const largest = svg("text", { class: "chart__value chart__value--small", x: 2, y: y + 29 }, group);
-  largest.textContent = `largest answer ${fmtDeg(legacy.largest)}`;
-  const beyond = svg("text", { class: "chart__note", x: wall + 8, y: y + 29 }, group);
-  lines(beyond, [`${fmtCount(legacy.beyond)} frames`, "turned past it"], wall + 8, 14);
-  return 86;
 }

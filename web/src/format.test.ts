@@ -149,14 +149,14 @@ describe("fmtSpread", () => {
 });
 
 describe("fmtMs", () => {
-  it("prints a time in milliseconds", () => {
-    expect(fmtMs(2.53)).toBe("2.5 ms");
-    expect(fmtMs(114.28, 0)).toBe("114 ms");
+  it("prints a time in milliseconds, never parted from its unit at the end of a line", () => {
+    expect(fmtMs(2.53)).toBe("2.5\u00A0ms");
+    expect(fmtMs(114.28, 0)).toBe("114\u00A0ms");
   });
 
   it("never prints a time that was measured as no time at all", () => {
-    expect(fmtMs(0.03)).toBe("0.03 ms");
-    expect(fmtMs(0.00002)).toBe("<0.001 ms");
+    expect(fmtMs(0.03)).toBe("0.03\u00A0ms");
+    expect(fmtMs(0.00002)).toBe("<0.001\u00A0ms");
   });
 
   it("prints an em dash where there is no time", () => {
@@ -262,7 +262,7 @@ describe("every formatter, across many magnitudes", () => {
       for (const [text, unit] of [
         [fmtSpread(value).replace(/^±/, ""), ""],
         [fmtSpread(value, 2).replace(/^±/, ""), ""],
-        [fmtMs(value), " ms"],
+        [fmtMs(value), "\u00A0ms"],
       ] as const) {
         const match = /^([<>]?)(\d+(?:\.\d+)?)(.*)$/.exec(text);
         expect(match, `unparseable: ${text}`).not.toBeNull();

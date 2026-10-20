@@ -171,10 +171,20 @@ export function countWord(n: number): string {
   return NUMBER_WORDS[n] ?? fmtCount(n);
 }
 
-/** A time in milliseconds: `fmtMs(2.53)` is `2.5 ms`. */
+const ORDINAL_WORDS = ["zeroth", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth"];
+
+/** A position as a sentence says it while it is small ("second"); beyond,
+ * "number 13". */
+export function ordinalWord(n: number): string {
+  return ORDINAL_WORDS[n] ?? `number ${fmtCount(n)}`;
+}
+
+/** A time in milliseconds: `fmtMs(2.53)` is `2.5 ms`, its number and unit
+ * joined by a no-break space (U+00A0, which the page's fonts carry), so a
+ * line never ends between them. */
 export function fmtMs(x: number, digits = 1): string {
   if (!Number.isFinite(x) || x < 0) {
     return NO_VALUE;
   }
-  return measured(x, digits, " ms");
+  return measured(x, digits, "\u00A0ms");
 }

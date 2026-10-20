@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Agreement, LiveCockpit, LiveFrame, LiveStatus } from "../cockpit/live.ts";
 import { AssetError } from "../data/load.ts";
+import { driveGaps } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import { Accuracy } from "./accuracy.ts";
 import { accuracyCaption, accuracySentence, leakageSentence, measurementsFailure, pairedLabel, parityState } from "./copy.ts";
@@ -255,14 +256,16 @@ describe("the Results band", () => {
     expect(q('[data-results="trust"]').dataset["state"]).toBe("checked");
 
     // The wrong model served under Sightline's name: its frames decode the
-    // same, its angles do not.
+    // same, its angles do not. A final verdict is read again when the view
+    // comes back.
     agreement = { ...agreement, maxDiffDeg: 124.8157 };
-    vi.advanceTimersByTime(700);
+    band.viewShown("demo");
+    band.viewShown("results");
     expect(q('[data-results="trust"]').dataset["state"]).toBe("mismatch");
     expect(text('[data-results="trust-verdict"]')).toMatch(/do not match the same model run in Python/);
 
     agreement = { ...agreement, check: "differ", maxDiffDeg: 0 };
-    vi.advanceTimersByTime(700);
+    band.viewShown("results");
     expect(q('[data-results="trust"]').dataset["state"]).toBe("note");
   });
 
@@ -294,10 +297,74 @@ describe("the Results band", () => {
     vi.advanceTimersByTime(700);
     expect(verdict.textContent).toBe(parityState(agreement, "ready").text);
     expect(progress.hidden).toBe(true);
-    // Read again and again while the view is open, the verdict is written once.
+    // The verdict is final: the check stops reading, and says it once.
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(5000);
     await Promise.resolve();
     expect(writes).toHaveLength(1);
+  });
+
+  it("announces a failing check when it fails and when it completes, never at each frame, and stops reading after", async () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset["view"] = "results";
+    const { band } = mount(true);
+    const verdict = q('[data-results="trust-verdict"]');
+    const progress = q('[data-results="trust-text"]');
+    // Each write puts new text in: count those, not the records a write makes.
+    const writes: string[] = [];
+    new MutationObserver((records) => {
+      for (const record of records) if (record.addedNodes.length > 0 || record.type === "characterData") writes.push(verdict.textContent ?? "");
+    }).observe(verdict, { childList: true, characterData: true, subtree: true });
+
+    // The twin served under Sightline's name: its frames decode the same, its angles do not.
+    const clipFile = { title: "2018: minutes it never trained on", tolerance: { angle_deg: 0.001 } } as Clip;
+    let agreement: Agreement = { clip: clipFile, model: "sightline", check: "match", compared: 24, total: 420, maxDiffDeg: 61.2 };
+    band.attach({ agreement: () => agreement, status: () => ({ state: "ready" }) as LiveStatus } as unknown as LiveCockpit);
+    await Promise.resolve();
+    expect(verdict.textContent).toBe("Sightline’s angles in this browser do not match the same model run in Python.");
+    expect(progress.textContent).toMatch(/^On the 24 frames of the demo’s 2018 clip run so far, they differ by up to 61\.2°, more than the 0\.001° allowed\.$/);
+    expect(writes).toHaveLength(1);
+
+    for (const compared of [96, 180, 300, 419]) {
+      agreement = { ...agreement, compared, maxDiffDeg: 124.8157 };
+      vi.advanceTimersByTime(700);
+    }
+    await Promise.resolve();
+    expect(writes).toHaveLength(1);
+    expect(progress.textContent).toMatch(/^On the 419 frames of the demo’s 2018 clip run so far, they differ by up to 124\.9°/);
+
+    agreement = { ...agreement, compared: 420 };
+    vi.advanceTimersByTime(700);
+    await Promise.resolve();
+    expect(writes).toHaveLength(2);
+    expect(verdict.textContent).toBe(
+      "Sightline’s angles in this browser do not match the same model run in Python: on the demo’s 2018 clip they differ by up to 124.9°, more than the 0.001° allowed.",
+    );
+    expect(progress.hidden).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(5000);
+    await Promise.resolve();
+    expect(writes).toHaveLength(2);
+  });
+
+  it("reads the check again when its view comes back, and keeps reading only while it can change", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset["view"] = "results";
+    const { band } = mount(true);
+    const clipFile = { title: "2018: minutes it never trained on", tolerance: { angle_deg: 0.001 } } as Clip;
+    let agreement: Agreement = { clip: clipFile, model: "sightline", check: "match", compared: 420, total: 420, maxDiffDeg: 0 };
+    band.attach({ agreement: () => agreement, status: () => ({ state: "ready" }) as LiveStatus } as unknown as LiveCockpit);
+    expect(vi.getTimerCount()).toBe(0);
+    // The visitor picked the other model on the demo, and came back.
+    band.viewShown("demo");
+    agreement = { ...agreement, model: "shuffled", compared: 30 };
+    band.viewShown("results");
+    expect(text('[data-results="trust-text"]')).toMatch(/^Checking the twin live: 30 of 420 frames/);
+    expect(vi.getTimerCount()).toBe(1);
+    agreement = { ...agreement, compared: 420 };
+    vi.advanceTimersByTime(700);
+    expect(text('[data-results="trust-verdict"]')).toMatch(/^Checked live: on all 420 frames/);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("says why there is no live check when the demo's code never started", () => {
@@ -390,7 +457,7 @@ describe("How it works", () => {
   let puts: HTMLCanvasElement[] = [];
   let clears: HTMLCanvasElement[] = [];
   const drawn = () => puts.flatMap((canvas) => canvas.dataset["how"] ?? []);
-  const INTERVALS = { drive2018: 0.057, drive2017: null };
+  const GAPS = driveGaps(resultsFixture());
 
   beforeEach(() => {
     puts = [];
@@ -414,7 +481,7 @@ describe("How it works", () => {
     const { world, cockpit } = fakeCockpit();
     world.status = { ...world.status, clip: null };
     const how = mount(false);
-    how.setIntervals(INTERVALS);
+    how.setGaps(GAPS);
     how.attach(cockpit);
     expect(steps().dataset["live"]).toBe("false");
     expect(q('[data-how="toggle"]').hidden).toBe(true);
@@ -422,12 +489,12 @@ describe("How it works", () => {
     world.status = { ...world.status, clip: CLIP };
     vi.advanceTimersByTime(300);
     expect(steps().dataset["live"]).toBe("true");
-    expect(text('[data-how="frames-title"]')).toBe("Two frames, 114 ms apart");
-    expect([text('[data-how="age-0"]'), text('[data-how="age-1"]')]).toEqual(["now", "114 ms before"]);
+    expect(text('[data-how="frames-title"]')).toBe("Two frames, a median 100\u00A0ms apart on the 2018 drive");
+    expect([text('[data-how="age-0"]'), text('[data-how="age-1"]')]).toEqual(["now", "two frames before"]);
     // The page's three canvases (the heat is composited through an unseen one).
     expect(puts.flatMap((canvas) => canvas.dataset["how"] ?? []).sort()).toEqual(["frame-0", "frame-1", "heat"]);
     expect(text('[data-how="angle"]') + " " + text('[data-how="side"]')).toBe("12.6° right");
-    expect(text('[data-how="speed"]')).toBe("Here it takes about 2.5 ms a frame.");
+    expect(text('[data-how="speed"]')).toBe("Here it takes about 2.5\u00A0ms a frame.");
     expect(q('[data-how="toggle"]').hidden).toBe(false);
   });
 
@@ -503,10 +570,10 @@ describe("How it works", () => {
     how.attach(cockpit);
     // Before results.json says which drive has timestamps, nothing is timed.
     expect(text('[data-how="frames-title"]')).toBe("This frame and the one two frames before it");
-    how.setIntervals(INTERVALS);
+    how.setGaps(GAPS);
     expect(text('[data-how="frames-title"]')).toBe("This frame and the one two frames before it");
     expect(text('[data-how="age-1"]')).toBe("two frames before");
-    expect(text('[data-how="frames-text"]')).toMatch(/on the 2018 drive, whose frames do, two frames are 114 ms apart/);
+    expect(text('[data-how="frames-text"]')).toMatch(/on the 2018 drive, whose frames do, a frame and the one two before it were taken a median 100\u00A0ms apart/);
   });
 
   it("starts paused under reduced motion, playing otherwise, and the button switches it", () => {

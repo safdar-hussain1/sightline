@@ -16,11 +16,11 @@ import "./styles.css";
 
 import { bootCockpit } from "./cockpit/boot.ts";
 import { loadResults } from "./data/load.ts";
-import { driveIntervals } from "./data/timing.ts";
+import { driveGaps } from "./data/timing.ts";
 import { Router } from "./router.ts";
 import { Accuracy } from "./sections/accuracy.ts";
 import { Cards } from "./sections/cards.ts";
-import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, type Figures } from "./sections/figures.ts";
+import { readFigures, readFrames, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, readYardsticks, type Figures } from "./sections/figures.ts";
 import { Headline } from "./sections/headline.ts";
 import { HowItWorks } from "./sections/how.ts";
 import { LadderSection } from "./sections/ladder.ts";
@@ -75,7 +75,8 @@ function showResults(raw: Readonly<Record<string, unknown>>, figures: Figures | 
     () => ladder?.show(readLadder(raw), readSplits(raw)),
     (error) => ladder?.fail(error),
   );
-  part(() => cards?.showFrames(readLadder(raw)), (error) => cards?.fail("frames", error));
+  part(() => cards?.showBaselines(readYardsticks(raw)), (error) => cards?.fail("baselines", error));
+  part(() => cards?.showFrames(readLadder(raw), readFrames(raw)), (error) => cards?.fail("frames", error));
   part(() => cards?.showRegimes(readRegimes(raw)), (error) => cards?.fail("regimes", error));
   part(() => cards?.showRecipe(readLegacy(raw)), (error) => cards?.fail("recipe", error));
   part(() => cards?.showTrust(readParity(raw), readSplits(raw)), (error) => cards?.fail("trust", error));
@@ -85,13 +86,13 @@ function showResults(raw: Readonly<Record<string, unknown>>, figures: Figures | 
 function failResults(error: unknown): void {
   paired?.fail(error);
   ladder?.fail(error);
-  for (const card of ["frames", "regimes", "recipe", "trust"] as const) cards?.fail(card, error);
+  for (const card of ["baselines", "frames", "regimes", "recipe", "trust"] as const) cards?.fail(card, error);
 }
 
 const results = loadResults(new URL("./", document.baseURI).href);
 results.then(
   (loaded) => {
-    how?.setIntervals(driveIntervals(loaded.raw));
+    how?.setGaps(driveGaps(loaded.raw));
     let figures: Figures | null = null;
     try {
       figures = readFigures(loaded.raw);

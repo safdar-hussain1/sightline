@@ -215,25 +215,24 @@ export class Headline {
     this.part(`bar-${part}`).style.setProperty("--share", String(Math.max(0, degrees) / this.scale));
   }
 
-  /** Read the live check now, and again shortly while the view is on screen.
-   * Its progress is written where it is seen but never announced; its
-   * verdict goes into a polite status region, written only when it changes,
-   * so a screen reader hears each verdict once. */
+  /** Read the live check now, and again shortly while the view is on screen
+   * and the check can still change. Its progress line is written where it is
+   * seen but never announced; its verdict goes into a polite status region,
+   * which changes only when the look does or the check completes, so a
+   * screen reader hears each finding once. */
   private check(): void {
     clearTimeout(this.checking);
     if (this.cockpit === undefined) return; // the cockpit's code is still on its way
     const cockpit = this.cockpit;
-    const { look, text } = parityState(cockpit?.agreement() ?? null, cockpit ? cockpit.status().state : "absent");
-    const settled = look !== "checking";
+    const state = parityState(cockpit?.agreement() ?? null, cockpit ? cockpit.status().state : "absent");
     const progress = this.part("trust-text");
-    progress.hidden = settled;
-    if (!settled) progress.textContent = text;
+    progress.hidden = state.progress === "";
+    if (progress.textContent !== state.progress) progress.textContent = state.progress;
     const verdict = this.part("trust-verdict");
-    const said = settled ? text : "";
-    if (verdict.textContent !== said) verdict.textContent = said;
-    this.part("trust").dataset["state"] = look;
-    this.listener?.(look, text);
-    if (cockpit && this.onView && document.visibilityState !== "hidden") {
+    if (verdict.textContent !== state.verdict) verdict.textContent = state.verdict;
+    this.part("trust").dataset["state"] = state.look;
+    this.listener?.(state.look, state.text);
+    if (cockpit && !state.done && this.onView && document.visibilityState !== "hidden") {
       this.checking = window.setTimeout(() => this.check(), CHECK_MS);
     }
   }

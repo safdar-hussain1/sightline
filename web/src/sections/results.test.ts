@@ -15,6 +15,8 @@ import { Cards } from "./cards.ts";
 import {
   exportText,
   ladderAlt,
+  ladderCaption,
+  ladderLead,
   legacyText,
   measurementsFailure,
   pairedAlt,
@@ -28,10 +30,13 @@ import {
   rungCaption,
   rungNote,
   splitsText,
+  framesAlt,
   twoFramesText,
+  yardsticksAlt,
+  yardsticksVerdict,
 } from "./copy.ts";
 import type { Frames } from "./countup.ts";
-import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits } from "./figures.ts";
+import { readFigures, readFrames, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, readYardsticks } from "./figures.ts";
 import { patch, resultsFixture } from "./fixture.ts";
 import { LadderSection } from "./ladder.ts";
 import { resultsHtml } from "./markup.ts";
@@ -348,7 +353,7 @@ describe("the ladder", () => {
     expect(all(".ladder-chart__bars .chart__value").map((el) => el.getAttribute("y"))).toEqual(finalLabels);
   });
 
-  it("morphs into raw error: degrees, each training as a dot, each rung's own steering-straight line", () => {
+  it("morphs into raw error: degrees, each training as a tick, each rung's own steering-straight line", () => {
     layoutAs(1000, true);
     const { section, frames } = mount(false);
     const ladder = readLadder(raw());
@@ -361,13 +366,65 @@ describe("the ladder", () => {
     const labels = all(".ladder-chart__bars .chart__value").map((el) => el.textContent);
     expect(labels).toContain("13.6°");
     expect(labels).toContain("2.9°");
-    expect(all(".ladder-chart__dot").every((dot) => dot.getAttribute("opacity") === "1")).toBe(true);
+    expect(all(".ladder-chart__dot")).toEqual([]);
+    expect(all(".ladder-chart__seed")).toHaveLength(30);
+    expect(all(".ladder-chart__seed").every((tick) => tick.tagName.toLowerCase() === "path" && tick.getAttribute("opacity") === "1")).toBe(true);
     expect(all(".ladder-chart__whisker").every((w) => w.getAttribute("opacity") === "0")).toBe(true);
     const ticks = all(".ladder-chart__baselines .chart__note").map((el) => el.textContent);
     expect(ticks).toEqual(["13.1°", "17.5°", "9.4°", "15.5°"]);
     const alt = ladderAlt(ladder, "error");
     expect(text("#ladder-svg-title")).toBe(alt.title);
     expect(text('[data-ladder="chart-title"]')).toBe("Mean error, in degrees of steering-wheel angle");
+    expect(text('[data-ladder="chart-caption"]')).toBe(ladderCaption(ladder, "error"));
+  });
+
+  it("says what a bar's height means in the view on screen: in raw error a bar above the line never beats steering straight", () => {
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    const ladder = readLadder(raw());
+    section.show(ladder, readSplits(raw()));
+    expect(text('[data-ladder="lead"]')).toBe(ladderLead("skill"));
+    expect(text('[data-ladder="chart-caption"]')).toBe(ladderCaption(ladder, "skill"));
+    pick("ladder-view", "error");
+    frames.tick(5000);
+    expect(text('[data-ladder="lead"]')).toBe(ladderLead("error"));
+    expect(text('[data-ladder="lead"]')).not.toMatch(/above the line beats/);
+    pick("ladder-view", "skill");
+    expect(text('[data-ladder="lead"]')).toBe(ladderLead("skill"));
+  });
+
+  it("says what the bars mean for the view picked even before the data arrives", () => {
+    const { section } = mount(true);
+    pick("ladder-view", "error");
+    expect(text('[data-ladder="lead"]')).toBe(ladderLead("error"));
+    expect(text('[data-ladder="chart-title"]')).toBe("Mean error, in degrees of steering-wheel angle");
+    expect(section).toBeDefined();
+  });
+
+  it("describes each rung's radio button by the rung's sentence, and never announces the sentence by itself", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    section.show(readLadder(raw()), readSplits(raw()));
+    const caption = q('[data-ladder="caption"]');
+    expect(caption.hasAttribute("aria-live")).toBe(false);
+    expect(caption.closest("[aria-live], [role=status], [role=alert]")).toBeNull();
+    const radios = all('input[name="ladder-rung"]');
+    expect(radios).toHaveLength(4);
+    expect(radios.every((radio) => radio.getAttribute("aria-describedby") === caption.id)).toBe(true);
+  });
+
+  it("names the rung under the pointer with a capital, as a sentence starts", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    const ladder = readLadder(raw());
+    section.show(ladder, readSplits(raw()));
+    const layout = ladderLayout(ladder, "skill", 1000, 3);
+    const bar = layout.bars.find((b) => b.model === "pilotnet" && b.rung === 3);
+    const panel = layout.panels[3];
+    const plot = q('[data-ladder="plot"]');
+    plot.dispatchEvent(new PointerEvent("pointermove", { clientX: (bar?.x ?? 0) + 2, clientY: 100 + (panel?.y ?? 0) + (panel?.h ?? 0) / 2, bubbles: true }));
+    expect(q('[data-ladder="tip"]').hidden).toBe(false);
+    expect(text('[data-ladder="tip"]')).toBe("Another day: PilotNet: 24% worse than always steering straight (±8%)");
   });
 
   it("shows the view picked before the data arrived, whichever way it was picked", () => {
@@ -388,11 +445,11 @@ describe("the ladder", () => {
     expect(all(".ladder-chart__bars .chart__value").map((el) => el.textContent)).toContain("13.6°");
   });
 
-  it("says why there is no ladder when the measurements cannot be had", () => {
+  it("says why there is no ladder where it is seen, in its lead, when the measurements cannot be had", () => {
     const { section } = mount(false);
     const error = new AssetError("gone", "unreachable", "data/results.json");
     section.fail(error);
-    expect(text('[data-ladder="caption-text"]')).toBe(measurementsFailure(error));
+    expect(text('[data-ladder="lead"]')).toBe(measurementsFailure(error));
     expect(q('[data-ladder="root"]').dataset["state"]).toBe("unavailable");
   });
 });
@@ -401,21 +458,28 @@ describe("the ladder", () => {
 
 describe("the cards", () => {
   const mount = (reduced = true) => new Cards(mountResults(), () => reduced, clock());
+  /** A drawing's labels as read: each label's name and figure. */
+  const labels = (card: string) => all(`[data-card="${card}-plot"] .card-chart__label`).map((el) => el.textContent ?? "");
 
-  it("write each card's words and chart from its own part of the data", () => {
+  it("write each card's words and drawing from its own part of the data", () => {
     layoutAs(340, true);
     const cards = mount();
     const ladder = readLadder(raw());
+    const frames = readFrames(raw());
     const regimes = readRegimes(raw());
     const legacy = readLegacy(raw());
-    cards.showFrames(ladder);
+    const sets = readYardsticks(raw());
+    cards.showBaselines(sets);
+    cards.showFrames(ladder, frames);
     cards.showRegimes(regimes);
     cards.showRecipe(legacy);
     cards.showTrust(readParity(raw()), readSplits(raw()));
-    const frames = twoFramesText(ladder);
-    expect([text('[data-card="frames-lead"]'), text('[data-card="frames-also"]')]).toEqual([frames?.lead, frames?.also]);
+    const text2 = twoFramesText(ladder, frames);
+    expect(text('[data-card="frames-title"]')).toBe("What a second frame buys");
+    expect([text('[data-card="frames-lead"]'), text('[data-card="frames-also"]')]).toEqual([text2?.lead, text2?.also]);
     expect(text('[data-card="regimes-straight"]')).toBe(regimesText(regimes).straight);
     expect(text('[data-card="recipe-cap"]')).toBe(legacyText(legacy).cap);
+    expect(text('[data-card="baselines-verdict"]')).toBe(yardsticksVerdict(sets));
     expect(text('[data-card="export"]')).toBe(exportText(readParity(raw())));
     expect(text('[data-card="protocol-blocked"]')).toBe(protocolTexts(readSplits(raw())).blocked);
     const regimesChart = q('[data-card="regimes-plot"] svg');
@@ -423,11 +487,69 @@ describe("the cards", () => {
     expect(regimesChart.getAttribute("aria-labelledby")).toBe("regimes-chart-title regimes-chart-desc");
     expect(text("#regimes-chart-desc")).toBe(regimesAlt(regimes));
     expect(text("#regimes-chart-title")).toBe("Mean error by how hard the driver was turning");
-    expect(text("#frames-chart-desc")).toMatch(/^How much better than always steering straight SightlineNet is with two frames and with one: Another day’s drive: two frames 31% better/);
+    expect(text("#frames-chart-desc")).toBe(framesAlt([
+      { title: "Another day’s drive", more: ladder.bars.sightlinenet[3]?.skill.mean ?? 0, fewer: ladder.bars["sightlinenet-1f"][3]?.skill.mean ?? 0 },
+      { title: "Held-back stretches of its own drive", more: ladder.bars.sightlinenet[1]?.skill.mean ?? 0, fewer: ladder.bars["sightlinenet-1f"][1]?.skill.mean ?? 0 },
+    ], frames).desc);
+    expect(text("#baselines-chart-desc")).toBe(yardsticksAlt(sets));
     expect(text("#recipe-chart-desc")).toMatch(/Its largest answer is 169\.8°; its output can never pass 180°, and the driver turned past that on 235 frames of the 2018 drive\.$/);
+    for (const name of ["baselines", "frames", "regimes", "recipe", "trust"]) expect(q(`[data-card="${name}"]`).dataset["state"]).toBe("ready");
+  });
+
+  it("label every mark where it stands, by name and figure, never by a key to match colours against", () => {
+    layoutAs(340, true);
+    const cards = mount();
+    cards.showFrames(readLadder(raw()), readFrames(raw()));
+    cards.showRegimes(readRegimes(raw()));
+    cards.showRecipe(readLegacy(raw()));
+    cards.showBaselines(readYardsticks(raw()));
+    expect(labels("frames")).toEqual(["one frame 2%", "two frames 31%", "one frame 35%", "two frames 41%"]);
+    expect(labels("regimes")).toEqual([
+      "Sightline 6.1°", "steering straight 2.8°",
+      "Sightline 5.5°", "steering straight 12.6°",
+      "Sightline 36.0°", "steering straight 78.4°",
+    ]);
+    expect(labels("recipe")).toEqual([
+      "largest answer169.8°", "limit 180°", "235 framesturned past it",
+      "PilotNet 4.5°", "steering straight 15.5°",
+      "PilotNet 22.0°", "steering straight 17.5°",
+      "PilotNet 19.4°", "steering straight 9.4°",
+    ]);
+    expect(labels("baselines")).toEqual([
+      "Sightline 10.1°", "hold the last label 0.6°", "linear extrapolation 0.7°", "steering straight 17.5°", "mean angle 17.8°",
+      "Sightline 9.8°", "hold the last label 0.5°", "linear extrapolation 0.5°", "steering straight 15.5°", "mean angle 15.5°",
+    ]);
     expect(all('[data-card="regimes-plot"] .card-chart__bar')).toHaveLength(6);
-    expect(all('[data-card="recipe-plot"] .chart__value').map((el) => el.textContent)).toContain("largest answer 169.8°");
-    for (const name of ["frames", "regimes", "recipe", "trust"]) expect(q(`[data-card="${name}"]`).dataset["state"]).toBe("ready");
+    expect(all('[data-card="regimes-plot"] .card-chart__road')).toHaveLength(3);
+    // Text wears the page's inks; the marks beside it carry the colours.
+    expect(all(".card-chart__label").every((el) => !/series--/.test(el.getAttribute("class") ?? ""))).toBe(true);
+  });
+
+  it("turn the standard recipe's wheel to its largest answer, never past its limit", () => {
+    layoutAs(540, true);
+    const cards = mount();
+    cards.showRecipe(readLegacy(raw()));
+    expect(q('[data-card="recipe-plot"] .card-chart__wheel').getAttribute("transform")).toMatch(/^rotate\(169\.84 /);
+    const wall = q('[data-card="recipe-plot"] .card-chart__wall');
+    // The limit, 180°, is straight down from the wheel's centre.
+    expect(wall.getAttribute("x1")).toBe(wall.getAttribute("x2"));
+  });
+
+  it("draw themselves in once they near the screen: the dumbbell's dot travels from fewer frames to more", () => {
+    layoutAs(340, false);
+    const frames = clock();
+    const cards = new Cards(mountResults(), () => false, frames);
+    cards.showFrames(readLadder(raw()), readFrames(raw()));
+    const dots = () => all('[data-card="frames-plot"] .card-chart__dot.series--sightlinenet').map((dot) => Number(dot.getAttribute("cx")));
+    const final = dots();
+    layoutAs(340, true);
+    intersect();
+    const fewer = all('[data-card="frames-plot"] .card-chart__dot.series--oneframe').map((dot) => Number(dot.getAttribute("cx")));
+    expect(dots()).toEqual(fewer);
+    frames.tick(400);
+    expect(dots().every((x, i) => x > (fewer[i] ?? 0) && x < (final[i] ?? 0))).toBe(true);
+    frames.tick(2000);
+    expect(dots()).toEqual(final);
   });
 
   it("repeat the live check as the band reads it", () => {
@@ -449,7 +571,7 @@ describe("the cards", () => {
       thrown = error;
       cards.fail("regimes", error);
     }
-    cards.showFrames(readLadder(raw()));
+    cards.showFrames(readLadder(raw()), readFrames(raw()));
     expect(thrown).toBeInstanceOf(AssetError);
     expect(text('[data-card="regimes-lead"]')).toBe(measurementsFailure(thrown));
     expect(q('[data-card="regimes"]').dataset["state"]).toBe("unavailable");

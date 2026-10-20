@@ -183,8 +183,9 @@
      is a deep teal and SightlineNet with one frame a wine red, both chosen with
      a colour-vision validator: every pair of the four, all at once, at least
      8.4 apart (OKLab x100) under simulated red-green colour blindness and 17
-     apart in full colour, and each 3:1 or more on the page's ground and on its
-     surface, in both themes. The grey is a de-emphasis, not a fourth hue. */
+     apart in full colour, and each 3:1 or more on the page's ground, on its
+     surface and on the ladder's spotlight, in both themes. The grey is a
+     de-emphasis, not a fourth hue. */
   --model-sightlinenet: #9333ea;
   --model-pilotnet: #0c7b60;
   --model-oneframe: #92123b;
@@ -227,7 +228,7 @@
     --show-sun: block;
     --model-sightlinenet: #a66ef4;
     --model-pilotnet: #05ab86;
-    --model-oneframe: #c62c58;
+    --model-oneframe: #cc345f;
     --model-straight: #736c8c;
     --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
   }
@@ -252,7 +253,7 @@
   --show-sun: block;
   --model-sightlinenet: #a66ef4;
   --model-pilotnet: #05ab86;
-  --model-oneframe: #c62c58;
+  --model-oneframe: #cc345f;
   --model-straight: #736c8c;
   --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
 }
@@ -2169,6 +2170,10 @@ html:not(.js) .windshield__status {
   color: var(--ink);
 }
 
+.trust__verdict:not(:empty) + .trust__progress:not([hidden])::before {
+  content: " ";
+}
+
 .trust__icon {
   flex: none;
   inline-size: 1.25rem;
@@ -2464,6 +2469,23 @@ html:not(.js) .windshield__status {
   font-weight: 600;
   fill: var(--ink-2);
   font-variant-numeric: tabular-nums;
+}
+
+/* A chart's words never sit on one of its rules: each wears a halo of what is
+   behind it -- the surface, or the ladder's spotlight in the panel it lights. */
+:is(.chart__value, .chart__tick, .slope .chart__note, .slope__ratio, .card-chart__label, .card-chart__note, .card-chart__tick, .card-chart__title) {
+  paint-order: stroke;
+  stroke: var(--halo, var(--surface));
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.ladder-chart {
+  --spot: color-mix(in oklab, var(--accent) 7%, var(--surface));
+}
+
+.ladder-chart .is-lit {
+  --halo: var(--spot);
 }
 
 /* What the pointer is on, in words: in the page's ink, inverted. */
@@ -2842,7 +2864,7 @@ html:not(.js) .windshield__status {
 }
 
 .ladder-chart__spotlight {
-  fill: color-mix(in oklab, var(--accent) 7%, var(--surface));
+  fill: var(--spot);
   stroke: color-mix(in oklab, var(--accent) 22%, transparent);
   transition: transform 0.34s var(--ease-out);
 }
@@ -2869,9 +2891,20 @@ html:not(.js) .windshield__status {
   stroke-linecap: round;
 }
 
-.ladder-chart__dot {
+/* Each training's error in the error view: a tick across its bar, on a halo
+   of the surface so it reads on the bar's colour and on the page alike. */
+.ladder-chart__seed-halo {
+  fill: none;
   stroke: var(--surface);
-  stroke-width: 1.5;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.ladder-chart__seed {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.75;
+  stroke-linecap: round;
 }
 
 .ladder-chart__missing {
@@ -2921,7 +2954,7 @@ html:not(.js) .windshield__status {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .card--recipe {
+  :is(.card--recipe, .card--baselines) {
     grid-column: 1 / -1;
   }
 }
@@ -2979,22 +3012,22 @@ html:not(.js) .windshield__status {
 /* The standard recipe, across the width: its words on the left, ending on
    its finding, and its charts on the right. */
 @media (min-width: 64rem) {
-  .card.card--recipe {
+  .card:is(.card--recipe, .card--baselines) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
     grid-template-rows: auto auto auto 1fr;
     column-gap: var(--space-8);
   }
 
-  .card--recipe > :is(.card__title, .card__lead, .card__note, .card__verdict) {
+  :is(.card--recipe, .card--baselines) > :is(.card__title, .card__lead, .card__note, .card__verdict) {
     grid-column: 1;
   }
 
-  .card--recipe > .card__verdict {
+  :is(.card--recipe, .card--baselines) > .card__verdict {
     align-self: end;
   }
 
-  .card--recipe > .card__figure {
+  :is(.card--recipe, .card--baselines) > .card__figure {
     grid-column: 2;
     grid-row: 1 / span 4;
     align-self: center;
@@ -3013,18 +3046,135 @@ html:not(.js) .windshield__status {
   stroke-width: 1;
 }
 
-.card-chart__track {
-  fill: var(--line);
+.card-chart__extra {
+  font-weight: 400;
+  fill: var(--ink-3);
+}
+
+/* A mark's label: its name, quiet, then its figure in the page's ink. */
+.card-chart__label {
+  font-size: 12.5px;
+  fill: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-chart__name {
+  fill: var(--ink-3);
+}
+
+.card-chart__figure {
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.card-chart__note,
+.card-chart__tick {
+  font-size: 12px;
+  fill: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.card-chart__bar {
+  transition: opacity 0.18s;
+}
+
+/* The dumbbell: the step from fewer frames to more in a 2 px line, and each
+   network's dot ringed in the surface. */
+.card-chart__link {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.card-chart__dot,
+.card-chart__mark {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+/* The regimes' roads, drawn as a road sign draws a bend: a band of road in
+   the page's quiet ink on a tile, with its centre line. A drawing, not a mark. */
+.card-chart__road-tile {
+  fill: color-mix(in oklab, var(--ink-3) 12%, var(--surface));
+}
+
+.card-chart__road-band,
+.card-chart__road-line {
+  fill: none;
+  stroke-linejoin: round;
+}
+
+.card-chart__road-band {
+  stroke: var(--ink-3);
+  stroke-width: 8;
+}
+
+.card-chart__road-line {
+  stroke: var(--surface);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+
+/* The standard recipe's reach: the gauge's track up to the limit, the part
+   its answers used in PilotNet's colour, the limit a wall in the page's ink,
+   and the rest of the turn, past the limit, a quiet line that still reads
+   3:1 on the surface. The wheel inside it is turned to its largest answer. */
+.card-chart__reach-track {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 9;
+}
+
+.card-chart__reach {
+  fill: none;
+  stroke-width: 9;
+}
+
+.series-stroke--pilotnet {
+  stroke: var(--model-pilotnet);
 }
 
 .card-chart__beyond {
-  fill: color-mix(in oklab, var(--model-straight) 30%, transparent);
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 2.5;
+  stroke-linecap: round;
 }
 
 .card-chart__wall {
   stroke: var(--ink);
   stroke-width: 2.5;
   stroke-linecap: round;
+}
+
+/* The wheel is a drawing, quieter than the gauge's marks around it; only its
+   marker, which shows the turn, wears PilotNet's colour. */
+.card-chart__wheel-rim,
+.card-chart__wheel-spoke {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.card-chart__wheel-hub {
+  fill: var(--line-strong);
+}
+
+.card-chart__wheel-marker {
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+/* The baselines' rulers: a hairline in degrees, its ticks, and the marks on it. */
+.card-chart__ruler,
+.card-chart__ruler-tick {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.card-chart__mark--answers {
+  fill: var(--ink-3);
 }
 
 /* Where the numbers come from: the checks, the splits, the files. */
@@ -3147,7 +3297,7 @@ html:not(.js) .windshield__status {
 /* A part that cannot be shown says why in its words, and drops its chart. */
 :is([data-paired="root"], [data-ladder="root"])[data-state="unavailable"] :is(.chart, .sketch, .study__meaning, .study__scale),
 .card[data-state="unavailable"] :is(.card__figure, .card__note, .card__verdict),
-.sources-card[data-state="unavailable"] :is([data-card="live"], .protocols) {
+.sources-card[data-state="unavailable"] :is([data-card="live"], .sources-card__part--splits) {
   display: none;
 }
 

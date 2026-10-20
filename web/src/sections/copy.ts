@@ -13,22 +13,28 @@
 import type { Agreement, CockpitState } from "../cockpit/live.ts";
 import { splitTitle } from "../cockpit/copy.ts";
 import { AssetError } from "../data/load.ts";
-import { lagText, type FrameTiming } from "../data/timing.ts";
+import { driveName, framesBack, medianGap, type FrameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
-import { countWord, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread } from "../format.ts";
-import type {
-  ExportCheck,
-  Figures,
-  Ladder,
-  LadderBar,
-  LadderModel,
-  Legacy,
-  PairedNetwork,
-  Regime,
-  Regimes,
-  Rung,
-  Splits,
+import { countWord, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread, ordinalWord } from "../format.ts";
+import {
+  LADDER_MODELS,
+  ORACLES,
+  REGIMES,
+  type ExportCheck,
+  type Figures,
+  type FrameCounts,
+  type Ladder,
+  type LadderBar,
+  type LadderModel,
+  type Legacy,
+  type PairedNetwork,
+  type Regime,
+  type Regimes,
+  type Rung,
+  type Splits,
+  type YardstickSet,
 } from "./figures.ts";
+import { framesInKey, networkName } from "./names.ts";
 
 export const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -181,6 +187,25 @@ const MODEL_NAMES = { sightline: "Sightline", shuffled: "the twin" } as const;
 /** How the check looks: still running, passed, failed, or not possible. */
 export type ParityLook = "checking" | "checked" | "mismatch" | "note";
 
+/** The live check as the page shows it. `verdict` is what a screen reader is
+ * told: nothing while the check simply runs, words that hold for as long as
+ * the look does while it is under way, and the full finding once it is
+ * `done` -- so it changes only with the look, or on completion. `progress`
+ * is the line beside it that counts the frames run so far; `text` is both,
+ * as read on screen. */
+export interface ParityState {
+  readonly look: ParityLook;
+  readonly verdict: string;
+  readonly progress: string;
+  /** Nothing more the check reads can change it. */
+  readonly done: boolean;
+  readonly text: string;
+}
+
+function parity(look: ParityLook, verdict: string, progress: string, done: boolean): ParityState {
+  return { look, verdict, progress, done, text: [verdict, progress].filter((part) => part !== "").join(" ") };
+}
+
 /**
  * The trust chip: the model's angles in this browser on the loaded clip
  * against the clip's published ones, computed in Python by the same runtime on
@@ -189,101 +214,105 @@ export type ParityLook = "checking" | "checked" | "mismatch" | "note";
  * the clip's `tolerance`; one frame beyond it fails the check. `state` is the
  * cockpit's, or "absent" when the demo's code never started.
  */
-export function parityState(agreement: Agreement | null, state: CockpitState | "absent"): { look: ParityLook; text: string } {
+export function parityState(agreement: Agreement | null, state: CockpitState | "absent"): ParityState {
   if (state === "absent") {
-    return { look: "note", text: "The live check needs the demo, which could not start in this browser." };
+    return parity("note", "The live check needs the demo, which could not start in this browser.", "", true);
   }
   if (state === "unavailable") {
-    return { look: "note", text: "The live check needs the demo, and the demo is not running." };
+    return parity("note", "The live check needs the demo, and the demo is not running.", "", true);
   }
   if (agreement === null) {
-    return { look: "checking", text: `Checking this browser against ${PYTHON}…` };
+    return parity("checking", "", `Checking this browser against ${PYTHON}…`, false);
   }
   const { check, compared, total, maxDiffDeg, clip } = agreement;
   const model = MODEL_NAMES[agreement.model];
   if (compared === 0) {
-    return { look: "checking", text: `Checking ${model} in this browser against ${PYTHON}…` };
+    return parity("checking", "", `Checking ${model} in this browser against ${PYTHON}…`, false);
   }
   const name = clipName(clip);
   const angles = `${capitalised(model)}’s angles`;
+  const done = compared >= total;
+  // While frames are still running, the largest difference is only the
+  // largest so far, so the line beside the verdict says which frames it covers.
+  const soFar = `on the ${fmtCount(compared)} frames run so far`;
   if (check === "unverified") {
-    return {
-      look: "note",
-      text: "This browser could not check that it decoded the clip’s frames as Python did, so its angles are not compared.",
-    };
+    return parity("note", "This browser could not check that it decoded the clip’s frames as Python did, so its angles are not compared.", "", true);
   }
   if (!Number.isFinite(maxDiffDeg)) {
-    return { look: "mismatch", text: `${angles} in this browser do not match ${PYTHON} on ${name}.` };
+    return parity("mismatch", `${angles} in this browser do not match ${PYTHON} on ${name}.`, "", true);
   }
+  const by = upperBound(maxDiffDeg);
   if (check === "differ") {
-    return {
-      look: "note",
-      text:
-        `This browser decodes ${name} differently from Python, so ${model}’s angles here differ from ${PYTHON} ` +
-        `by up to ${upperBound(maxDiffDeg)} on the ${fmtCount(compared)} frames it has run.`,
-    };
+    const decodes = `This browser decodes ${name} differently from Python, so ${model}’s angles here differ from ${PYTHON}`;
+    return done
+      ? parity("note", `${decodes} by up to ${by} on all ${fmtCount(total)} frames.`, "", true)
+      : parity("note", `${decodes}.`, `They differ by up to ${by} ${soFar}.`, false);
   }
   const tolerance = clip.tolerance?.angle_deg;
   if (tolerance === undefined) {
-    return {
-      look: "note",
-      text:
-        `${angles} in this browser differ from ${PYTHON} by at most ${upperBound(maxDiffDeg)} on the ` +
-        `${fmtCount(compared)} frames it has run; the clip records no tolerance to judge that by.`,
-    };
+    return done
+      ? parity(
+          "note",
+          `${angles} in this browser differ from ${PYTHON} by at most ${by} on all ${fmtCount(total)} frames of ${name}; ` +
+            "the clip records no tolerance to judge that by.",
+          "",
+          true,
+        )
+      : parity(
+          "note",
+          `The clip records no tolerance to judge ${model}’s angles in this browser by, so they are not called a match.`,
+          `They differ from ${PYTHON} by at most ${by} ${soFar}.`,
+          false,
+        );
   }
+  const allowed = `more than the ${upperBound(tolerance)} allowed`;
   if (maxDiffDeg > tolerance) {
-    // While frames are still running, the largest difference is only the
-    // largest so far, so the sentence says which frames it covers.
-    const where = compared < total ? `on the ${fmtCount(compared)} frames of ${name} run so far, they` : `on ${name} they`;
-    return {
-      look: "mismatch",
-      text:
-        `${angles} in this browser do not match ${PYTHON}: ${where} differ by up to ` +
-        `${upperBound(maxDiffDeg)}, more than the ${upperBound(tolerance)} allowed.`,
-    };
+    return done
+      ? parity("mismatch", `${angles} in this browser do not match ${PYTHON}: on ${name} they differ by up to ${by}, ${allowed}.`, "", true)
+      : parity(
+          "mismatch",
+          `${angles} in this browser do not match ${PYTHON}.`,
+          `On the ${fmtCount(compared)} frames of ${name} run so far, they differ by up to ${by}, ${allowed}.`,
+          false,
+        );
   }
   const within = maxDiffDeg === 0 ? null : upperBound(maxDiffDeg);
-  if (compared < total) {
+  if (!done) {
     const each = within === null ? `identical to ${PYTHON}` : `within ${within} of ${PYTHON}`;
-    return {
-      look: "checking",
-      text: `Checking ${model} live: ${fmtCount(compared)} of ${fmtCount(total)} frames of ${name} so far, every one ${each}.`,
-    };
+    return parity("checking", "", `Checking ${model} live: ${fmtCount(compared)} of ${fmtCount(total)} frames of ${name} so far, every one ${each}.`, false);
   }
-  return {
-    look: "checked",
-    text:
-      `Checked live: on all ${fmtCount(total)} frames of ${name}, ${model}’s angles in this browser match ` +
+  return parity(
+    "checked",
+    `Checked live: on all ${fmtCount(total)} frames of ${name}, ${model}’s angles in this browser match ` +
       `${PYTHON} ${within === null ? "exactly" : `to within ${within}`}.`,
-  };
+    "",
+    true,
+  );
 }
 
 // -- How it works ------------------------------------------------------------------------
 
-/** "the 2018 drive" for "drive2018". */
-function driveName(drive: string): string {
-  const year = /(\d{4})$/.exec(drive)?.[1];
-  return year ? `the ${year} drive` : "the other drive";
-}
-
+/** The first step's title: how many frames the model is shown, and, on a
+ * drive whose frames carry timestamps, the drive's median time between the
+ * oldest of them and the frame on screen -- said as the drive's, since the
+ * clip's own frames have their own spread. Elsewhere it counts frames. */
 export function framesTitle(clip: Clip, timing: FrameTiming): string {
   const lags = clip.frame_lags;
   if (lags.length === 0) return "One frame at a time";
-  if (timing.interval === null) {
-    // Without timestamps the spacing is a number of frames, not a time.
-    return lags.length === 1
-      ? `This frame and the one ${lagText(lags[0] as number, timing)} before it`
-      : `This frame and the ${countWord(lags.length)} before it`;
+  const oldest = Math.max(...lags);
+  const gap = medianGap(oldest, timing.gaps);
+  if (gap === null) {
+    return lags.length === 1 ? `This frame and the one ${framesBack(oldest)} before it` : `This frame and the ${countWord(lags.length)} before it`;
   }
   const count = capitalised(countWord(lags.length + 1));
-  if (lags.length === 1) return `${count} frames, ${lagText(lags[0] as number, timing)} apart`;
-  return `${count} frames, up to ${lagText(Math.max(...lags), timing)} apart`;
+  const drive = driveName(timing.drive);
+  return lags.length === 1 ? `${count} frames, ${gap} apart on ${drive}` : `${count} frames, the oldest ${gap} earlier on ${drive}`;
 }
 
-/** The labels of the frames shown in the first step, the frame on screen first. */
-export function framesAges(clip: Clip, timing: FrameTiming): string[] {
-  return ["now", ...clip.frame_lags.map((lag) => `${lagText(lag, timing)} before`)];
+/** The labels of the frames shown in the first step, the frame on screen
+ * first: how many frames back each is, which is true of every frame of the clip. */
+export function framesAges(clip: Clip, _timing?: FrameTiming): string[] {
+  return ["now", ...clip.frame_lags.map((lag) => `${framesBack(lag)} before`)];
 }
 
 export function framesText(clip: Clip, timing: FrameTiming): string {
@@ -292,18 +321,16 @@ export function framesText(clip: Clip, timing: FrameTiming): string {
   if (lags.length === 0) {
     return `The frame on screen, cropped to the road and shrunk to ${size}.`;
   }
-  const history =
-    lags.length === 1
-      ? `the one ${lagText(lags[0] as number, timing)} before it`
-      : `the ones ${lags.map((lag) => lagText(lag, timing)).join(" and ")} before it`;
+  const history = lags.length === 1 ? `the one ${framesBack(lags[0] as number)} before it` : `the ones ${lags.map(framesBack).join(" and ")} before it`;
+  const oldest = Math.max(...lags);
+  const quoted = timing.gaps === null && timing.reference !== null ? medianGap(oldest, timing.reference.gaps) : null;
   const spacing =
-    timing.interval !== null
+    timing.gaps !== null
       ? ""
-      : timing.reference === null
+      : quoted === null || timing.reference === null
         ? " This drive’s frames carry no timestamps, so their spacing is counted in frames."
         : ` This drive’s frames carry no timestamps; on ${driveName(timing.reference.drive)}, whose frames do, ` +
-          `${lagText(Math.max(...lags), { interval: null, reference: null })} are ` +
-          `${lagText(Math.max(...lags), { interval: timing.reference.interval, reference: null })} apart.`;
+          `a frame and the one ${countWord(oldest)} before it were taken ${quoted} apart.`;
   return (
     `The frame on screen and ${history}, cropped to the road and shrunk to ${size}.${spacing} ` +
     `${capitalised(countWord(lags.length + 1))} frames show which way the view is moving, which one frame cannot.`
@@ -316,21 +343,16 @@ export function speedText(msPerFrame: number | null): string {
 
 // -- Names ----------------------------------------------------------------------------
 
-/** Each network as a legend names it, and as a sentence does. */
-export const NETWORK_NAMES: Readonly<Record<LadderModel, { readonly name: string; readonly said: string }>> = {
-  sightlinenet: { name: "SightlineNet", said: "SightlineNet" },
-  pilotnet: { name: "PilotNet", said: "PilotNet" },
-  "sightlinenet-1f": { name: "SightlineNet, one frame", said: "SightlineNet with one frame" },
-};
+/** Each network as a legend names it, and as a sentence does, from its key. */
+export const NETWORK_NAMES = Object.fromEntries(LADDER_MODELS.map((model) => [model, networkName(model)])) as unknown as Readonly<
+  Record<LadderModel, { readonly name: string; readonly said: string }>
+>;
 
 /** What the page calls always steering straight. */
 export const STRAIGHT = "Always steering straight";
 
 /** "the 2018 drive" for "drive2018". */
-export function driveTitle(drive: string): string {
-  const year = /(\d{4})$/.exec(drive)?.[1];
-  return year ? `the ${year} drive` : `the drive ${drive}`;
-}
+export const driveTitle = driveName;
 
 /** An angle the data states exactly (a cutoff, a limit), with only the
  * decimals it has: 5 is "5°", 2.5 is "2.5°". */
@@ -384,7 +406,7 @@ export function pairedFrames(network: PairedNetwork): string {
   const list = counts.length < 2 ? counts.join("") : `${counts.slice(0, -1).join(", ")} and ${counts.at(-1) as string}`;
   return (
     `Each line is one training seed: the network trained on that seed’s shuffled split and on its blocked split, ` +
-    `both scored on the frames the two splits both held out (${list} frames).`
+    `both scored on the frames both splits held out (${list} frames).`
   );
 }
 
@@ -429,11 +451,17 @@ export function rungCaption(rung: Rung, splits: Splits): string {
 }
 
 /** The rung's second line: steering straight on its frames, and any network
- * that was not trained this way. */
+ * that was not trained this way. On the shuffled rung each training was
+ * tested on its own draw of frames, so steering straight there is a mean over
+ * those draws, and is said so. */
 export function rungNote(ladder: Ladder, index: number): string {
   const rung = ladder.rungs[index] as Rung;
   const missing = (Object.keys(ladder.bars) as LadderModel[]).filter((model) => ladder.bars[model][index] === null);
-  const parts = [`${STRAIGHT} is off by ${fmtDeg(rung.straight)} on these frames.`];
+  const parts = [
+    rung.kind === "shuffled"
+      ? `Each training is tested on its own draw of shuffled frames; always steering straight is off by ${fmtDeg(rung.straight)} on them, on average.`
+      : `${STRAIGHT} is off by ${fmtDeg(rung.straight)} on these frames.`,
+  ];
   for (const model of missing) parts.push(`${NETWORK_NAMES[model].said} was not trained this way.`);
   return parts.join(" ");
 }
@@ -448,6 +476,37 @@ export function barWords(model: LadderModel, bar: LadderBar | null, view: Ladder
   return `${name}: ${fmtDeg(bar.error.mean)} (each training: ${bar.error.values.map((v) => fmtDeg(v)).join(", ")})`;
 }
 
+/** How many trainings every bar of the ladder is the mean of, in words; null
+ * when the bars are not all the mean of as many. */
+export function trainingsWord(ladder: Ladder): string | null {
+  const counts = new Set(Object.values(ladder.bars).flatMap((bars) => bars.flatMap((bar) => (bar ? [bar.seeds.length] : []))));
+  const [only] = counts;
+  return counts.size === 1 && only !== undefined ? countWord(only) : null;
+}
+
+/** "Mean of three trainings", or, when the bars differ, what each is. */
+function meanOf(ladder: Ladder | null): string {
+  const trainings = ladder ? trainingsWord(ladder) : null;
+  return trainings === null ? "Each bar is a mean over the network’s trainings" : `Mean of ${trainings} trainings`;
+}
+
+/** The chart's caption in the view on screen. */
+export function ladderCaption(ladder: Ladder | null, view: LadderView): string {
+  return view === "skill"
+    ? `${meanOf(ladder)}; each whisker spans one standard deviation over them.`
+    : `${meanOf(ladder)}; each tick is one training. Each rung’s grey line is always steering straight on its frames.`;
+}
+
+/** What a bar's height says, in the view on screen: in the skill view bars
+ * stand on steering straight's line, in the error view each rung's line is
+ * steering straight's own error. */
+export function ladderLead(view: LadderView): string {
+  const rungs = "Each rung tests on frames further from anything the network trained on.";
+  return view === "skill"
+    ? `${rungs} A bar above the line beats always steering straight on the same frames; a bar below it does worse.`
+    : `${rungs} A bar that stops short of its rung’s grey line beats always steering straight on the same frames; a bar that passes it does worse.`;
+}
+
 /** The ladder's text alternative in the view on screen. */
 export function ladderAlt(ladder: Ladder, view: LadderView): { title: string; desc: string } {
   const models = Object.keys(ladder.bars) as LadderModel[];
@@ -459,11 +518,11 @@ export function ladderAlt(ladder: Ladder, view: LadderView): { title: string; de
   return view === "skill"
     ? {
         title: "How much better than always steering straight each network is, on each rung",
-        desc: `Mean of three trainings, with the spread over them. ${rungs.join(" ")}`,
+        desc: `${meanOf(ladder)}, with the spread over them. ${rungs.join(" ")}`,
       }
     : {
         title: "Each network’s mean error in degrees on each rung, beside always steering straight",
-        desc: `Mean of three trainings, with each training’s error. ${rungs.join(" ")}`,
+        desc: `${meanOf(ladder)}, with each training’s error. ${rungs.join(" ")}`,
       };
 }
 
@@ -472,9 +531,28 @@ export function ladderAlt(ladder: Ladder, view: LadderView): { title: string; de
 /** The level band: a skill this close to zero is "about level". */
 const LEVEL = 0.05;
 
-/** What the second frame buys: SightlineNet with one frame and with two, on
- * another day and on held-back stretches of its own drive. */
-export function twoFramesText(ladder: Ladder): { lead: string; also: string } | null {
+/** What each SightlineNet sees, in words: "two frames" and "one frame".
+ * Without the shipped network's count, the first is "an earlier frame too". */
+export function frameWords(frames: FrameCounts | null): { readonly more: string; readonly fewer: string } {
+  const fewer = frames?.["sightlinenet-1f"] ?? framesInKey("sightlinenet-1f") ?? 1;
+  return {
+    more: frames ? `${countWord(frames.sightlinenet)} frames` : "an earlier frame too",
+    fewer: `${countWord(fewer)} frame${fewer === 1 ? "" : "s"}`,
+  };
+}
+
+/** The frames card's title, from the counts: "What a second frame buys". */
+export function framesTitleOf(frames: FrameCounts | null): string {
+  if (!frames) return "What an earlier frame buys";
+  const extra = frames.sightlinenet - frames["sightlinenet-1f"];
+  if (extra === 1) return `What a ${ordinalWord(frames.sightlinenet)} frame buys`;
+  return extra > 1 ? `What ${countWord(extra)} more frames buy` : "What the frames buy";
+}
+
+/** What the extra frames buy: SightlineNet with fewer frames and with more,
+ * on another day and on held-back stretches of its own drive. A skill near
+ * zero either way is "about level"; one clearly below zero is worse. */
+export function twoFramesText(ladder: Ladder, frames: FrameCounts | null): { lead: string; also: string } | null {
   const day = ladder.rungs.findIndex((rung) => rung.kind === "another-day");
   const held = ladder.rungs.findIndex((rung) => rung.kind === "blocked");
   const two = (i: number) => (i < 0 ? null : ladder.bars.sightlinenet[i] ?? null);
@@ -482,17 +560,32 @@ export function twoFramesText(ladder: Ladder): { lead: string; also: string } | 
   const twoDay = two(day);
   const oneDay = one(day);
   if (!twoDay || !oneDay) return null;
+  const words = frameWords(frames);
   const single = Math.abs(oneDay.skill.mean) < LEVEL
     ? `about level with always steering straight (${skillWords(oneDay.skill.mean, "it")})`
     : skillWords(oneDay.skill.mean);
-  const lead = `On another day’s drive, SightlineNet with one frame is ${single}. With two frames it is ${skillWords(twoDay.skill.mean)}.`;
+  const lead = `On another day’s drive, ${NETWORK_NAMES["sightlinenet-1f"].said} is ${single}. With ${words.more} it is ${skillWords(twoDay.skill.mean)}.`;
   const twoHeld = two(held);
   const oneHeld = one(held);
   const also =
     twoHeld && oneHeld
-      ? `On held-back stretches of its own drive: ${skillWords(twoHeld.skill.mean, "steering straight")} with two frames, ${skillWords(oneHeld.skill.mean, "it")} with one.`
+      ? `On held-back stretches of its own drive: ${skillWords(twoHeld.skill.mean, "steering straight")} with ${words.more}, ${skillWords(oneHeld.skill.mean, "it")} with ${words.fewer}.`
       : "";
   return { lead, also };
+}
+
+/** The frames card's chart in words: its title and every number it draws. */
+export function framesAlt(
+  rows: ReadonlyArray<{ readonly title: string; readonly more: number; readonly fewer: number }>,
+  frames: FrameCounts | null,
+): { title: string; desc: string } {
+  const { more, fewer } = frameWords(frames);
+  return {
+    title: `SightlineNet with ${more} and with ${fewer}, against always steering straight`,
+    desc:
+      `How much better than always steering straight SightlineNet is with ${more} and with ${fewer}: ` +
+      `${rows.map((row) => `${row.title}: ${more} ${skillWords(row.more)}, ${fewer} ${skillWords(row.fewer)}`).join("; ")}.`,
+  };
 }
 
 /** The regimes' names, with their edges from the data. */
@@ -505,13 +598,18 @@ export function regimeNames(edges: readonly [number, number]): Record<Regime, st
   };
 }
 
-/** Where the shipped model struggles, and where steering straight beats it. */
+/** Each regime as a place on the road, for a sentence. */
+const REGIME_PLACES: Readonly<Record<Regime, string>> = { straight: "straight road", gentle: "gentle curves", sharp: "sharp curves" };
+
+/** Where the shipped model struggles -- the regime where its error is
+ * largest -- and where steering straight beats it. */
 export function regimesText(regimes: Regimes): { lead: string; straight: string } {
   const model = regimes.models.sightlinenet.errors;
   const zero = regimes.straight;
+  const worst = REGIMES.reduce((a, b) => (model[b] > model[a] ? b : a));
   const lead =
     `Sightline’s ${fmtCount(regimes.total)} test frames, sorted by how hard the driver was turning. ` +
-    `It is furthest off on sharp curves: ${fmtDeg(model.sharp)}, where always steering straight is off by ${fmtDeg(zero.sharp)}.`;
+    `It is furthest off on ${REGIME_PLACES[worst]}: ${fmtDeg(model[worst])}, where always steering straight is off by ${fmtDeg(zero[worst])}.`;
   const straight =
     zero.straight < model.straight
       ? `On straight road, always steering straight wins: it is off by ${fmtDeg(zero.straight)}, Sightline by ${fmtDeg(model.straight)}.`
@@ -536,11 +634,27 @@ function againstStraight(score: { model: number; straight: number }): string {
   return `${score.model < score.straight ? "better" : "worse"} than always steering straight (${fmtDeg(score.straight)})`;
 }
 
+/** The shares of a turn the page puts in words. */
+const TURNS: ReadonlyArray<readonly [share: number, words: string]> = [
+  [1 / 4, "a quarter turn"],
+  [1 / 2, "half a turn"],
+  [3 / 4, "three quarters of a turn"],
+  [1, "a full turn"],
+];
+
+/** An angle of the wheel as a turn ("half a turn of the wheel" for 180°),
+ * when it is a plain share of one; otherwise nothing. */
+export function turnWords(angle: number): string {
+  const found = TURNS.find(([share]) => Math.abs(share * 360 - angle) < 1e-9);
+  return found ? `${found[1]} of the wheel` : "";
+}
+
 /** The standard-recipe PilotNet's card. */
 export function legacyText(legacy: Legacy): { lead: string; other: string; cap: string } {
   const other = driveTitle(legacy.blocked.drive);
   const { blocked, later } = legacy;
   const worse = blocked.model > blocked.straight && later.model > later.straight;
+  const turn = turnWords(legacy.cap);
   return {
     lead: `On its own training drive, ${driveTitle(legacy.own.drive)}, it is off by ${fmtDeg(legacy.own.model)}: ${againstStraight(legacy.own)}.`,
     other: worse
@@ -550,7 +664,7 @@ export function legacyText(legacy: Legacy): { lead: string; other: string; cap: 
         `${againstStraight(blocked)}, and by ${fmtDeg(later.model)} on the drive’s last part, ${againstStraight(later)}.`,
     cap:
       legacy.largest < legacy.cap
-        ? `Its arctangent output can never pass ${exactDeg(legacy.cap)}, half a turn of the wheel: its largest answer is ${fmtDeg(legacy.largest)}, ` +
+        ? `Its arctangent output can never pass ${exactDeg(legacy.cap)}${turn ? `, ${turn}` : ""}: its largest answer is ${fmtDeg(legacy.largest)}, ` +
           `yet the driver turned past ${exactDeg(legacy.cap)} on ${fmtCount(legacy.beyond)} frames of ${other}.`
         : `Its largest answer is ${fmtDeg(legacy.largest)}; the driver turned past ${exactDeg(legacy.cap)} on ${fmtCount(legacy.beyond)} frames of ${other}.`,
   };
@@ -571,6 +685,62 @@ export function legacyAlt(legacy: Legacy): string {
   return `Mean error of the standard-recipe PilotNet against always steering straight: ${rows
     .map(([name, score]) => `on ${name}, ${fmtDeg(score.model)} against ${fmtDeg(score.straight)}`)
     .join("; ")}.`;
+}
+
+// -- The baselines ----------------------------------------------------------------------------
+
+/** Each rule as its mark on a ruler names it. */
+export const YARDSTICK_LABELS = {
+  zero: "steering straight",
+  mean: "mean angle",
+  zoh: "hold the last label",
+  extrap: "linear extrapolation",
+} as const;
+
+/** Each rule as a sentence names it. */
+const YARDSTICK_SAID = {
+  zero: "always steering straight",
+  mean: "always steering the training frames’ mean angle",
+  zoh: "holding the last label",
+  extrap: "linear extrapolation",
+} as const;
+
+/** A set of frames by name: "Held-back stretches of the 2018 drive". */
+export function yardstickSetName(set: YardstickSet): string {
+  return set.kind === "held-back" ? `Held-back stretches of ${driveTitle(set.drive)}` : `Another day: ${driveTitle(set.drive)}`;
+}
+
+/** A set of frames, as its ruler is titled: its name and its count. */
+export function yardstickSetTitle(set: YardstickSet): string {
+  return `${yardstickSetName(set)}, ${fmtCount(set.frames)} frames`;
+}
+
+/** The rulers' text alternative: every number they draw. */
+export function yardsticksAlt(sets: readonly YardstickSet[]): string {
+  return sets
+    .map((set) => {
+      const where =
+        set.kind === "held-back"
+          ? `Mean error on the held-back stretches of ${driveTitle(set.drive)} (${fmtCount(set.frames)} frames)`
+          : `On another day’s drive, ${driveTitle(set.drive)} (${fmtCount(set.frames)} frames)`;
+      const e = set.errors;
+      return (
+        `${where}: ${YARDSTICK_SAID.zero} ${fmtDeg(e.zero)}, ${YARDSTICK_SAID.mean} ${fmtDeg(e.mean)}, ` +
+        `and, reading the answer stream the model never sees, ${YARDSTICK_SAID.zoh} ${fmtDeg(e.zoh)} and ${YARDSTICK_SAID.extrap} ${fmtDeg(e.extrap)}; ` +
+        `Sightline ${fmtDeg(set.model)}.`
+      );
+    })
+    .join(" ");
+}
+
+/** What the rules that read the answers show: a bound on their error,
+ * rounded up, never to nearest. */
+export function yardsticksVerdict(sets: readonly YardstickSet[]): string {
+  const largest = Math.max(...sets.flatMap((set) => ORACLES.map((name) => set.errors[name])));
+  return (
+    `The rules that read the answers are off by at most ${upperBound(largest)}: the true angle barely changes from one frame to the next. ` +
+    "They are yardsticks here, not rivals."
+  );
 }
 
 /** The export check, in one sentence. */

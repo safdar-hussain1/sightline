@@ -19,12 +19,105 @@ export function resultsFixture(): Record<string, unknown> {
       run: "drive2018_sightlinenet_blocked_s2",
       test: {
         n: 6000,
-        model: { mae_deg: 10.12272448789344, n: 6000 },
+        model: {
+          mae_deg: 10.12272448789344,
+          n: 6000
+        },
         baselines: {
-          zero: { mae_deg: 17.479270016382138, n: 6000 }
+          extrap: {
+            mae_deg: 0.6901967614466945,
+            n: 6000
+          },
+          mean: {
+            mae_deg: 17.84318643687274,
+            n: 6000
+          },
+          zero: {
+            mae_deg: 17.479270016382138,
+            n: 6000
+          },
+          zoh: {
+            mae_deg: 0.5927266640439629,
+            n: 6000
+          }
         }
       },
-      cross_drive: { drive: "drive2017", n: 45404 }
+      cross_drive: {
+        drive: "drive2017",
+        n: 45404,
+        model: {
+          mae_deg: 9.771067024628094,
+          n: 45404
+        },
+        baselines: {
+          extrap: {
+            mae_deg: 0.48579622978518006,
+            n: 45404
+          },
+          mean: {
+            mae_deg: 15.473928367779282,
+            n: 45404
+          },
+          zero: {
+            mae_deg: 15.52269723393061,
+            n: 45404
+          },
+          zoh: {
+            mae_deg: 0.5068826531183521,
+            n: 45404
+          }
+        }
+      }
+    },
+    timing: {
+      drive2017: null,
+      drive2018: {
+        closest_eval_s: {
+          blocked: {
+            test: {
+              eval_frame: 61249,
+              gap_s: 24.613,
+              train_frame: 61750
+            },
+            val: {
+              eval_frame: 35749,
+              gap_s: 24.286,
+              train_frame: 36250
+            }
+          },
+          forward: {
+            test: {
+              eval_frame: 54501,
+              gap_s: 535.169,
+              train_frame: 44426
+            },
+            val: {
+              eval_frame: 44927,
+              gap_s: 26.441,
+              train_frame: 44426
+            }
+          }
+        },
+        frame_interval_s: {
+          max: 0.338,
+          mean: 0.053,
+          median: 0.057,
+          min: 0.025,
+          p05: 0.029,
+          p95: 0.091
+        },
+        lag_gap_s: [
+          {
+            lag: 2,
+            max: 0.557,
+            mean: 0.105,
+            median: 0.1,
+            min: 0.053,
+            p05: 0.066,
+            p95: 0.157
+          }
+        ]
+      }
     },
     cutoffs: {
       regime_bins_deg: [5.0, 30.0],
@@ -409,6 +502,7 @@ export function resultsFixture(): Record<string, unknown> {
     legacy: {
       recipe: "PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, atan output head limited to ±180°",
       trained_on: "drive2017",
+      splits: { block: 1500, firewall: 250 },
       seen_first_frame: 2,
       atan_cap: {
         labels_beyond_180: {
@@ -523,5 +617,27 @@ export function patch(json: Record<string, unknown>, path: string, value: unknow
   const last = keys[keys.length - 1] as string;
   if (value === undefined) delete at[last];
   else at[last] = value;
+  return json;
+}
+
+/** Give `model` the skill `skill` on the rung made of `protocol`'s `split`
+ * frames, consistently: each training's error is scaled so their mean is
+ * steering straight's times (1 - skill), and the group's error and skill, and
+ * the ladder's, are written from those same errors. Returns `json`. */
+export function setSkill(json: Record<string, unknown>, model: string, protocol: string, split: "test" | "cross_drive", skill: number): Record<string, unknown> {
+  const group = (json["groups"] as Record<string, Record<string, unknown>>)[`${model}/${protocol}`] as Record<string, unknown>;
+  const prefix = split === "test" ? "test" : "cross";
+  const zero = group[`${prefix}_zero_mae_deg`] as number;
+  const rung = ((json["ladder"] as Record<string, Array<Record<string, unknown>>>)[model] ?? []).find(
+    (entry) => entry["protocol"] === protocol && entry["split"] === split,
+  ) as Record<string, unknown>;
+  const error = rung["mae_deg"] as { mean: number; sd: number; values: number[] };
+  const factor = (zero * (1 - skill)) / error.mean;
+  const values = error.values.map((v) => v * factor);
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const sd = Math.sqrt(values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (values.length - 1));
+  rung["mae_deg"] = { mean, sd, values };
+  group[`${prefix}_mae_deg`] = { mean, sd };
+  group[`${prefix}_skill`] = { mean: 1 - mean / zero, sd: sd / zero };
   return json;
 }

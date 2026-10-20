@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import shipped from "../../public/data/results.json?raw";
 import { AssetError } from "../data/load.ts";
-import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits } from "./figures.ts";
+import { readFigures, readFrames, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, readYardsticks } from "./figures.ts";
 import { patch, resultsFixture } from "./fixture.ts";
 
 /** The AssetError a reader throws on `json`, or undefined. */
@@ -88,7 +88,7 @@ describe("readFigures", () => {
 describe("the readers of the Results view's sections", () => {
   it("all accept the results.json this site ships", () => {
     const raw = JSON.parse(shipped) as Record<string, unknown>;
-    for (const read of [readFigures, readPaired, readLadder, readRegimes, readLegacy, readParity, readSplits]) {
+    for (const read of [readFigures, readPaired, readLadder, readRegimes, readLegacy, readParity, readSplits, readYardsticks]) {
       expect(() => read(raw), read.name).not.toThrow();
     }
   });
@@ -112,7 +112,8 @@ describe("readPaired", () => {
   });
 
   it("refuses a statistic over seeds that is not made of the seeds beside it", () => {
-    const json = patch(resultsFixture(), "paired_leakage.pilotnet.blocked_mae_deg.values", [13.4, 11.9, 13.9]);
+    // Two seeds swapped: the mean and the spread still hold, the seeds do not.
+    const json = patch(resultsFixture(), "paired_leakage.pilotnet.blocked_mae_deg.values", [11.91747827882825, 13.385377171316913, 13.931436404707808]);
     expect(refusal(readPaired, json)?.message).toMatch(/blocked_mae_deg\.values\.0 must be 13\.38/);
   });
 
@@ -258,5 +259,107 @@ describe("readSplits", () => {
     expect(refusal(readSplits, patch(resultsFixture(), "leakage.gaps.blocked.test.min_frames", 500))?.message).toMatch(/min_frames must be 501, two firewalls and a frame/);
     expect(refusal(readSplits, patch(resultsFixture(), "split_rules.blocked.firewall", 300))?.message).toMatch(/must be 601|must be a whole number of boundaries|must be 300/);
     expect(refusal(readSplits, patch(resultsFixture(), "split_sizes.leaky.label", "random"))?.message).toMatch(/split_sizes\.leaky\.label must be shuffled/);
+  });
+});
+
+describe("the readers' cross-checks of statistics over seeds", () => {
+  it("refuse a paired ratio whose mean or spread is not made of its seeds' values", () => {
+    expect(refusal(readFigures, patch(resultsFixture(), "paired_leakage.sightlinenet.ratio.mean", 5))?.message).toMatch(
+      /paired_leakage\.sightlinenet\.ratio\.mean must be the mean of its values/,
+    );
+    expect(refusal(readPaired, patch(resultsFixture(), "paired_leakage.sightlinenet.ratio.mean", 5))?.message).toMatch(/ratio\.mean must be the mean of its values/);
+    expect(refusal(readPaired, patch(resultsFixture(), "paired_leakage.pilotnet.shuffled_mae_deg.mean", 1))?.message).toMatch(
+      /shuffled_mae_deg\.mean must be the mean of its values/,
+    );
+    expect(refusal(readFigures, patch(resultsFixture(), "paired_leakage.pilotnet.blocked_mae_deg.sd", 0.5))?.message).toMatch(
+      /blocked_mae_deg\.sd must be the sample standard deviation of its values/,
+    );
+  });
+
+  it("refuse another day's skill that is not one minus the error over steering straight's", () => {
+    const json = patch(resultsFixture(), "groups.sightlinenet/blocked.cross_skill", { mean: 0.9, sd: 0.08401826957372512 });
+    expect(refusal(readFigures, json)?.message).toMatch(/cross_skill\.mean must be 1 − cross_mae_deg\.mean \/ cross_zero_mae_deg/);
+    expect(refusal(readLadder, json)?.message).toMatch(/cross_skill\.mean must be 1 − /);
+    const sd = patch(resultsFixture(), "groups.sightlinenet/blocked.cross_skill.sd", 0.2);
+    expect(refusal(readLadder, sd)?.message).toMatch(/cross_skill\.sd must be cross_mae_deg\.sd \/ cross_zero_mae_deg/);
+  });
+
+  it("refuse a ladder skill flipped against its errors, on a held-back rung and on the shuffled one", () => {
+    const later = patch(resultsFixture(), "groups.pilotnet/forward.test_skill", { mean: 0.4485684827442407, sd: 0.440446173159765 });
+    expect(refusal(readLadder, later)?.message).toMatch(/groups\.pilotnet\/forward\.test_skill\.mean must be 1 − /);
+    // On the shuffled rung each training is tested on its own frames: only the side of the line is checked.
+    const shuffled = patch(resultsFixture(), "groups.pilotnet/leaky.test_skill", { mean: -0.6951777264965134, sd: 0.009588771929433299 });
+    expect(refusal(readLadder, shuffled)?.message).toMatch(/groups\.pilotnet\/leaky\.test_skill\.mean must be above 0, as its error is below steering straight’s/);
+  });
+
+  it("refuse a ladder error whose seed values no longer make its mean", () => {
+    const json = patch(resultsFixture(), "ladder.sightlinenet.1.mae_deg.values", [11.9, 9.618937237003818, 10.12272448789344]);
+    expect(refusal(readLadder, json)?.message).toMatch(/ladder\.sightlinenet\.1\.mae_deg\.mean must be the mean of its values/);
+  });
+
+  it("refuse steering straight on a rung that its group does not hold", () => {
+    const json = patch(resultsFixture(), "groups.pilotnet/forward.test_zero_mae_deg", 9.5);
+    expect(refusal(readLadder, json)?.message).toMatch(/groups\.pilotnet\/forward\.test_zero_mae_deg must be 9\.40/);
+  });
+});
+
+describe("the readers' checks of the sentences built on them", () => {
+  it("refuse a standard-recipe score that is not on the split's own test frames", () => {
+    expect(refusal(readLegacy, patch(resultsFixture(), "legacy.eval.drive2018_blocked_test.model.n", 5000))?.message).toMatch(
+      /drive2018_blocked_test\.model\.n must be 6000, the blocked split’s test frames/,
+    );
+    expect(refusal(readLegacy, patch(resultsFixture(), "legacy.eval.drive2018_forward_test.model.n", 9000))?.message).toMatch(
+      /drive2018_forward_test\.model\.n must be 9324, the later-in-the-drive split’s test frames/,
+    );
+    expect(refusal(readLegacy, patch(resultsFixture(), "legacy.splits.firewall", 300))?.message).toMatch(/legacy\.splits\.firewall must be 250/);
+  });
+
+  it("count the boundaries from the pattern, and refuse drops that do not match them", () => {
+    expect(readSplits(resultsFixture()).blocked.boundaries).toBe(24);
+    const json = patch(resultsFixture(), "split_rules.blocked.pattern", "TTVTTETT");
+    expect(refusal(readSplits, json)?.message).toMatch(/split_sizes\.blocked\.dropped must be/);
+  });
+
+  it("refuse shares that the sizes do not follow", () => {
+    expect(refusal(readSplits, patch(resultsFixture(), "split_rules.forward.train_frac", 0.6))?.message).toMatch(/split_sizes\.forward\.train must be/);
+    expect(refusal(readSplits, patch(resultsFixture(), "split_rules.leaky.val_frac", 0.2))?.message).toMatch(/split_sizes\.leaky\.val must be/);
+  });
+});
+
+describe("readYardsticks", () => {
+  it("reads every rule beside Sightline on the blocked test frames and on another day, each on the same frames", () => {
+    const [held, day] = readYardsticks(resultsFixture());
+    expect(held).toEqual({
+      kind: "held-back",
+      drive: "drive2018",
+      frames: 6000,
+      model: 10.12272448789344,
+      errors: { zero: 17.479270016382138, mean: 17.84318643687274, zoh: 0.5927266640439629, extrap: 0.6901967614466945 },
+    });
+    expect(day).toEqual({
+      kind: "another-day",
+      drive: "drive2017",
+      frames: 45404,
+      model: 9.771067024628094,
+      errors: { zero: 15.52269723393061, mean: 15.473928367779282, zoh: 0.5068826531183521, extrap: 0.48579622978518006 },
+    });
+  });
+
+  it("refuses a rule scored on other frames, another run, or steering straight the ladder does not hold", () => {
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.test.baselines.zoh.n", 5998))?.message).toMatch(/baselines\.test\.baselines\.zoh\.n must be 6000/);
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.cross_drive.model.n", 45000))?.message).toMatch(/baselines\.cross_drive\.model\.n/);
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.run", "drive2018_sightlinenet_blocked_s0"))?.message).toMatch(/baselines\.run/);
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.test.n", 5000))?.message).toMatch(/baselines\.test/);
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.cross_drive.baselines.zero.mae_deg", 15.6))?.message).toMatch(/cross_zero_mae_deg|baselines\.cross_drive\.baselines\.zero/);
+    expect(refusal(readYardsticks, patch(resultsFixture(), "baselines.test.baselines.extrap.mae_deg", -1))?.message).toMatch(/extrap\.mae_deg/);
+  });
+});
+
+describe("readFrames", () => {
+  it("counts the shipped network's frames from its lags, and the other's from its key", () => {
+    expect(readFrames(resultsFixture())).toEqual({ sightlinenet: 2, "sightlinenet-1f": 1 });
+    expect(readFrames(patch(resultsFixture(), "timing.drive2018.lag_gap_s", [{ lag: 1, median: 0.05 }, { lag: 2, median: 0.1 }]))).toEqual({ sightlinenet: 3, "sightlinenet-1f": 1 });
+    expect(readFrames(patch(resultsFixture(), "shipped.model", "pilotnet"))).toBeNull();
+    expect(readFrames(patch(resultsFixture(), "timing.drive2018", null))).toBeNull();
   });
 });

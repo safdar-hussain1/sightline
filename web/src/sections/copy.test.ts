@@ -2,11 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import type { Agreement } from "../cockpit/live.ts";
 import { AssetError } from "../data/load.ts";
-import { frameTiming } from "../data/timing.ts";
+import { driveGaps, frameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import {
   barWords,
   driveTitle,
+  frameWords,
+  framesAlt,
+  framesTitleOf,
+  YARDSTICK_LABELS,
+  yardstickSetTitle,
+  yardsticksAlt,
+  yardsticksVerdict,
+  ladderCaption,
+  ladderLead,
+  trainingsWord,
+  turnWords,
   exactDeg,
   exportText,
   ladderAlt,
@@ -51,8 +62,9 @@ import {
   timesInWords,
   upperBound,
 } from "./copy.ts";
-import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits } from "./figures.ts";
-import { patch, resultsFixture } from "./fixture.ts";
+import { readFigures, readFrames, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, readYardsticks } from "./figures.ts";
+import { patch, resultsFixture, setSkill } from "./fixture.ts";
+import { networkName } from "./names.ts";
 
 const figures = () => readFigures(resultsFixture());
 
@@ -80,8 +92,8 @@ function clip(overrides: Partial<Clip> = {}): Clip {
   };
 }
 
-/** The drives as results.json records them: 2018 with timestamps, 2017 without. */
-const INTERVALS = { drive2018: 0.056999921798706055, drive2017: null };
+/** The drives' measured gaps as results.json records them: 2018 with timestamps, 2017 without. */
+const GAPS = driveGaps(resultsFixture());
 
 describe("the accuracy figure's sentences", () => {
   it("says how far off Sightline is on minutes it never trained on, against steering straight", () => {
@@ -174,12 +186,10 @@ describe("the Results view's figures", () => {
   });
 
   it("never calls a model better than steering straight when it is worse", () => {
-    const json = patch(resultsFixture(), "groups.sightlinenet/blocked.cross_skill", { mean: -0.2423, sd: 0.05 });
-    expect(anotherDayFigure(readFigures(json).anotherDay)).toEqual({
-      value: 0.2423,
-      text: "24%",
-      label: "Worse than always steering straight, on a drive it never saw",
-    });
+    const json = setSkill(resultsFixture(), "sightlinenet", "blocked", "cross_drive", -0.2423);
+    const figure = anotherDayFigure(readFigures(json).anotherDay);
+    expect(figure.value).toBeCloseTo(0.2423, 12);
+    expect(figure).toMatchObject({ text: "24%", label: "Worse than always steering straight, on a drive it never saw" });
   });
 
   it("describes the two errors behind each summary figure, from the same numbers the rulers draw", () => {
@@ -240,12 +250,19 @@ describe("the live check against Python", () => {
     maxDiffDeg: 0.000030517578125,
     ...overrides,
   });
+  /** A state as the band shows it: the verdict it announces, the progress
+   * line beside it, whether the check can still change, and both as read. */
+  const state = (look: string, verdict: string, progress: string, done: boolean) => ({
+    look,
+    verdict,
+    progress,
+    done,
+    text: [verdict, progress].filter((part) => part !== "").join(" "),
+  });
 
   it("passes when every frame is within the clip's tolerance, with a bound rounded up", () => {
-    expect(parityState(agreement(), "ready")).toEqual({
-      look: "checked",
-      text: "Checked live: on all 420 frames of the demo’s 2018 clip, Sightline’s angles in this browser match the same model run in Python to within 0.00004°.",
-    });
+    const passed = "Checked live: on all 420 frames of the demo’s 2018 clip, Sightline’s angles in this browser match the same model run in Python to within 0.00004°.";
+    expect(parityState(agreement(), "ready")).toEqual(state("checked", passed, "", true));
   });
 
   it("names the model it checked", () => {
@@ -259,10 +276,14 @@ describe("the live check against Python", () => {
   });
 
   it("fails as soon as a frame differs by more than the clip's tolerance", () => {
-    expect(parityState(agreement({ maxDiffDeg: 124.8157 }), "ready")).toEqual({
-      look: "mismatch",
-      text: "Sightline’s angles in this browser do not match the same model run in Python: on the demo’s 2018 clip they differ by up to 124.9°, more than the 0.001° allowed.",
-    });
+    expect(parityState(agreement({ maxDiffDeg: 124.8157 }), "ready")).toEqual(
+      state(
+        "mismatch",
+        "Sightline’s angles in this browser do not match the same model run in Python: on the demo’s 2018 clip they differ by up to 124.9°, more than the 0.001° allowed.",
+        "",
+        true,
+      ),
+    );
     expect(parityState(agreement({ maxDiffDeg: 0.0011, compared: 12 }), "ready").look).toBe("mismatch");
   });
 
@@ -273,17 +294,28 @@ describe("the live check against Python", () => {
 
   it("calls nothing a match when the clip records no tolerance", () => {
     const { tolerance: _, ...bare } = clip();
-    expect(parityState(agreement({ clip: bare }), "ready")).toEqual({
-      look: "note",
-      text: "Sightline’s angles in this browser differ from the same model run in Python by at most 0.00004° on the 420 frames it has run; the clip records no tolerance to judge that by.",
-    });
+    expect(parityState(agreement({ clip: bare }), "ready")).toEqual(
+      state(
+        "note",
+        "Sightline’s angles in this browser differ from the same model run in Python by at most 0.00004° on all 420 frames of the demo’s 2018 clip; the clip records no tolerance to judge that by.",
+        "",
+        true,
+      ),
+    );
+    expect(parityState(agreement({ clip: bare, compared: 96 }), "ready")).toEqual(
+      state(
+        "note",
+        "The clip records no tolerance to judge Sightline’s angles in this browser by, so they are not called a match.",
+        "They differ from the same model run in Python by at most 0.00004° on the 96 frames run so far.",
+        false,
+      ),
+    );
   });
 
-  it("counts the frames checked so far while the model is still running, naming the model", () => {
-    expect(parityState(agreement({ compared: 96 }), "ready")).toEqual({
-      look: "checking",
-      text: "Checking Sightline live: 96 of 420 frames of the demo’s 2018 clip so far, every one within 0.00004° of the same model run in Python.",
-    });
+  it("counts the frames checked so far while the model is still running, naming the model, and announces nothing yet", () => {
+    expect(parityState(agreement({ compared: 96 }), "ready")).toEqual(
+      state("checking", "", "Checking Sightline live: 96 of 420 frames of the demo’s 2018 clip so far, every one within 0.00004° of the same model run in Python.", false),
+    );
     expect(parityState(agreement({ compared: 96, maxDiffDeg: 0 }), "ready").text).toBe(
       "Checking Sightline live: 96 of 420 frames of the demo’s 2018 clip so far, every one identical to the same model run in Python.",
     );
@@ -292,74 +324,84 @@ describe("the live check against Python", () => {
     );
   });
 
-  it("says a mismatch found while the model is still running is over the frames run so far", () => {
-    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12 }), "ready")).toEqual({
-      look: "mismatch",
-      text: "Sightline’s angles in this browser do not match the same model run in Python: on the 12 frames of the demo’s 2018 clip run so far, they differ by up to 0.002°, more than the 0.001° allowed.",
-    });
-    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12, model: "shuffled" }), "ready").text).toMatch(
-      /^The twin’s angles in this browser do not match .*: on the 12 frames of the demo’s 2018 clip run so far, /,
+  it("announces a mismatch found while the model is still running in words that hold, and counts the frames so far beside it", () => {
+    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12 }), "ready")).toEqual(
+      state(
+        "mismatch",
+        "Sightline’s angles in this browser do not match the same model run in Python.",
+        "On the 12 frames of the demo’s 2018 clip run so far, they differ by up to 0.002°, more than the 0.001° allowed.",
+        false,
+      ),
+    );
+    // More frames change the count, never the announced words.
+    expect(parityState(agreement({ maxDiffDeg: 0.3, compared: 300 }), "ready").verdict).toBe(
+      parityState(agreement({ maxDiffDeg: 0.0012, compared: 12 }), "ready").verdict,
+    );
+    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12, model: "shuffled" }), "ready").verdict).toBe(
+      "The twin’s angles in this browser do not match the same model run in Python.",
     );
   });
 
   it("never passes frames this browser decoded differently, or could not check", () => {
-    expect(parityState(agreement({ check: "differ", maxDiffDeg: 0.4123 }), "ready")).toEqual({
-      look: "note",
-      text: "This browser decodes the demo’s 2018 clip differently from Python, so Sightline’s angles here differ from the same model run in Python by up to 0.5° on the 420 frames it has run.",
-    });
+    expect(parityState(agreement({ check: "differ", maxDiffDeg: 0.4123 }), "ready")).toEqual(
+      state(
+        "note",
+        "This browser decodes the demo’s 2018 clip differently from Python, so Sightline’s angles here differ from the same model run in Python by up to 0.5° on all 420 frames.",
+        "",
+        true,
+      ),
+    );
+    expect(parityState(agreement({ check: "differ", maxDiffDeg: 0.4123, compared: 96 }), "ready")).toEqual(
+      state(
+        "note",
+        "This browser decodes the demo’s 2018 clip differently from Python, so Sightline’s angles here differ from the same model run in Python.",
+        "They differ by up to 0.5° on the 96 frames run so far.",
+        false,
+      ),
+    );
     expect(parityState(agreement({ check: "differ", maxDiffDeg: 0 }), "ready").look).toBe("note");
-    expect(parityState(agreement({ check: "unverified", maxDiffDeg: 0 }), "ready")).toEqual({
-      look: "note",
-      text: "This browser could not check that it decoded the clip’s frames as Python did, so its angles are not compared.",
-    });
+    expect(parityState(agreement({ check: "unverified", maxDiffDeg: 0 }), "ready")).toEqual(
+      state("note", "This browser could not check that it decoded the clip’s frames as Python did, so its angles are not compared.", "", true),
+    );
   });
 
   it("never states a difference that is not a number", () => {
-    expect(parityState(agreement({ maxDiffDeg: Number.POSITIVE_INFINITY }), "ready")).toEqual({
-      look: "mismatch",
-      text: "Sightline’s angles in this browser do not match the same model run in Python on the demo’s 2018 clip.",
-    });
+    expect(parityState(agreement({ maxDiffDeg: Number.POSITIVE_INFINITY, compared: 12 }), "ready")).toEqual(
+      state("mismatch", "Sightline’s angles in this browser do not match the same model run in Python on the demo’s 2018 clip.", "", true),
+    );
   });
 
   it("says what it is waiting for, and why there is no check without a running demo", () => {
-    const waiting = { look: "checking", text: "Checking this browser against the same model run in Python…" };
-    expect(parityState(null, "loading")).toEqual(waiting);
-    expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN }), "loading")).toEqual({
-      look: "checking",
-      text: "Checking Sightline in this browser against the same model run in Python…",
-    });
+    expect(parityState(null, "loading")).toEqual(state("checking", "", "Checking this browser against the same model run in Python…", false));
+    expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN }), "loading")).toEqual(
+      state("checking", "", "Checking Sightline in this browser against the same model run in Python…", false),
+    );
     expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN, model: "shuffled" }), "ready").text).toBe(
       "Checking the twin in this browser against the same model run in Python…",
     );
-    expect(parityState(null, "unavailable")).toEqual({
-      look: "note",
-      text: "The live check needs the demo, and the demo is not running.",
-    });
-    expect(parityState(null, "absent")).toEqual({
-      look: "note",
-      text: "The live check needs the demo, which could not start in this browser.",
-    });
+    expect(parityState(null, "unavailable")).toEqual(state("note", "The live check needs the demo, and the demo is not running.", "", true));
+    expect(parityState(null, "absent")).toEqual(state("note", "The live check needs the demo, which could not start in this browser.", "", true));
   });
 });
 
 describe("how it works", () => {
-  const timed = frameTiming(INTERVALS, "drive2018");
-  const untimed = frameTiming(INTERVALS, "drive2017");
+  const timed = frameTiming(GAPS, "drive2018");
+  const untimed = frameTiming(GAPS, "drive2017");
 
-  it("names the frames the model is shown, timed from the drive's own timestamps", () => {
-    expect(framesTitle(clip(), timed)).toBe("Two frames, 114 ms apart");
-    expect(framesAges(clip(), timed)).toEqual(["now", "114 ms before"]);
+  it("names the frames the model is shown, with the drive's measured median gap said as the drive's", () => {
+    expect(framesTitle(clip(), timed)).toBe("Two frames, a median 100\u00A0ms apart on the 2018 drive");
+    expect(framesAges(clip(), timed)).toEqual(["now", "two frames before"]);
     expect(framesText(clip(), timed)).toBe(
-      "The frame on screen and the one 114 ms before it, cropped to the road and shrunk to 200 × 66 pixels. Two frames show which way the view is moving, which one frame cannot.",
+      "The frame on screen and the one two frames before it, cropped to the road and shrunk to 200 × 66 pixels. Two frames show which way the view is moving, which one frame cannot.",
     );
   });
 
-  it("counts frames, not milliseconds, on a drive without timestamps, and quotes the other drive's measured spacing", () => {
+  it("counts frames, not milliseconds, on a drive without timestamps, and quotes the other drive's measured gap", () => {
     const another = clip({ id: "c2017", drive: "drive2017", title: "2017: another day" });
     expect(framesTitle(another, untimed)).toBe("This frame and the one two frames before it");
     expect(framesAges(another, untimed)).toEqual(["now", "two frames before"]);
     expect(framesText(another, untimed)).toBe(
-      "The frame on screen and the one two frames before it, cropped to the road and shrunk to 200 × 66 pixels. This drive’s frames carry no timestamps; on the 2018 drive, whose frames do, two frames are 114 ms apart. Two frames show which way the view is moving, which one frame cannot.",
+      "The frame on screen and the one two frames before it, cropped to the road and shrunk to 200 × 66 pixels. This drive’s frames carry no timestamps; on the 2018 drive, whose frames do, a frame and the one two before it were taken a median 100\u00A0ms apart. Two frames show which way the view is moving, which one frame cannot.",
     );
     expect(framesText(another, frameTiming({ drive2017: null }, "drive2017"))).toBe(
       "The frame on screen and the one two frames before it, cropped to the road and shrunk to 200 × 66 pixels. This drive’s frames carry no timestamps, so their spacing is counted in frames. Two frames show which way the view is moving, which one frame cannot.",
@@ -368,9 +410,11 @@ describe("how it works", () => {
 
   it("follows a clip with more history, or none", () => {
     const three = clip({ frame_lags: [1, 2], lead_in: 2 });
-    expect(framesTitle(three, timed)).toBe("Three frames, up to 114 ms apart");
-    expect(framesAges(three, timed)).toEqual(["now", "57 ms before", "114 ms before"]);
+    expect(framesTitle(three, timed)).toBe("Three frames, the oldest a median 100\u00A0ms earlier on the 2018 drive");
+    expect(framesAges(three, timed)).toEqual(["now", "one frame before", "two frames before"]);
     expect(framesTitle(three, untimed)).toBe("This frame and the two before it");
+    // A lag the drive's timing does not measure gets no time.
+    expect(framesTitle(clip({ frame_lags: [3] }), timed)).toBe("This frame and the one three frames before it");
     const one = clip({ frame_lags: [] });
     expect(framesTitle(one, timed)).toBe("One frame at a time");
     expect(framesAges(one, timed)).toEqual(["now"]);
@@ -378,7 +422,7 @@ describe("how it works", () => {
   });
 
   it("states how long the model takes here only once it has been measured", () => {
-    expect(speedText(2.5312)).toBe("Here it takes about 2.5 ms a frame.");
+    expect(speedText(2.5312)).toBe("Here it takes about 2.5\u00A0ms a frame.");
     expect(speedText(null)).toBe("");
   });
 });
@@ -439,7 +483,7 @@ describe("the paired experiment's sentences", () => {
 
   it("names each seed's frames, never one count for all of them", () => {
     expect(pairedFrames(paired().sightlinenet)).toBe(
-      "Each line is one training seed: the network trained on that seed’s shuffled split and on its blocked split, both scored on the frames the two splits both held out (893, 889 and 943 frames).",
+      "Each line is one training seed: the network trained on that seed’s shuffled split and on its blocked split, both scored on the frames both splits held out (893, 889 and 943 frames).",
     );
     expect(pairedRatioLabel(paired().sightlinenet.ratio.mean)).toBe("3.0× on average");
   });
@@ -471,7 +515,7 @@ describe("the ladder's sentences", () => {
 
   it("gives steering straight on each rung, and names the network not trained this way", () => {
     expect([0, 1, 2, 3].map((i) => rungNote(ladder(), i))).toEqual([
-      "Always steering straight is off by 13.1° on these frames. SightlineNet with one frame was not trained this way.",
+      "Each training is tested on its own draw of shuffled frames; always steering straight is off by 13.1° on them, on average. SightlineNet with one frame was not trained this way.",
       "Always steering straight is off by 17.5° on these frames.",
       "Always steering straight is off by 9.4° on these frames. SightlineNet with one frame was not trained this way.",
       "Always steering straight is off by 15.5° on these frames.",
@@ -505,14 +549,14 @@ describe("the ladder's sentences", () => {
 
 describe("the cards' sentences", () => {
   it("says what the second frame buys, calling a skill near zero level", () => {
-    expect(twoFramesText(readLadder(resultsFixture()))).toEqual({
+    expect(twoFramesText(readLadder(resultsFixture()), readFrames(resultsFixture()))).toEqual({
       lead: "On another day’s drive, SightlineNet with one frame is about level with always steering straight (2% better than it). With two frames it is 31% better than always steering straight.",
-      also: "On held-back stretches of its own drive: 41% better than steering straight with two frames, 35% better than it with one.",
+      also: "On held-back stretches of its own drive: 41% better than steering straight with two frames, 35% better than it with one frame.",
     });
-    const json = patch(resultsFixture(), "groups.sightlinenet-1f/blocked.cross_skill", { mean: 0.12, sd: 0.01 });
-    expect(twoFramesText(readLadder(json))?.lead).toMatch(/^On another day’s drive, SightlineNet with one frame is 12% better than always steering straight\./);
-    const worse = patch(resultsFixture(), "groups.sightlinenet-1f/blocked.cross_skill", { mean: -0.049, sd: 0.01 });
-    expect(twoFramesText(readLadder(worse))?.lead).toMatch(/about level with always steering straight \(4.9% worse than it\)|about level with always steering straight \(5% worse than it\)/);
+    const json = setSkill(resultsFixture(), "sightlinenet-1f", "blocked", "cross_drive", 0.12);
+    expect(twoFramesText(readLadder(json), readFrames(json))?.lead).toMatch(/^On another day’s drive, SightlineNet with one frame is 12% better than always steering straight\./);
+    const worse = setSkill(resultsFixture(), "sightlinenet-1f", "blocked", "cross_drive", -0.049);
+    expect(twoFramesText(readLadder(worse), readFrames(worse))?.lead).toMatch(/about level with always steering straight \(4.9% worse than it\)|about level with always steering straight \(5% worse than it\)/);
   });
 
   it("names the regimes by the edges in the data", () => {
@@ -578,6 +622,132 @@ describe("the cards' sentences", () => {
         "The first 70% of the drive trains, the next 15% validates and the last 15% tests, with 250 frames dropped on each side of both boundaries (1,000 in all): " +
         "44,427 to train, 9,074 to validate and 9,324 to test.",
       anotherDay: "The 2017 drive, recorded on another day: 45,404 of its frames, scored by the networks trained with stretches held back.",
+    });
+  });
+});
+
+describe("counts said from the data, never typed", () => {
+  it("counts the trainings behind every bar, or says none when they differ", () => {
+    expect(trainingsWord(readLadder(resultsFixture()))).toBe("three");
+    const ladder = readLadder(resultsFixture());
+    const fewer = { ...ladder, bars: { ...ladder.bars, pilotnet: ladder.bars.pilotnet.map((bar) => (bar ? { ...bar, seeds: [0, 1] } : bar)) } };
+    expect(trainingsWord(fewer)).toBeNull();
+    expect(ladderCaption(fewer, "skill")).toBe("Each bar is a mean over the network’s trainings; each whisker spans one standard deviation over them.");
+    expect(ladderCaption(ladder, "skill")).toBe("Mean of three trainings; each whisker spans one standard deviation over them.");
+    expect(ladderCaption(ladder, "error")).toBe("Mean of three trainings; each tick is one training. Each rung’s grey line is always steering straight on its frames.");
+  });
+
+  it("names a network's frames from its data: the shipped network's lags, the other's key", () => {
+    const frames = readFrames(resultsFixture());
+    expect(frames).toEqual({ sightlinenet: 2, "sightlinenet-1f": 1 });
+    expect(networkName("sightlinenet-1f")).toEqual({ name: "SightlineNet, one frame", said: "SightlineNet with one frame" });
+    expect(networkName("sightlinenet-3f")).toEqual({ name: "SightlineNet, three frames", said: "SightlineNet with three frames" });
+    expect(networkName("pilotnet")).toEqual({ name: "PilotNet", said: "PilotNet" });
+    expect(frameWords(frames)).toEqual({ more: "two frames", fewer: "one frame" });
+    expect(framesTitleOf(frames)).toBe("What a second frame buys");
+    expect(framesTitleOf({ sightlinenet: 3, "sightlinenet-1f": 1 })).toBe("What two more frames buy");
+    expect(framesTitleOf(null)).toBe("What an earlier frame buys");
+    const without = resultsFixture();
+    delete without["timing"];
+    expect(readFrames(without)).toBeNull();
+  });
+
+  it("says what the extra frame buys with the counts the data gives", () => {
+    const ladder = readLadder(resultsFixture());
+    expect(twoFramesText(ladder, { sightlinenet: 3, "sightlinenet-1f": 1 })?.lead).toBe(
+      "On another day’s drive, SightlineNet with one frame is about level with always steering straight (2% better than it). With three frames it is 31% better than always steering straight.",
+    );
+  });
+
+  it("says what the extra frame buys without a count when the data gives none", () => {
+    const without = resultsFixture();
+    delete without["timing"];
+    expect(twoFramesText(readLadder(without), readFrames(without))).toEqual({
+      lead: "On another day’s drive, SightlineNet with one frame is about level with always steering straight (2% better than it). With an earlier frame too it is 31% better than always steering straight.",
+      also: "On held-back stretches of its own drive: 41% better than steering straight with an earlier frame too, 35% better than it with one frame.",
+    });
+  });
+
+  it("never calls a clearly negative skill about level", () => {
+    const json = setSkill(resultsFixture(), "sightlinenet-1f", "blocked", "cross_drive", -0.3);
+    expect(twoFramesText(readLadder(json), readFrames(json))?.lead).toMatch(/^On another day’s drive, SightlineNet with one frame is 30% worse than always steering straight\./);
+  });
+
+  it("puts the head's limit in turns of the wheel only when it is a plain share of one", () => {
+    expect(turnWords(180)).toBe("half a turn of the wheel");
+    expect(turnWords(360)).toBe("a full turn of the wheel");
+    expect(turnWords(90)).toBe("a quarter turn of the wheel");
+    expect(turnWords(170)).toBe("");
+  });
+
+  it("says the head cannot pass its limit only while its largest answer is below it", () => {
+    const over = readLegacy(patch(resultsFixture(), "legacy.atan_cap.max_abs_pred_deg", 185));
+    expect(legacyText(over).cap).toBe("Its largest answer is 185.0°; the driver turned past 180° on 235 frames of the 2018 drive.");
+  });
+});
+
+describe("the ladder's lead", () => {
+  it("says what a bar's height means in the view on screen, never that a bar above the line wins in raw error", () => {
+    expect(ladderLead("skill")).toMatch(/A bar above the line beats always steering straight on the same frames; a bar below it does worse\.$/);
+    expect(ladderLead("error")).not.toMatch(/above the line beats/);
+    expect(ladderLead("error")).toMatch(/A bar that stops short of its rung’s grey line beats always steering straight on the same frames; a bar that passes it does worse\.$/);
+  });
+});
+
+describe("sentences that follow the data where it could change", () => {
+  it("names the regime where the model is furthest off", () => {
+    const json = patch(resultsFixture(), "regimes.models.sightlinenet.regimes.sharp.mae_deg", 3);
+    expect(regimesText(readRegimes(json)).lead).toBe(
+      "Sightline’s 6,000 test frames, sorted by how hard the driver was turning. It is furthest off on straight road: 6.1°, where always steering straight is off by 2.8°.",
+    );
+  });
+
+  it("says steering straight on the shuffled rung is a mean over each training's own frames", () => {
+    expect(rungNote(readLadder(resultsFixture()), 0)).toBe(
+      "Each training is tested on its own draw of shuffled frames; always steering straight is off by 13.1° on them, on average. SightlineNet with one frame was not trained this way.",
+    );
+  });
+});
+
+describe("the baselines' sentences", () => {
+  const sets = () => readYardsticks(resultsFixture());
+
+  it("names each rule plainly", () => {
+    expect(YARDSTICK_LABELS).toEqual({ zero: "steering straight", mean: "mean angle", zoh: "hold the last label", extrap: "linear extrapolation" });
+  });
+
+  it("titles each set of frames with its drive and its count", () => {
+    expect(sets().map(yardstickSetTitle)).toEqual(["Held-back stretches of the 2018 drive, 6,000 frames", "Another day: the 2017 drive, 45,404 frames"]);
+  });
+
+  it("describes every number the rulers draw, the rules that read the answers named as doing so", () => {
+    expect(yardsticksAlt(sets())).toBe(
+      "Mean error on the held-back stretches of the 2018 drive (6,000 frames): always steering straight 17.5°, always steering the training frames’ mean angle 17.8°, " +
+        "and, reading the answer stream the model never sees, holding the last label 0.6° and linear extrapolation 0.7°; Sightline 10.1°. " +
+        "On another day’s drive, the 2017 drive (45,404 frames): always steering straight 15.5°, always steering the training frames’ mean angle 15.5°, " +
+        "and, reading the answer stream the model never sees, holding the last label 0.5° and linear extrapolation 0.5°; Sightline 9.8°.",
+    );
+  });
+
+  it("says what the rules that read the answers show, with their error bounded from above", () => {
+    expect(yardsticksVerdict(sets())).toBe(
+      "The rules that read the answers are off by at most 0.7°: the true angle barely changes from one frame to the next. They are yardsticks here, not rivals.",
+    );
+  });
+});
+
+describe("the frames card's chart in words", () => {
+  it("names both networks by their frames, and every number it draws", () => {
+    const rows = [
+      { title: "Another day’s drive", more: 0.3145251314711981, fewer: 0.0213 },
+      { title: "Held-back stretches of its own drive", more: 0.41, fewer: 0.35 },
+    ];
+    expect(framesAlt(rows, readFrames(resultsFixture()))).toEqual({
+      title: "SightlineNet with two frames and with one frame, against always steering straight",
+      desc:
+        "How much better than always steering straight SightlineNet is with two frames and with one frame: " +
+        "Another day’s drive: two frames 31% better than always steering straight, one frame 2% better than always steering straight; " +
+        "Held-back stretches of its own drive: two frames 41% better than always steering straight, one frame 35% better than always steering straight.",
     });
   });
 });

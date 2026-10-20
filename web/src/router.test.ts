@@ -20,7 +20,14 @@ function page(): void {
         <a id="to-results" href="#results">See what the measurements found</a>
       </div>
       <div class="view" data-view="results" hidden>
-        <h2 id="results-title">What the measurements found</h2>
+        <section id="results-view" aria-labelledby="results-title">
+          <h2 id="results-title">What the measurements found</h2>
+          <div class="ladder">
+            <h3 id="ladder-title">Further from the training frames</h3>
+            <fieldset><input id="view-skill" type="radio" name="view" value="skill" checked /><input id="view-error" type="radio" name="view" value="error" /></fieldset>
+            <button id="ladder-more" type="button">All the numbers</button>
+          </div>
+        </section>
       </div>
     </main>`;
 }
@@ -59,11 +66,13 @@ function start(reduced = false): Router {
   return router;
 }
 
-/** Where each element sits in the viewport, by id (happy-dom lays nothing out). */
-function layout(tops: Record<string, number>, height = 40): void {
+/** Where each element sits in the viewport, by id (happy-dom lays nothing
+ * out): its top, and its height unless `heights` gives its own. */
+function layout(tops: Record<string, number>, height = 40, heights: Record<string, number> = {}): void {
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     const top = tops[this.id] ?? 5000;
-    const box = { x: 0, y: top, top, bottom: top + height, left: 0, right: 800, width: 800, height };
+    const tall = heights[this.id] ?? height;
+    const box = { x: 0, y: top, top, bottom: top + tall, left: 0, right: 800, width: 800, height: tall };
     return { ...box, toJSON: () => box } as DOMRect;
   });
 }
@@ -216,6 +225,46 @@ describe("the router", () => {
     expect(document.activeElement?.id).toBe("results-title");
   });
 
+  it("after Forward with no heading in view, focuses the control nearest the top, not the region whose top is far above", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    history.back();
+    await ticks(6);
+    expect(shown()).toEqual(["results"]);
+    // Scrolled into the ladder's chart: its heading and the view's are above the screen.
+    layout({ "results-view": -1656, "results-title": -1600, "ladder-title": -120, "view-skill": 60, "view-error": 60, "ladder-more": 320 }, 40, { "results-view": 4000 });
+    restore();
+    expect(document.activeElement?.id).toBe("view-skill");
+    // A control keeps its own place in the Tab order.
+    expect(q("#view-skill").hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("after Forward, focuses a group of radio buttons by the one Tab reaches, the checked one", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    history.back();
+    await ticks(6);
+    layout({ "results-view": -1656, "results-title": -1600, "ladder-title": -120, "view-error": 50, "view-skill": 60, "ladder-more": 320 }, 40, { "results-view": 4000 });
+    restore();
+    expect(document.activeElement?.id).toBe("view-skill");
+  });
+
+  it("after Forward, focuses a section's heading rather than the section that starts just above it", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    history.back();
+    await ticks(6);
+    layout({ "results-view": 0, "results-title": 12, "ladder-title": 500, "view-skill": 560, "view-error": 560, "ladder-more": 620 }, 40, { "results-view": 4000 });
+    restore();
+    expect(document.activeElement?.id).toBe("results-title");
+  });
+
   it("leaves focus alone after Back when it is on something still on screen", async () => {
     start();
     link("results").click();
@@ -292,12 +341,20 @@ describe("the router", () => {
 });
 
 describe("nearestToTop", () => {
-  const box = (top: number, heading = true, height = 40) => ({ top, bottom: top + height, heading });
+  type Kind = "heading" | "control" | "region";
+  const box = (top: number, kind: Kind = "heading", height = 40) => ({ top, bottom: top + height, kind });
 
   it("picks the place whose top is nearest the top of the screen, above or below it", () => {
     expect(nearestToTop([box(300), box(-20), box(600)], 800)).toBe(1);
-    expect(nearestToTop([box(-700, false, 900), box(120)], 800)).toBe(1);
-    expect(nearestToTop([box(-90, false, 900), box(120)], 800)).toBe(0);
+    expect(nearestToTop([box(-700, "region", 900), box(120)], 800)).toBe(1);
+    expect(nearestToTop([box(300), box(40, "control")], 800)).toBe(1);
+  });
+
+  it("never picks a region whose top has scrolled above the screen: it says nothing of where the visitor is", () => {
+    expect(nearestToTop([box(-90, "region", 900), box(120)], 800)).toBe(1);
+    expect(nearestToTop([box(-90, "region", 900)], 800)).toBeNull();
+    expect(nearestToTop([box(-1656, "region", 4000), box(60, "control")], 800)).toBe(1);
+    expect(nearestToTop([box(10, "region", 900), box(400)], 800)).toBe(0);
   });
 
   it("skips places wholly above or below the screen, and finds none when none is in view", () => {
@@ -306,8 +363,10 @@ describe("nearestToTop", () => {
     expect(nearestToTop([], 800)).toBeNull();
   });
 
-  it("prefers a heading to a region that starts at the same place", () => {
-    expect(nearestToTop([box(30, false, 700), box(30)], 800)).toBe(1);
-    expect(nearestToTop([box(30), box(30, false, 700)], 800)).toBe(0);
+  it("prefers a heading, then a control, to a region that starts at the same place", () => {
+    expect(nearestToTop([box(30, "region", 700), box(30)], 800)).toBe(1);
+    expect(nearestToTop([box(30), box(30, "region", 700)], 800)).toBe(0);
+    expect(nearestToTop([box(30, "control"), box(30)], 800)).toBe(1);
+    expect(nearestToTop([box(30, "region", 700), box(30, "control")], 800)).toBe(1);
   });
 });

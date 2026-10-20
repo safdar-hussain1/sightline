@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { AssetError } from "../data/load.ts";
+import { driveGaps, frameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
+import { resultsFixture } from "../sections/fixture.ts";
 import { CANNOT_RUN } from "./boot.ts";
 import { TWIN_UNAVAILABLE, decodeNote, eyeCaption, failureMessage, modelNote, splitTitle } from "./copy.ts";
 
@@ -72,28 +74,29 @@ describe("splitTitle", () => {
 });
 
 describe("eyeCaption", () => {
-  const timed = { interval: 0.056999921798706055, reference: null };
-  const untimed = { interval: null, reference: { drive: "drive2018", interval: 0.057 } };
+  const gaps = driveGaps(resultsFixture());
+  const timed = frameTiming(gaps, "drive2018");
+  const untimed = frameTiming(gaps, "drive2017");
 
-  it("states the input's size and the history frame's age, from the drive's own timestamps", () => {
+  it("counts how far back the history frame is, and adds the drive's measured median gap as the drive's", () => {
     expect(eyeCaption(clip(), timed)).toBe(
-      "What the model gets: 200 × 66 pixels of this frame and of the one 114 ms before it, with where it looked.",
+      "What the model gets, with where it looked: 200 × 66 pixels of this frame and of the one two frames before it, a median 100\u00A0ms earlier on the 2018 drive.",
     );
   });
 
-  it("counts frames, not milliseconds, on a drive without timestamps", () => {
+  it("counts frames only on a drive without timestamps", () => {
     expect(eyeCaption(clip({ drive: "drive2017" }), untimed)).toBe(
-      "What the model gets: 200 × 66 pixels of this frame and of the one two frames before it, with where it looked.",
+      "What the model gets, with where it looked: 200 × 66 pixels of this frame and of the one two frames before it.",
     );
   });
 
-  it("follows the clip's own lags", () => {
-    expect(eyeCaption(clip({ frame_lags: [1, 3] }), { interval: 0.1, reference: null })).toMatch(
-      /the ones 100 ms and 300 ms before it/,
+  it("follows the clip's own lags, and quotes no time for a lag the drive's timing does not measure", () => {
+    expect(eyeCaption(clip({ frame_lags: [1, 3] }), timed)).toBe(
+      "What the model gets, with where it looked: 200 × 66 pixels of this frame and of the ones one frame and three frames before it.",
     );
-    expect(eyeCaption(clip({ frame_lags: [] }), timed)).toBe(
-      "What the model gets: 200 × 66 pixels of this frame, with where it looked.",
-    );
+    const both = frameTiming({ drive2018: new Map([[1, 0.05], [3, 0.157]]) }, "drive2018");
+    expect(eyeCaption(clip({ frame_lags: [1, 3] }), both)).toMatch(/the ones one frame and three frames before it, the oldest a median 157\u00A0ms earlier on the 2018 drive\.$/);
+    expect(eyeCaption(clip({ frame_lags: [] }), timed)).toBe("What the model gets, with where it looked: 200 × 66 pixels of this frame.");
   });
 });
 

@@ -810,16 +810,16 @@ describe("what the page reads of the cockpit", () => {
     await until(() => cockpit.agreement()?.compared === N, "every frame has run");
   });
 
-  it("times the clip's history from its drive's timestamps", async () => {
+  it("times the clip's history from its drive's measured gaps, and counts frames on a drive without them", async () => {
     world.results = async () => ({
       ...RESULTS,
-      raw: { drives: { drive2018: { median_dt_s: 0.057 }, drive2017: { median_dt_s: null } } },
+      raw: { timing: { drive2018: { lag_gap_s: [{ lag: 2, median: 0.1 }] }, drive2017: null } },
     });
     await playing();
-    expect(say("eye-caption")).toMatch(/of the one 114 ms before it/);
+    expect(say("eye-caption")).toMatch(/of the one two frames before it, a median 100\u00A0ms earlier on the 2018 drive\.$/);
     pick("cockpit-clip", "c2017");
     await until(() => consoleState() === "ready" && checked("cockpit-clip") === "c2017", "the 2017 clip runs");
-    expect(say("eye-caption")).toMatch(/of the one two frames before it/);
+    expect(say("eye-caption")).toMatch(/of the one two frames before it\.$/);
   });
 
   it("starts on the results the page has already asked for", async () => {
