@@ -6318,7 +6318,8 @@
     "reports/runs/drive2018_sightlinenet_leaky_s0.json",
     "reports/runs/drive2018_sightlinenet_leaky_s1.json",
     "reports/leakage.json",
-    "reports/legacy.json"
+    "reports/legacy.json",
+    "reports/export.json"
   ],
   "groups": {
     "pilotnet/blocked": {
