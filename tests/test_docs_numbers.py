@@ -1,0 +1,1216 @@
+"""Every number README.md and the model card print is read from the reports when the tests run.
+
+The two documents are prose, so nothing regenerates them. What holds a sentence to a measurement
+is reading the measurement from the JSON here and requiring the sentence that carries it.
+
+``PINS``
+    One row per printed figure: the document, the phrase it sits in with ``{}`` where the figure
+    goes, the file it is read from (a report under ``reports/``, or the page's
+    ``web/public/data/results.json``), a JSON pointer into that file (RFC 6901: ``~1`` stands for
+    a ``/`` inside a key) and the format it is printed in. The value is never written here: the
+    test renders it and requires the whole phrase, with the figure standing as a number of its own
+    (``3.05`` is not found inside ``13.05`` or ``3.055``).
+``ROWS``
+    The same for a phrase that carries several figures, such as a table row; each row is checked
+    as one pin per figure, the other figures rendered in place, so a row is pinned whole.
+``DERIVED``
+    The few figures a document computes from report values (a ratio of two errors, a frame lag in
+    milliseconds), each formula written out below.
+``CLAIMS``
+    The sentences whose words depend on the numbers ("about three times", "in every seed",
+    "always steering straight wins"), each with the condition on the reports that makes it true.
+``ALLOWED``
+    The numbers that are not measurements, each with the reason it may be printed: a year naming a
+    drive, a version, a command-line setting, a file name, a reference, a constant of the code
+    (checked against the code) and the training times, which come from the run folders a clone
+    does not have.
+
+Three checks run over all of them: every number-like token in either document must sit inside a
+pinned figure or an allowed phrase; moving any pinned value by one unit of its printed precision
+must break its pin; and the reports rewritten with an indent of four must leave every pin holding,
+so nothing here reads a report's layout instead of its values.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import math
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+DOCUMENTS = {"README": "README.md", "CARD": "web/public/model-card.md"}
+
+SUMMARY = "reports/summary.json"
+LEAKAGE = "reports/leakage.json"
+LEGACY = "reports/legacy.json"
+EXPORT = "reports/export.json"
+RESULTS = "web/public/data/results.json"
+#: run reports read for what only they record: parameter counts and the training device
+SHIPPED_RUN = "reports/runs/drive2018_sightlinenet_blocked_s2.json"
+ONE_FRAME_RUN = "reports/runs/drive2018_sightlinenet-1f_blocked_s0.json"
+PILOTNET_RUN = "reports/runs/drive2018_pilotnet_blocked_s0.json"
+
+MINUS = chr(0x2212)  # the minus sign the documents print
+WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+         "eleven", "twelve")
+
+
+# --- reading the reports ---------------------------------------------------------------------
+
+class Reader:
+    """The JSON files under one root, each parsed once; ``get`` resolves an RFC 6901 pointer."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self._files: dict[str, object] = {}
+
+    def file(self, rel: str):
+        if rel not in self._files:
+            self._files[rel] = json.loads((self.root / rel).read_text(encoding="utf-8"))
+        return self._files[rel]
+
+    def get(self, rel: str, pointer: str):
+        node = self.file(rel)
+        for step in _steps(pointer):
+            node = node[int(step)] if isinstance(node, list) else node[step]
+        return node
+
+
+def _steps(pointer: str) -> list[str]:
+    assert pointer.startswith("/"), f"{pointer!r} is not a JSON pointer"
+    return [raw.replace("~1", "/").replace("~0", "~") for raw in pointer[1:].split("/")]
+
+
+class Moved(Reader):
+    """The reports of ``base`` with the value at one pointer of one file replaced by ``value``."""
+
+    def __init__(self, base: Reader, rel: str, pointer: str, value):
+        super().__init__(base.root)
+        tree = copy.deepcopy(base.file(rel))
+        *path, last = _steps(pointer)
+        node = tree
+        for step in path:
+            node = node[int(step)] if isinstance(node, list) else node[step]
+        node[int(last) if isinstance(node, list) else last] = value
+        self._files = {**base._files, rel: tree}
+        self.base = base
+
+    def file(self, rel: str):
+        return self._files[rel] if rel in self._files else self.base.file(rel)
+
+
+# --- how a figure is printed -------------------------------------------------------------------
+
+def _minus(text: str) -> str:
+    """A negative figure is printed with a true minus sign."""
+    return MINUS + text[1:] if text.startswith("-") else text
+
+
+def _whole(value) -> int:
+    assert float(value) == int(value), f"{value!r} is not a whole number"
+    return int(value)
+
+
+def _signed_percent(x: float) -> str:
+    text = f"{100 * x:.0f}"
+    if text in ("0", "-0"):
+        return "0"
+    return MINUS + text[1:] if text.startswith("-") else "+" + text
+
+
+def _g_unit(x: float) -> float:
+    """One step in the last significant digit ``f"{x:g}"`` prints."""
+    digits = re.sub(r"[^0-9]", "", f"{abs(x):g}").lstrip("0").rstrip("0") or "0"
+    return 10.0 ** (math.floor(math.log10(abs(x))) - (len(digits) - 1))
+
+
+@dataclass(frozen=True)
+class Format:
+    """How a report value becomes the printed figure: ``number`` gives the quantity printed,
+    ``show`` prints it, ``unit`` is one step of its printed precision (None for text)."""
+
+    number: Callable
+    show: Callable
+    unit: Callable | None
+
+
+def _word(n: int) -> str:
+    return WORDS[n]
+
+
+FORMATS: dict[str, Format] = {
+    "int": Format(_whole, lambda x: _minus(str(x)), lambda x: 1),
+    "int,": Format(_whole, lambda x: _minus(f"{x:,}"), lambda x: 1),
+    "len": Format(len, str, lambda x: 1),
+    "word": Format(_whole, _word, lambda x: 1),
+    "lenword": Format(len, _word, lambda x: 1),
+    "lenWord": Format(len, lambda x: _word(x).capitalize(), lambda x: 1),
+    "1f": Format(float, lambda x: _minus(f"{x:.1f}"), lambda x: 0.1),
+    "2f": Format(float, lambda x: _minus(f"{x:.2f}"), lambda x: 0.01),
+    "1f,": Format(float, lambda x: _minus(f"{x:,.1f}"), lambda x: 0.1),
+    "pct0": Format(float, lambda x: _minus(f"{100 * x:.0f}"), lambda x: 0.01),
+    "pct1": Format(float, lambda x: _minus(f"{100 * x:.1f}"), lambda x: 0.001),
+    "spct0": Format(float, _signed_percent, lambda x: 0.01),
+    "ms0": Format(float, lambda x: _minus(f"{1000 * x:.0f}"), lambda x: 0.001),
+    "ms1": Format(float, lambda x: _minus(f"{1000 * x:.1f}"), lambda x: 0.0001),
+    "min0": Format(float, lambda x: _minus(f"{x / 60:.0f}"), lambda x: 60.0),
+    "min1": Format(float, lambda x: _minus(f"{x / 60:.1f}"), lambda x: 6.0),
+    "e1": Format(float, lambda x: _minus(f"{x:.1e}"),
+                 lambda x: 10.0 ** (math.floor(math.log10(abs(x))) - 1)),
+    "g": Format(float, lambda x: _minus(f"{x:g}"), _g_unit),
+    "text": Format(str, str, None),
+    "commit": Format(lambda v: str(v)[:7], str, None),
+    "json": Format(json.dumps, str, None),
+}
+
+
+# --- the figures each document prints ----------------------------------------------------------
+
+#: (document, phrase with ``{}`` where the figure goes, file, JSON pointer, format)
+PINS: list[tuple[str, str, str, str, str]] = [
+    # README: what it is
+    ("README", "on a {}-minute drive", RESULTS, "/drive_profile/drives/drive2018/duration_s", "min0"),
+    ("README", "sees the current frame and the frame {} before it", EXPORT, "/models/sightline/frame_lags/0",
+     "word"),
+    ("README", "tests them {} ways", SUMMARY, "/ladder/sightlinenet", "lenword"),
+    ("README", "deviations are over {} training seeds", SUMMARY, "/groups/sightlinenet~1blocked/seeds", "lenword"),
+    # the defect
+    ("README", "its test score promises an error {} times smaller", "derived", "promise", "2f"),
+    # how much better than straight
+    ("README", "PilotNet does not, later in the drive or on another day; later in the drive its seeds disagree "
+     "widely, from {}% to", "derived", "pilotnet_forward_best", "spct0"),
+    ("README", "% to {}%. The shuffled rung is not an honest test", "derived", "pilotnet_forward_worst", "spct0"),
+    # the lookup table
+    ("README", "{} of those frames, from nearly straight to the sharpest turn", LEAKAGE, "/pairs", "lenWord"),
+    # the baselines
+    ("README", "the blocked-split SightlineNet of seed {} (chosen on validation error)", SUMMARY, "/shipped/seed",
+     "int"),
+    # the standard-recipe PilotNet
+    ("README", "the widely copied TensorFlow 1 way on {}, scored from its weights", LEGACY, "/trained_on", "text"),
+    ("README", "The recipe, as the report records it: *{}*.", LEGACY, "/recipe", "text"),
+    # how it works
+    ("README", "The model takes the current frame t and frame t−{},", EXPORT, "/models/sightline/frame_lags/0",
+     "int"),
+    ("README", "whose frames carry timestamps a median {} ms apart", SUMMARY, "/drives/drive2018/median_dt_s", "ms1"),
+    ("README", "that is {} ms of driving", "derived", "lag_s", "ms0"),
+    ("README", "what the motion between frames {} ms apart looks like", "derived", "lag_s", "ms0"),
+    ("README", "each demo clip carries the {} frames before its first scored frame", EXPORT, "/clips/c2018/lead_in",
+     "word"),
+    ("README", "with dropout {} before the head", SUMMARY, "/train_config/models/sightlinenet/dropout", "g"),
+    # the protocols
+    ("README", "Its test frames are at least {} frames from training", LEAKAGE, "/gaps/forward/test/min_frames",
+     "int,"),
+    ("README", "which is why always steering straight is off by only {}° there", SUMMARY,
+     "/groups/sightlinenet~1forward/test_zero_mae_deg", "2f"),
+    ("README", "The {} runs are PilotNet and SightlineNet", SUMMARY, "/runs", "len"),
+    ("README", "under the blocked split, each for {} seeds", SUMMARY, "/groups/sightlinenet~1blocked/seeds",
+     "lenword"),
+    # every command
+    ("README", "as the matrix ran it: SightlineNet, blocked split, seed {}, full cosine schedule", SUMMARY,
+     "/shipped/seed", "int"),
+    ("README", "--protocol blocked --seed {} --epochs", SUMMARY, "/shipped/seed", "int"),
+    ("README", "--epochs {} --patience", SUMMARY, "/train_config/epochs", "int"),
+    ("README", "--patience {}", SUMMARY, "/train_config/patience", "int"),
+    ("README", "sightline leakage --drive drive2018 --seed {}", LEAKAGE, "/seed", "int"),
+    ("README", "sightline demo --drive drive2018 --run {} --start", SUMMARY, "/shipped/run", "text"),
+    # the model card
+    ("CARD", "SightlineNet trained on the blocked split of drive2018 (run `{}`)", SUMMARY, "/shipped/run", "text"),
+    ("CARD", "`models/sightline-shuffled.onnx` (run `{}`)", SUMMARY, "/twin/run", "text"),
+    ("CARD", "| parameters | {} |", SHIPPED_RUN, "/n_params", "int,"),
+    ("CARD", "frame t first and frame t−{} second", EXPORT, "/models/sightline/frame_lags/0", "int"),
+    ("CARD", "the human's steering-wheel angle in degrees. {} single-frame sensor dropouts", SUMMARY,
+     "/drives/drive2018/repaired_labels", "int"),
+    ("CARD", "*later in the drive* (train on the first {}% of the drive, test on its end)", RESULTS,
+     "/split_rules/forward/train_frac", "pct0"),
+    ("CARD", "(drive2017, a different day, every frame from frame {} on)", LEGACY, "/seen_first_frame", "int"),
+    ("CARD", "It learned frame pairs {} ms apart on drive2018", "derived", "lag_s", "ms0"),
+    ("CARD", "Training ran on an Apple GPU through PyTorch's `{}` device", SHIPPED_RUN, "/train_device", "text"),
+    ("CARD", "every evaluation ran on the `{}`.", SUMMARY, "/device", "text"),
+]
+
+#: a phrase with several figures, each (file, pointer, format) or ("derived", name, format), in order
+ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
+    # README: the headline
+    ("README", "the test frames the two splits have in common: {}, {} and {} frames for the {} seeds.", [
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed/0/n", "int"),
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed/1/n", "int"),
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed/2/n", "int"),
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed", "lenword")]),
+    *[("README", f"| {label} | {{}}° ± {{}}° | {{}}° ± {{}}° | **{{}} ± {{}}** | {{}}, {{}}, {{}} |", [
+        (SUMMARY, f"/paired_leakage/{model}/shuffled_mae_deg/mean", "2f"),
+        (SUMMARY, f"/paired_leakage/{model}/shuffled_mae_deg/sd", "2f"),
+        (SUMMARY, f"/paired_leakage/{model}/blocked_mae_deg/mean", "2f"),
+        (SUMMARY, f"/paired_leakage/{model}/blocked_mae_deg/sd", "2f"),
+        (SUMMARY, f"/paired_leakage/{model}/ratio/mean", "2f"),
+        (SUMMARY, f"/paired_leakage/{model}/ratio/sd", "2f"),
+        *[(SUMMARY, f"/paired_leakage/{model}/per_seed/{i}/ratio", "2f") for i in range(3)]])
+      for label, model in (("SightlineNet", "sightlinenet"), ("PilotNet", "pilotnet"))],
+    # the defect
+    ("README", "SightlineNet trained on shuffled frames scores {}° ± {}° on its own test frames, and {}° ± {}° on "
+     "another day's drive", [
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/cross_mae_deg/sd", "2f")]),
+    ("README", "The blocked split's test score keeps its promise: {}° ± {}° on its test frames, {}° ± {}° on "
+     "another day.", [
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_mae_deg/sd", "2f")]),
+    ("README", "worse on another day than its blocked one ({}° ± {}° against {}° ± {}°), and neither beats always "
+     "steering straight there ({}°).", [
+        (SUMMARY, "/groups/pilotnet~1leaky/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/pilotnet~1leaky/cross_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_zero_mae_deg", "2f")]),
+    # how much better than straight
+    ("README", "on the {} rungs below it is off by {}°, {}°, {}° and {}°.", [
+        (SUMMARY, "/ladder/sightlinenet", "lenword"),
+        *[(SUMMARY, f"/ladder/sightlinenet/{i}/zero_mae_deg", "2f") for i in range(4)]]),
+    ("README", "| {} | {} shuffled test frames per seed | {}% ± {}% | {}% ± {}% | not trained |", [
+        (SUMMARY, "/ladder/sightlinenet/0/rung", "text"),
+        (RESULTS, "/split_sizes/leaky/test", "int,"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/pilotnet~1leaky/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1leaky/test_skill/sd", "pct0")]),
+    ("README", "| {} | {} test frames, at least {} frames from training | {}% ± {}% | {}% ± {}% | {}% ± {}% |", [
+        (SUMMARY, "/ladder/sightlinenet/1/rung", "text"),
+        (RESULTS, "/split_sizes/blocked/test", "int,"),
+        (LEAKAGE, "/gaps/blocked/test/min_frames", "int"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/test_skill/sd", "pct0")]),
+    ("README", "| {} | the last {} frames of the drive | {}% ± {}% | {}% ± {}% | not trained |", [
+        (SUMMARY, "/ladder/sightlinenet/2/rung", "text"),
+        (RESULTS, "/split_sizes/forward/test", "int,"),
+        (SUMMARY, "/groups/sightlinenet~1forward/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1forward/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/pilotnet~1forward/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1forward/test_skill/sd", "pct0")]),
+    ("README", "| {} | {} frames of drive2017, from frame {} on | {}% ± {}% | {}% ± {}% | {}% ± {}% |", [
+        (SUMMARY, "/ladder/sightlinenet/3/rung", "text"),
+        (RESULTS, "/baselines/cross_drive/n", "int,"),
+        (LEGACY, "/seen_first_frame", "int"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/sd", "pct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/sd", "pct0")]),
+    *[("README", "| {} | {}° | {}° ± {}° | {}° ± {}° | not trained |", [
+        (SUMMARY, f"/ladder/sightlinenet/{i}/rung", "text"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/zero_mae_deg", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/mae_deg/mean", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/mae_deg/sd", "2f"),
+        (SUMMARY, f"/ladder/pilotnet/{i}/mae_deg/mean", "2f"),
+        (SUMMARY, f"/ladder/pilotnet/{i}/mae_deg/sd", "2f")]) for i in (0, 2)],
+    *[("README", "| {} | {}° | {}° ± {}° | {}° ± {}° | {}° ± {}° |", [
+        (SUMMARY, f"/ladder/sightlinenet/{i}/rung", "text"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/zero_mae_deg", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/mae_deg/mean", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet/{i}/mae_deg/sd", "2f"),
+        (SUMMARY, f"/ladder/pilotnet/{i}/mae_deg/mean", "2f"),
+        (SUMMARY, f"/ladder/pilotnet/{i}/mae_deg/sd", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet-1f/{j}/mae_deg/mean", "2f"),
+        (SUMMARY, f"/ladder/sightlinenet-1f/{j}/mae_deg/sd", "2f")]) for i, j in ((1, 0), (3, 1))],
+    # two frames
+    ("README", "on the current frame alone, {} parameters against {}, is nearly as good on the blocked test frames "
+     "({}% ± {}% against {}% ± {}%), but only level with always steering straight on another day ({}% ± {}%), "
+     "where two frames reach {}% ± {}%.", [
+        (ONE_FRAME_RUN, "/n_params", "int,"),
+        (SHIPPED_RUN, "/n_params", "int,"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/sd", "pct0")]),
+    # the lookup table
+    ("README", "On the same {} paired frames of the first seed, it scores {}° when it searches the shuffled split's "
+     "training frames and {}° when it searches the blocked split's; always steering straight scores {}° on those "
+     "frames.", [
+        (LEAKAGE, "/paired/n", "int"),
+        (LEAKAGE, "/memoriser/leaky/mae_deg", "2f"),
+        (LEAKAGE, "/memoriser/blocked/mae_deg", "2f"),
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed/0/zero_mae_deg", "2f")]),
+    ("README", "the most similar training frame is a median of {} frame away; under the blocked split, {} frames "
+     "away.", [
+        (LEAKAGE, "/memoriser/leaky/median_gap_frames", "int"),
+        (LEAKAGE, "/memoriser/blocked/median_gap_frames", "int,")]),
+    *[("README", "| {} ({}°) | {} | {} ms | {}° | {} | {} s | {}° |", [
+        (LEAKAGE, f"/pairs/{i}/frame", "int,"),
+        (LEAKAGE, f"/pairs/{i}/angle_deg", "2f"),
+        (LEAKAGE, f"/pairs/{i}/leaky/nn_frame", "int,"),
+        (LEAKAGE, f"/pairs/{i}/leaky/gap_s", "ms0"),
+        (LEAKAGE, f"/pairs/{i}/leaky/nn_angle_deg", "2f"),
+        (LEAKAGE, f"/pairs/{i}/blocked/nn_frame", "int,"),
+        (LEAKAGE, f"/pairs/{i}/blocked/gap_s", "1f,"),
+        (LEAKAGE, f"/pairs/{i}/blocked/nn_angle_deg", "2f")]) for i in range(6)],
+    # the baselines
+    ("README", "| predictor | blocked test frames ({}) | another day ({} frames) |", [
+        (RESULTS, "/baselines/test/n", "int,"),
+        (RESULTS, "/baselines/cross_drive/n", "int,")]),
+    ("README", "| SightlineNet, the shipped run | {}° | {}° |", [
+        (RESULTS, "/baselines/test/model/mae_deg", "2f"),
+        (RESULTS, "/baselines/cross_drive/model/mae_deg", "2f")]),
+    *[("README", f"| {label} | {{}}° | {{}}° |", [
+        (RESULTS, f"/baselines/test/baselines/{key}/mae_deg", "2f"),
+        (RESULTS, f"/baselines/cross_drive/baselines/{key}/mae_deg", "2f")])
+      for label, key in (("always steering straight", "zero"), ("always the training mean", "mean"),
+                         ("oracle: the human's angle one frame earlier", "zoh"),
+                         ("oracle: a straight line through the human's two previous angles", "extrap"))],
+    # the regimes
+    ("README", "(SightlineNet seed {}, PilotNet seed {}, the one-frame SightlineNet seed {}).", [
+        (RESULTS, "/regimes/models/sightlinenet/seed", "int"),
+        (RESULTS, "/regimes/models/pilotnet/seed", "int"),
+        (RESULTS, "/regimes/models/sightlinenet-1f/seed", "int")]),
+    *[("README", template, [
+        *bins,
+        (RESULTS, f"/regimes/zero/{regime}/n", "int,"),
+        *[(RESULTS, f"/regimes/models/{model}/regimes/{regime}/mae_deg", "2f")
+          for model in ("sightlinenet", "pilotnet", "sightlinenet-1f")],
+        (RESULTS, f"/regimes/zero/{regime}/mae_deg", "2f")])
+      for template, regime, bins in (
+          ("| straight, under {}° either way | {} | {}° | {}° | {}° | {}° |", "straight",
+           [(RESULTS, "/cutoffs/regime_bins_deg/0", "g")]),
+          ("| gentle, {}° to {}° | {} | {}° | {}° | {}° | {}° |", "gentle",
+           [(RESULTS, "/cutoffs/regime_bins_deg/0", "g"), (RESULTS, "/cutoffs/regime_bins_deg/1", "g")]),
+          ("| sharp, {}° or more | {} | {}° | {}° | {}° | {}° |", "sharp",
+           [(RESULTS, "/cutoffs/regime_bins_deg/1", "g")]))],
+    ("README", "| the three weighted equally | | {}° | {}° | {}° | {}° |", [
+        *[(RESULTS, f"/regimes/models/{model}/regimes/balanced_mae_deg", "2f")
+          for model in ("sightlinenet", "pilotnet", "sightlinenet-1f")],
+        (RESULTS, "/regimes/zero/balanced_mae_deg", "2f")]),
+    # the standard-recipe PilotNet
+    ("README", "| its own training drive, drive2017 from frame {} on | {} | {}° | {}° |", [
+        (LEGACY, "/seen_first_frame", "int"),
+        (LEGACY, "/eval/drive2017_all_seen/model/n", "int,"),
+        (LEGACY, "/eval/drive2017_all_seen/model/mae_deg", "2f"),
+        (LEGACY, "/eval/drive2017_all_seen/zero_mae_deg", "2f")]),
+    *[("README", f"| drive2018, {label} | {{}} | {{}}° | {{}}° |", [
+        (LEGACY, f"/eval/{key}/model/n", "int,"),
+        (LEGACY, f"/eval/{key}/model/mae_deg", "2f"),
+        (LEGACY, f"/eval/{key}/zero_mae_deg", "2f")])
+      for label, key in (("the blocked test frames", "drive2018_blocked_test"),
+                         ("the later-in-the-drive test frames", "drive2018_forward_test"))],
+    ("README", "PilotNet trained by Sightline's recipe on the blocked split scores {}° ± {}°.", [
+        (SUMMARY, "/groups/pilotnet~1blocked/test_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/pilotnet~1blocked/test_mae_deg/sd", "2f")]),
+    ("README", "its largest prediction is {}°, while {} labels in drive2018 turn the wheel past 180°.", [
+        (LEGACY, "/atan_cap/max_abs_pred_deg", "1f"),
+        (LEGACY, "/atan_cap/labels_beyond_180/drive2018/n", "int")]),
+    ("README", "Once every prediction is made, {} of them are computed again by an independent NumPy "
+     "implementation of the TensorFlow graph; the largest difference is {}°.", [
+        (LEGACY, "/port_parity/frames", "int"),
+        (LEGACY, "/port_parity/max_abs_diff_deg", "e1")]),
+    # from PyTorch to the browser
+    *[("README", f"| `{name}` | `{{}}` | {{}} bytes | {{}} | {{}}° (gate {{}}°) | {{}} (gate {{}}) |", [
+        (EXPORT, f"/models/{key}/run", "text"),
+        (EXPORT, f"/models/{key}/bytes", "int,"),
+        (EXPORT, f"/models/{key}/parity/frames", "int"),
+        (EXPORT, f"/models/{key}/parity/max_angle_diff_deg", "e1"),
+        (EXPORT, f"/models/{key}/parity/angle_tolerance_deg", "g"),
+        (EXPORT, f"/models/{key}/parity/max_saliency_diff", "e1"),
+        (EXPORT, f"/models/{key}/parity/saliency_tolerance", "g")])
+      for name, key in (("sightline.onnx", "sightline"), ("sightline-shuffled.onnx", "shuffled"))],
+    # how it works
+    ("README", "It has {} parameters; PilotNet has {}.", [
+        (SHIPPED_RUN, "/n_params", "int,"),
+        (PILOTNET_RUN, "/n_params", "int,")]),
+    ("README", "The first {} frames of a sequence have no history: evaluation starts at frame {},", [
+        (LEGACY, "/seen_first_frame", "word"),
+        (LEGACY, "/seen_first_frame", "int")]),
+    ("README", "AdamW at a learning rate of {} on a {}-epoch cosine schedule, weight decay {} and batches of {}.", [
+        (SUMMARY, "/train_config/lr", "g"),
+        (SUMMARY, "/train_config/epochs", "int"),
+        (SUMMARY, "/train_config/weight_decay", "g"),
+        (SUMMARY, "/train_config/batch_size", "int")]),
+    ("README", "PilotNet gets the lighter {} augmentation and dropout {}.", [
+        (SUMMARY, "/train_config/models/pilotnet/augment", "text"),
+        (SUMMARY, "/train_config/models/pilotnet/dropout", "g")]),
+    # the protocols
+    ("README", "Every run trains on drive2018: {} frames, {} minutes, a timestamp on every frame.", [
+        (SUMMARY, "/drives/drive2018/frames", "int,"),
+        (RESULTS, "/drive_profile/drives/drive2018/duration_s", "min1")]),
+    ("README", "labels have {} single-frame sensor dropouts, a logged zero between two large steering angles of the "
+     "same sign, repaired by interpolating their neighbours ({} in drive2017).", [
+        (SUMMARY, "/drives/drive2018/repaired_labels", "int"),
+        (SUMMARY, "/drives/drive2017/repaired_labels", "int")]),
+    ("README", "then deal {}% to training, {}% to validation and {}% to test: {}, {} and {} frames. {}% of the test "
+     "frames sit within one frame of a training frame.", [
+        (RESULTS, "/split_rules/leaky/train_frac", "pct0"),
+        (RESULTS, "/split_rules/leaky/val_frac", "pct0"),
+        (RESULTS, "/split_rules/leaky/test_frac", "pct0"),
+        (RESULTS, "/split_sizes/leaky/train", "int,"),
+        (RESULTS, "/split_sizes/leaky/val", "int,"),
+        (RESULTS, "/split_sizes/leaky/test", "int,"),
+        (LEAKAGE, "/gaps/leaky/test/frac_within_1", "pct1")]),
+    ("README", "cut the drive into blocks of {} frames, dealt by the repeating pattern `{}` (T train, V validation, "
+     "E test), and drop {} frames on each side", [
+        (RESULTS, "/split_rules/blocked/block", "int,"),
+        (RESULTS, "/split_rules/blocked/pattern", "text"),
+        (RESULTS, "/split_rules/blocked/firewall", "int")]),
+    ("README", "Every evaluation frame is then at least {} frames from a training frame, twice the firewall plus one, "
+     "about {} s of driving, while both sides of the split see the same mix of roads: {} training, {} validation "
+     "and {} test frames, {} dropped.", [
+        (LEAKAGE, "/gaps/blocked/test/min_frames", "int"),
+        ("derived", "firewall_s", "1f"),
+        (RESULTS, "/split_sizes/blocked/train", "int,"),
+        (RESULTS, "/split_sizes/blocked/val", "int,"),
+        (RESULTS, "/split_sizes/blocked/test", "int,"),
+        (RESULTS, "/split_sizes/blocked/dropped", "int,")]),
+    ("README", "train on the first {}% of the drive, validate on the next {}% and test on the rest, with the same "
+     "{}-frame firewall at both boundaries: {}, {} and {} frames, {} dropped.", [
+        (RESULTS, "/split_rules/forward/train_frac", "pct0"),
+        (RESULTS, "/split_rules/forward/val_frac", "pct0"),
+        (RESULTS, "/split_rules/forward/firewall", "int"),
+        (RESULTS, "/split_sizes/forward/train", "int,"),
+        (RESULTS, "/split_sizes/forward/val", "int,"),
+        (RESULTS, "/split_sizes/forward/test", "int,"),
+        (RESULTS, "/split_sizes/forward/dropped", "int,")]),
+    ("README", "{} of its {} frames, every frame from frame {} on, since the first {} have no history.", [
+        (RESULTS, "/baselines/cross_drive/n", "int,"),
+        (SUMMARY, "/drives/drive2017/frames", "int,"),
+        (LEGACY, "/seen_first_frame", "int"),
+        (LEGACY, "/seen_first_frame", "word")]),
+    ("README", "compared on identical frames: {}, {} and {} frames for the {} seeds.", [
+        *[(SUMMARY, f"/paired_leakage/sightlinenet/per_seed/{i}/n", "int") for i in range(3)],
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed", "lenword")]),
+    # get the data
+    ("README", "frame count ({} and {} labelled frames)", [
+        (SUMMARY, "/drives/drive2018/frames", "int,"),
+        (SUMMARY, "/drives/drive2017/frames", "int,")]),
+    # every command: the training run as its report records its split
+    ("README", "--firewall {} --block {}", [
+        (SHIPPED_RUN, "/splits/firewall", "int"),
+        (SHIPPED_RUN, "/splits/block", "int")]),
+    ("README", "--start {} --frames {} --out demo.mp4", [
+        (EXPORT, "/clips/c2018/first_frame", "int"),
+        (EXPORT, "/clips/c2018/n", "int")]),
+    # limitations
+    ("README", "PilotNet is worse than always straight later in the drive ({}% ± {}%) and on another day ({}% ± {}%); "
+     "the one-frame SightlineNet is level with it on another day ({}% ± {}%).", [
+        (SUMMARY, "/groups/pilotnet~1forward/test_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1forward/test_skill/sd", "pct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/pilotnet~1blocked/cross_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/sd", "pct0")]),
+    ("README", "On frames steered {}° or more, the shipped model is off by {}°.", [
+        (RESULTS, "/cutoffs/regime_bins_deg/1", "g"),
+        (RESULTS, "/regimes/models/sightlinenet/regimes/sharp/mae_deg", "2f")]),
+    ("README", "The headline ratio rests on {}, {} and {} frames of one drive and on {} seeds, and SightlineNet's "
+     "ratio varies from seed to seed ({} ± {}).", [
+        *[(SUMMARY, f"/paired_leakage/sightlinenet/per_seed/{i}/n", "int") for i in range(3)],
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed", "lenword"),
+        (SUMMARY, "/paired_leakage/sightlinenet/ratio/mean", "2f"),
+        (SUMMARY, "/paired_leakage/sightlinenet/ratio/sd", "2f")]),
+    ("README", "trained on {}% of the 2018 clip's frames, and {}% of them sit within one frame of a frame it trained "
+     "on, so on this clip it looks better than the shipped model ({}° against {}° on this clip). On the 2017 clip, "
+     "which neither model trained on, the twin is off by {}° on this clip and the shipped model by {}°.", [
+        (EXPORT, "/clips/c2018/twin_trained_frac", "pct0"),
+        (EXPORT, "/clips/c2018/twin_neighbour_frac", "pct0"),
+        (EXPORT, "/clips/c2018/clip_mae_deg/shuffled", "2f"),
+        (EXPORT, "/clips/c2018/clip_mae_deg/sightline", "2f"),
+        (EXPORT, "/clips/c2017/clip_mae_deg/shuffled", "2f"),
+        (EXPORT, "/clips/c2017/clip_mae_deg/sightline", "2f")]),
+    # the model card: details
+    ("CARD", "| format | ONNX, opset {}, float32, {} bytes; its metadata names the frame lags (`{}`) and the run |", [
+        (EXPORT, "/models/sightline/opset", "int"),
+        (EXPORT, "/models/sightline/bytes", "int,"),
+        (EXPORT, "/models/sightline/frame_lags", "json")]),
+    ("CARD", "onnxruntime reproduced PyTorch on {} frame stacks, every clip frame and self-test input the page uses: "
+     "the largest angle difference was {}° (gate {}°) and the largest saliency difference {} (gate {}).", [
+        (EXPORT, "/models/sightline/parity/frames", "int"),
+        (EXPORT, "/models/sightline/parity/max_angle_diff_deg", "e1"),
+        (EXPORT, "/models/sightline/parity/angle_tolerance_deg", "g"),
+        (EXPORT, "/models/sightline/parity/max_saliency_diff", "e1"),
+        (EXPORT, "/models/sightline/parity/saliency_tolerance", "g")]),
+    # training data
+    ("CARD", "MIT License): {} frames over {} minutes from one dashcam, a timestamp on every frame, a median {} ms "
+     "apart.", [
+        (SUMMARY, "/drives/drive2018/frames", "int,"),
+        (RESULTS, "/drive_profile/drives/drive2018/duration_s", "min1"),
+        (SUMMARY, "/drives/drive2018/median_dt_s", "ms1")]),
+    ("CARD", "The drive is cut into blocks of {} frames dealt by the repeating pattern `{}` (T train, V validation, "
+     "E test), and {} frames are dropped on each side of every boundary between a training block and an evaluation "
+     "block, so every evaluation frame is at least {} frames from a training frame: {} training, {} validation and "
+     "{} test frames.", [
+        (RESULTS, "/split_rules/blocked/block", "int,"),
+        (RESULTS, "/split_rules/blocked/pattern", "text"),
+        (RESULTS, "/split_rules/blocked/firewall", "int"),
+        (LEAKAGE, "/gaps/blocked/test/min_frames", "int"),
+        (RESULTS, "/split_sizes/blocked/train", "int,"),
+        (RESULTS, "/split_sizes/blocked/val", "int,"),
+        (RESULTS, "/split_sizes/blocked/test", "int,")]),
+    ("CARD", "**Recipe**: {} epochs of AdamW on a cosine schedule from a learning rate of {}, weight decay {}, batches "
+     "of {}, a Huber loss on the angle, dropout {}, and {} augmentation", [
+        (SUMMARY, "/train_config/epochs", "int"),
+        (SUMMARY, "/train_config/lr", "g"),
+        (SUMMARY, "/train_config/weight_decay", "g"),
+        (SUMMARY, "/train_config/batch_size", "int"),
+        (SUMMARY, "/train_config/models/sightlinenet/dropout", "g"),
+        (SUMMARY, "/train_config/models/sightlinenet/augment", "text")]),
+    ("CARD", "**Seed choice**: {} seeds were trained; the one with the lowest validation error ships (seed {}, {}°).", [
+        (SUMMARY, "/groups/sightlinenet~1blocked/seeds", "lenword"),
+        (SUMMARY, "/shipped/seed", "int"),
+        ("derived", "shipped_val", "2f")]),
+    # evaluation
+    ("CARD", "*shuffled* (frames shuffled, then dealt {}%, {}% and {}%)", [
+        (RESULTS, "/split_rules/leaky/train_frac", "pct0"),
+        (RESULTS, "/split_rules/leaky/val_frac", "pct0"),
+        (RESULTS, "/split_rules/leaky/test_frac", "pct0")]),
+    ("CARD", "have in common, {}, {} and {} frames for the {} seeds,", [
+        *[(SUMMARY, f"/paired_leakage/sightlinenet/per_seed/{i}/n", "int") for i in range(3)],
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed", "lenword")]),
+    # results
+    ("CARD", "the model trained on the blocked split is off by {} ± {} times as much as the one trained on shuffled "
+     "frames (PilotNet: {} ± {}).", [
+        (SUMMARY, "/paired_leakage/sightlinenet/ratio/mean", "2f"),
+        (SUMMARY, "/paired_leakage/sightlinenet/ratio/sd", "2f"),
+        (SUMMARY, "/paired_leakage/pilotnet/ratio/mean", "2f"),
+        (SUMMARY, "/paired_leakage/pilotnet/ratio/sd", "2f")]),
+    ("CARD", "**Blocked test frames**: {}° ± {}°, where always steering straight scores {}°: {}% ± {}% better than "
+     "always straight.", [
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_zero_mae_deg", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/mean", "pct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/test_skill/sd", "pct0")]),
+    ("CARD", "**Another day**: {}° ± {}°, where always steering straight scores {}°: {}% ± {}% better.", [
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_zero_mae_deg", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/mean", "pct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/sd", "pct0")]),
+    ("CARD", "**The shipped run alone**: {}° on the blocked test frames and {}° on another day.", [
+        (RESULTS, "/baselines/test/model/mae_deg", "2f"),
+        (RESULTS, "/baselines/cross_drive/model/mae_deg", "2f")]),
+    ("CARD", "**By steering regime**, shipped run, blocked test frames: {}° on nearly straight frames, where always "
+     "steering straight scores {}° and wins; {}° on gentle turns ({}°); {}° on sharp ones ({}°).", [
+        (RESULTS, "/regimes/models/sightlinenet/regimes/straight/mae_deg", "2f"),
+        (RESULTS, "/regimes/zero/straight/mae_deg", "2f"),
+        (RESULTS, "/regimes/models/sightlinenet/regimes/gentle/mae_deg", "2f"),
+        (RESULTS, "/regimes/zero/gentle/mae_deg", "2f"),
+        (RESULTS, "/regimes/models/sightlinenet/regimes/sharp/mae_deg", "2f"),
+        (RESULTS, "/regimes/zero/sharp/mae_deg", "2f")]),
+    ("CARD", "SightlineNet scores {}° ± {}° on its own shuffled test frames and {}° ± {}° on another day.", [
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/test_mae_deg/sd", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/cross_mae_deg/mean", "2f"),
+        (SUMMARY, "/groups/sightlinenet~1leaky/cross_mae_deg/sd", "2f")]),
+    # the multi-frame caveat
+    ("CARD", "The first {} frames of any sequence have no history: evaluation starts at frame {}, and the page's "
+     "clips carry the {} frames before their first scored frame.", [
+        (LEGACY, "/seen_first_frame", "word"),
+        (LEGACY, "/seen_first_frame", "int"),
+        (EXPORT, "/clips/c2018/lead_in", "word")]),
+    # limitations
+    ("CARD", "On frames steered {}° or more, the shipped run is still off by {}°.", [
+        (RESULTS, "/cutoffs/regime_bins_deg/1", "g"),
+        (RESULTS, "/regimes/models/sightlinenet/regimes/sharp/mae_deg", "2f")]),
+    ("CARD", "only level with always steering straight on another day ({}% ± {}%, against {}% ± {}% with two "
+     "frames)", [
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill/sd", "pct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/mean", "spct0"),
+        (SUMMARY, "/groups/sightlinenet~1blocked/cross_skill/sd", "pct0")]),
+    ("CARD", "The paired set is small ({}, {} and {} frames, {} seeds).", [
+        *[(SUMMARY, f"/paired_leakage/sightlinenet/per_seed/{i}/n", "int") for i in range(3)],
+        (SUMMARY, "/paired_leakage/sightlinenet/per_seed", "lenword")]),
+    ("CARD", "the twin trained on {}% of the frames and {}% sit within one frame of a frame it trained on, so it looks "
+     "better there than the shipped model ({}° against {}° on this clip).", [
+        (EXPORT, "/clips/c2018/twin_trained_frac", "pct0"),
+        (EXPORT, "/clips/c2018/twin_neighbour_frac", "pct0"),
+        (EXPORT, "/clips/c2018/clip_mae_deg/shuffled", "2f"),
+        (EXPORT, "/clips/c2018/clip_mae_deg/sightline", "2f")]),
+    # versions
+    ("CARD", "Training and evaluation: Python {}, PyTorch {}, NumPy {}.", [
+        (RESULTS, "/versions/python", "text"),
+        (RESULTS, "/versions/torch", "text"),
+        (RESULTS, "/versions/numpy", "text")]),
+    ("CARD", "Export: onnx {} and onnxruntime {}.", [
+        (EXPORT, "/versions/onnx", "text"),
+        (EXPORT, "/versions/onnxruntime", "text")]),
+    ("CARD", "Code: trained at commit `{}`, evaluated at commit `{}`.", [
+        (SUMMARY, "/code_versions/train/0", "commit"),
+        (SUMMARY, "/code_versions/eval/0", "commit")]),
+]
+
+
+# --- the figures the documents compute ---------------------------------------------------------
+
+def _promise(r: Reader) -> float:
+    """How many times its own test score the shuffled-trained SightlineNet's another-day error is."""
+    group = r.get(SUMMARY, "/groups/sightlinenet~1leaky")
+    return group["cross_mae_deg"]["mean"] / group["test_mae_deg"]["mean"]
+
+
+def _lag_s(r: Reader) -> float:
+    """How far back the history frame is on drive2018: the lag in frames times the median interval."""
+    return r.get(EXPORT, "/models/sightline/frame_lags/0") * r.get(SUMMARY, "/drives/drive2018/median_dt_s")
+
+
+def _firewall_s(r: Reader) -> float:
+    """The closest an evaluation frame comes to training under the blocked split, in seconds of driving
+    at the median frame interval: an approximation, which is why the README says "about"."""
+    return r.get(LEAKAGE, "/gaps/blocked/test/min_frames") * r.get(SUMMARY, "/drives/drive2018/median_dt_s")
+
+
+def _pilotnet_forward(r: Reader) -> list[float]:
+    return r.get(SUMMARY, "/groups/pilotnet~1forward/test_skill/values")
+
+
+def _shipped_val(r: Reader) -> float:
+    """The shipped seed's validation error: the figure the choice was made on."""
+    group = r.get(SUMMARY, "/groups/sightlinenet~1blocked")
+    return group["val_mae_deg"]["values"][group["seeds"].index(r.get(SUMMARY, "/shipped/seed"))]
+
+
+DERIVED: dict[str, Callable[[Reader], float]] = {
+    "promise": _promise,
+    "lag_s": _lag_s,
+    "firewall_s": _firewall_s,
+    "pilotnet_forward_best": lambda r: max(_pilotnet_forward(r)),
+    "pilotnet_forward_worst": lambda r: min(_pilotnet_forward(r)),
+    "shipped_val": _shipped_val,
+}
+
+
+# --- the sentences whose words rest on the numbers ---------------------------------------------
+
+def _per_seed(r: Reader, group: str, stat: str) -> list[float]:
+    return r.get(SUMMARY, f"/groups/{group}/{stat}/values")
+
+
+def _about_three(r: Reader) -> bool:
+    """The words "about three times": both networks' ratios are three to the nearest half."""
+    ratios = [r.get(SUMMARY, f"/paired_leakage/{model}/ratio/mean") for model in ("sightlinenet", "pilotnet")]
+    return all(round(2 * ratio) / 2 == 3 for ratio in ratios)
+
+
+def _shuffled_sightlinenet_ahead_every_seed(r: Reader) -> bool:
+    shuffled = _per_seed(r, "sightlinenet~1leaky", "cross_mae_deg")
+    blocked = _per_seed(r, "sightlinenet~1blocked", "cross_mae_deg")
+    same_seeds = r.get(SUMMARY, "/groups/sightlinenet~1leaky/seeds") == r.get(SUMMARY, "/groups/sightlinenet~1blocked/seeds")
+    return same_seeds and all(s < b for s, b in zip(shuffled, blocked))
+
+
+def _pilotnet_shuffled_behind_and_neither_beats_straight(r: Reader) -> bool:
+    shuffled = _per_seed(r, "pilotnet~1leaky", "cross_mae_deg")
+    blocked = _per_seed(r, "pilotnet~1blocked", "cross_mae_deg")
+    straight = r.get(SUMMARY, "/groups/pilotnet~1blocked/cross_zero_mae_deg")
+    return all(s > b for s, b in zip(shuffled, blocked)) and min(shuffled + blocked) > straight
+
+
+def _sightlinenet_ahead_on_every_honest_rung(r: Reader) -> bool:
+    return all(skill > 0 for stat_group in (("sightlinenet~1blocked", "test_skill"),
+                                            ("sightlinenet~1forward", "test_skill"),
+                                            ("sightlinenet~1blocked", "cross_skill"))
+               for skill in _per_seed(r, *stat_group))
+
+
+def _pilotnet_behind_later_and_another_day(r: Reader) -> bool:
+    return r.get(SUMMARY, "/groups/pilotnet~1forward/test_skill/mean") < 0 \
+        and r.get(SUMMARY, "/groups/pilotnet~1blocked/cross_skill/mean") < 0
+
+
+def _one_frame_level_on_another_day(r: Reader) -> bool:
+    """Level: the mean is within one standard deviation of zero."""
+    skill = r.get(SUMMARY, "/groups/sightlinenet-1f~1blocked/cross_skill")
+    return abs(skill["mean"]) < skill["sd"]
+
+
+def _one_frame_nearly_as_good_on_blocked(r: Reader) -> bool:
+    one = r.get(SUMMARY, "/groups/sightlinenet-1f~1blocked/test_skill/mean")
+    two = r.get(SUMMARY, "/groups/sightlinenet~1blocked/test_skill/mean")
+    return 0 < one < two and two - one < 0.1
+
+
+def _straight_wins_on_straight_road(r: Reader) -> bool:
+    regimes = r.get(RESULTS, "/regimes")
+    return all(regimes["zero"]["straight"]["mae_deg"] < m["regimes"]["straight"]["mae_deg"]
+               for m in regimes["models"].values())
+
+
+def _blocked_promise_kept(r: Reader) -> bool:
+    group = r.get(SUMMARY, "/groups/sightlinenet~1blocked")
+    return abs(group["cross_mae_deg"]["mean"] / group["test_mae_deg"]["mean"] - 1) < 0.1
+
+
+def _legacy_good_at_home_worse_than_straight_on_2018(r: Reader) -> bool:
+    scores = r.get(LEGACY, "/eval")
+    home = scores["drive2017_all_seen"]
+    return home["model"]["mae_deg"] < home["zero_mae_deg"] and all(
+        scores[key]["model"]["mae_deg"] > scores[key]["zero_mae_deg"]
+        for key in ("drive2018_blocked_test", "drive2018_forward_test"))
+
+
+def _legacy_under_the_cap(r: Reader) -> bool:
+    from sightline.legacy import CAP_DEG
+    cap = r.get(LEGACY, "/atan_cap")
+    return cap["max_abs_pred_deg"] < CAP_DEG and cap["labels_beyond_180"]["drive2018"]["n"] > 0
+
+
+def _pairs(r: Reader) -> list[dict]:
+    return r.get(LEAKAGE, "/pairs")
+
+
+def _shuffled_neighbour_next_door(r: Reader) -> bool:
+    return all(p["leaky"]["gap_frames"] == 1 for p in _pairs(r))
+
+
+def _shuffled_neighbour_same_angle(r: Reader) -> bool:
+    """Nearly the same angle: within the regimes' straight band of each other."""
+    band = r.get(RESULTS, "/cutoffs/regime_bins_deg/0")
+    return all(abs(p["leaky"]["nn_angle_deg"] - p["angle_deg"]) < band for p in _pairs(r))
+
+
+def _blocked_neighbour_minutes_away(r: Reader) -> bool:
+    return all(p["blocked"]["gap_s"] >= 60 for p in _pairs(r))
+
+
+def _later_rung_calmer(r: Reader) -> bool:
+    return r.get(SUMMARY, "/groups/sightlinenet~1forward/test_zero_mae_deg") \
+        < r.get(SUMMARY, "/groups/sightlinenet~1blocked/test_zero_mae_deg")
+
+
+def _firewall_arithmetic(r: Reader) -> bool:
+    firewall = r.get(LEAKAGE, "/splits/firewall")
+    gaps = r.get(LEAKAGE, "/gaps/blocked")
+    return gaps["test"]["min_frames"] == gaps["val"]["min_frames"] == 2 * firewall + 1
+
+
+def _everything_on_the_cpu(r: Reader) -> bool:
+    return r.get(SUMMARY, "/device") == r.get(LEGACY, "/device") == r.get(EXPORT, "/device") == "cpu"
+
+
+def _the_matrix(r: Reader) -> bool:
+    expected = {f"{m}/{p}" for m in ("pilotnet", "sightlinenet") for p in ("leaky", "blocked", "forward")}
+    return set(r.get(SUMMARY, "/groups")) == expected | {"sightlinenet-1f/blocked"} and all(
+        len(g["seeds"]) == len(r.get(SUMMARY, "/groups/sightlinenet~1blocked/seeds"))
+        for g in r.get(SUMMARY, "/groups").values())
+
+
+def _ladder_rungs_line_up(r: Reader) -> bool:
+    ladder = r.get(SUMMARY, "/ladder")
+    rungs = [e["rung"] for e in ladder["sightlinenet"]]
+    return [e["rung"] for e in ladder["pilotnet"]] == rungs \
+        and [e["rung"] for e in ladder["sightlinenet-1f"]] == [rungs[1], rungs[3]]
+
+
+def _shipped_chosen_on_validation(r: Reader) -> bool:
+    shipped = r.get(SUMMARY, "/shipped")
+    group = r.get(SUMMARY, "/groups/sightlinenet~1blocked")
+    values = group["val_mae_deg"]["values"]
+    return shipped["selected_by"] == "val_mae_deg" and shipped["run"] == r.get(RESULTS, "/baselines/run") \
+        and group["seeds"][values.index(min(values))] == shipped["seed"] \
+        and r.get(SHIPPED_RUN, "/run") == shipped["run"] == r.get(EXPORT, "/models/sightline/run")
+
+
+def _twin_on_the_clips(r: Reader) -> bool:
+    clips = r.get(EXPORT, "/clips")
+    return clips["c2018"]["clip_mae_deg"]["shuffled"] < clips["c2018"]["clip_mae_deg"]["sightline"] \
+        and clips["c2017"]["twin_trained_frac"] == 0 and clips["c2017"]["drive"] == "drive2017" \
+        and r.get(SUMMARY, "/twin/run") == r.get(EXPORT, "/models/shuffled/run")
+
+
+def _parity_on_every_page_input(r: Reader) -> bool:
+    clips = r.get(EXPORT, "/clips")
+    stacks = sum(clip["n"] for clip in clips.values()) + len(r.get(EXPORT, "/selftest/frames"))
+    return all(model["parity"]["frames"] == stacks for model in r.get(EXPORT, "/models").values())
+
+
+def _trained_on_mps(r: Reader) -> bool:
+    return {json.loads(path.read_text())["train_device"]
+            for path in (r.root / "reports" / "runs").glob("*.json")} == {"mps"}
+
+
+def _one_commit_each(r: Reader) -> bool:
+    versions = r.get(SUMMARY, "/code_versions")
+    return len(versions["train"]) == len(versions["eval"]) == 1
+
+
+def _first_seed_is_the_leakage_seed(r: Reader) -> bool:
+    first = r.get(SUMMARY, "/paired_leakage/sightlinenet/per_seed/0")
+    return first["seed"] == r.get(LEAKAGE, "/seed") == min(r.get(SUMMARY, "/groups/sightlinenet~1blocked/seeds")) \
+        and first["n"] == r.get(LEAKAGE, "/paired/n")
+
+
+#: (document, phrase that must stand in it, the condition on the reports that makes it true)
+CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
+    ("README", "make a steering model look about three times better than it is", _about_three),
+    ("README", "makes the same kind of model look about three times better than it is on road it has not seen "
+     "nearby", _about_three),
+    ("README", "is off by about three times as much", _about_three),
+    ("README", "On another day it is the more accurate of the two SightlineNets, in every seed.",
+     _shuffled_sightlinenet_ahead_every_seed),
+    ("README", "PilotNet differs: its model trained on shuffled frames is worse on another day than its blocked one",
+     _pilotnet_shuffled_behind_and_neither_beats_straight),
+    ("README", "and neither beats always steering straight there", _pilotnet_shuffled_behind_and_neither_beats_straight),
+    ("README", "The blocked split's test score keeps its promise", _blocked_promise_kept),
+    ("README", "SightlineNet beats always steering straight on every honest rung, in every seed.",
+     _sightlinenet_ahead_on_every_honest_rung),
+    ("README", "PilotNet does not, later in the drive or on another day", _pilotnet_behind_later_and_another_day),
+    ("README", "is nearly as good on the blocked test frames", _one_frame_nearly_as_good_on_blocked),
+    ("README", "but only level with always steering straight on another day", _one_frame_level_on_another_day),
+    ("README", "the one-frame SightlineNet is level with it on another day", _one_frame_level_on_another_day),
+    ("README", "On straight road, always steering straight wins", _straight_wins_on_straight_road),
+    ("README", "Good on its own training drive, worse than always steering straight on the 2018 drive.",
+     _legacy_good_at_home_worse_than_straight_on_2018),
+    ("README", "The arctangent head is a ceiling as well", _legacy_under_the_cap),
+    ("README", "the nearest-looking training frame is always the frame next door", _shuffled_neighbour_next_door),
+    ("README", "steering at nearly the same angle", _shuffled_neighbour_same_angle),
+    ("README", "Under the blocked split it is minutes away", _blocked_neighbour_minutes_away),
+    ("README", "the end of the drive is calmer than its middle", _later_rung_calmer),
+    ("README", "twice the firewall plus one", _firewall_arithmetic),
+    ("README", "Every published number comes from the CPU.", _everything_on_the_cpu),
+    ("README", "The 21 runs are PilotNet and SightlineNet under the three splits and the one-frame SightlineNet "
+     "under the blocked split", _the_matrix),
+    ("README", "| rung | always straight | SightlineNet | PilotNet | SightlineNet, one frame |", _ladder_rungs_line_up),
+    ("README", "the blocked-split SightlineNet of seed 2 (chosen on validation error)", _shipped_chosen_on_validation),
+    ("README", "so on this clip it looks better than the shipped model", _twin_on_the_clips),
+    ("README", "On the 2017 clip, which neither model trained on", _twin_on_the_clips),
+    ("README", "every clip frame and self-test input the page uses", _parity_on_every_page_input),
+    ("README", "(PyTorch's MPS backend)", _trained_on_mps),
+    ("README", "paired frames of the first seed", _first_seed_is_the_leakage_seed),
+    ("CARD", "look about three times better than it is on road it has not seen nearby", _about_three),
+    ("CARD", "overstates accuracy by about three times here", _about_three),
+    ("CARD", "on another day it is the more accurate of the two, in every seed",
+     _shuffled_sightlinenet_ahead_every_seed),
+    ("CARD", "where always steering straight scores", _straight_wins_on_straight_road),
+    ("CARD", "only level with always steering straight on another day", _one_frame_level_on_another_day),
+    ("CARD", "the one with the lowest validation error ships", _shipped_chosen_on_validation),
+    ("CARD", "every clip frame and self-test input the page uses", _parity_on_every_page_input),
+    ("CARD", "so it looks better there than the shipped model", _twin_on_the_clips),
+    ("CARD", "Training ran on an Apple GPU", _trained_on_mps),
+    ("CARD", "Code: trained at commit", _one_commit_each),
+]
+
+
+# --- the numbers that are not measurements -----------------------------------------------------
+
+def _camera(m: re.Match) -> bool:
+    from sightline.export.site_data import CAMERA_SIZE
+    return (int(m["w"]), int(m["h"])) == tuple(CAMERA_SIZE)
+
+
+def _crop(m: re.Match) -> bool:
+    from sightline.data.preprocess import CROP_BOTTOM
+    return int(m["rows"]) == CROP_BOTTOM
+
+
+def _input(m: re.Match) -> bool:
+    from sightline.data.preprocess import INPUT_HEIGHT, INPUT_WIDTH
+    from sightline.models import SHIPPED_LAGS
+    channels = m.groupdict().get("c")
+    return (int(m["h"]), int(m["w"])) == (INPUT_HEIGHT, INPUT_WIDTH) and (
+        channels is None or int(channels) == 3 * (1 + len(SHIPPED_LAGS)))
+
+
+def _one_angle(m: re.Match) -> bool:
+    from sightline.models import SightlineNet
+    return SightlineNet().regressor[-1].out_features == int(m["n"])
+
+
+def _huber(m: re.Match) -> bool:
+    from sightline.train import HUBER_SCALE_DEG
+    return float(m["deg"]) == HUBER_SCALE_DEG
+
+
+def _cap(m: re.Match) -> bool:
+    from sightline.legacy import CAP_DEG
+    return float(m["deg"]) == CAP_DEG
+
+
+def _python(m: re.Match) -> bool:
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    return f'requires-python = ">={m["v"]}"' in pyproject
+
+
+def _notebook(m: re.Match) -> bool:
+    return (REPO / "notebooks" / m[0]).is_file()
+
+
+#: (documents, pattern, why the numbers in its matches may be printed, a check on a match or None)
+ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None]] = [
+    (("README", "CARD"), r"(?P<w>\d+) × (?P<h>\d+) (?:pixels|frame)",
+     "the camera's frame size, the site builder's CAMERA_SIZE", _camera),
+    (("README", "CARD"), r"bottom (?P<rows>\d+) rows", "the crop, the preprocessing's CROP_BOTTOM", _crop),
+    (("README", "CARD"), r"resized to (?P<w>\d+) × (?P<h>\d+)", "the model's input size, the preprocessing's "
+     "INPUT_WIDTH and INPUT_HEIGHT", _input),
+    (("README",), r"(?P<h>\d+) × (?P<w>\d+) × (?P<c>\d+)", "the model's input array: the input size and three "
+     "channels for each frame the shipped model reads (SHIPPED_LAGS)", _input),
+    (("CARD",), r"\(N, (?P<h>\d+), (?P<w>\d+)(?:, (?P<c>\d+))?\)", "the graph's input and saliency shapes, from "
+     "the same constants", _input),
+    (("CARD",), r"\(N, (?P<n>\d+)\)", "the angle output's shape: one angle per frame stack", _one_angle),
+    (("CARD",), r"\[0, 1\]", "the saliency map's range: each map is scaled from its minimum to its maximum", None),
+    (("README",), r"units of (?P<deg>\d+)°", "the Huber loss's scale, the training code's HUBER_SCALE_DEG", _huber),
+    (("README",), r"past ±?(?P<deg>\d+)°", "the arctangent head's limit, the standard-recipe code's CAP_DEG", _cap),
+    (("README",), r"(?<![\d.])0°", "what always steering straight answers, by definition", None),
+    (("CARD",), r"\(0°\)", "what always steering straight answers, by definition", None),
+    (("README",), r"Python (?P<v>\d+\.\d+)(?= or newer|\+)", "the Python versions pyproject.toml accepts", _python),
+    (("README",), r"--parallel 3\b", "how many runs the matrix runner trains at once: how the matrix was run, "
+     "not a result", None),
+    (("README",), r"localhost:4173", "the port Vite's preview server listens on by default", None),
+    (("README",), r"\?selftest=1\b", "the switch that runs the page's self-test", None),
+    (("README",), r"\b0[12]-[a-z-]+\.ipynb", "the notebooks' file names", _notebook),
+    (("README",), r"from 24 to 64 minutes by its own history; the shipped run took 53 minutes",
+     "training times, summed from the epoch times in each run's history.json; the run folders are not part of "
+     "the repository, so no test can read them", None),
+    (("README",), r'"07/01/2018 Dataset"|"Dataset 1"', "the dataset page's own names for the two drives", None),
+    (("README", "CARD"), r"\b(?:2017|2018)(?= (?:drive|clip|demo clip)\b)", "a year naming a drive or its clip",
+     None),
+    (("README", "CARD"), r"Copyright \(c\) 2018 Sully Chen", "the dataset's copyright notice, from its LICENSE",
+     None),
+    (("README",), r"arXiv:\d{4}\.\d{5}|arxiv\.org/abs/\d{4}\.\d{5}", "references' arXiv identifiers", None),
+    (("README",), r"TensorFlow 1\b", "the framework's major version, part of its name", None),
+    (("README",), r"SHA-256", "the hash function's name", None),
+    (("README",), r"(?<![^ ])[1-4]\. \*\*(?=Two frames|One network|One graph, two answers|In the browser)",
+     "the numbered steps of How it works", None),
+]
+
+
+# --- matching -----------------------------------------------------------------------------------
+
+#: a number as a reader sees one: digits, with thousands commas, a decimal part or an exponent, standing
+#: on their own (not inside a word such as ``drive2018`` or ``s2``, nor a file name such as ``0.jpg``)
+NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)*(?:e[+-]?\d+)?(?![\w]|\.\w)")
+
+
+def _collapse(text: str) -> str:
+    """Runs of whitespace as one space, so a phrase the document wraps over two lines still matches."""
+    return re.sub(r"\s+", " ", text)
+
+
+def document(key: str) -> str:
+    path = REPO / DOCUMENTS[key]
+    assert path.is_file(), f"{DOCUMENTS[key]} is missing, so every check here would search nothing"
+    return _collapse(path.read_text(encoding="utf-8"))
+
+
+def phrase_pattern(phrase: str, figure: str) -> re.Pattern:
+    """The phrase with ``figure`` in place of its one ``{}``; the figure is a number of its own."""
+    before, sep, after = phrase.partition("{}")
+    assert sep and "{}" not in after, f"{phrase!r} needs exactly one {{}}"
+    return re.compile(re.escape(_collapse(before)) + r"(?<![\d.,])(" + re.escape(figure) + r")(?!\d)"
+                      + re.escape(_collapse(after)))
+
+
+@dataclass(frozen=True)
+class Check:
+    """One printed figure: where it stands, where its value comes from and how it is printed."""
+
+    doc: str
+    phrase: str
+    source: str
+    pointer: str
+    fmt: str
+
+    def number(self, r: Reader):
+        if self.source == "derived":
+            return DERIVED[self.pointer](r)
+        return FORMATS[self.fmt].number(r.get(self.source, self.pointer))
+
+    def figure(self, r: Reader) -> str:
+        return FORMATS[self.fmt].show(self.number(r))
+
+    def pattern(self, r: Reader, figure: str | None = None) -> re.Pattern:
+        return phrase_pattern(self.phrase, self.figure(r) if figure is None else figure)
+
+    @property
+    def label(self) -> str:
+        return f"{self.doc}|{self.pointer}|{self.phrase[:40]}"
+
+
+def _fill(template: str, figures: list[str], keep: int) -> str:
+    """``template`` with every ``{}`` but the ``keep``-th replaced by its figure."""
+    parts = template.split("{}")
+    assert len(parts) == len(figures) + 1, f"{template!r} has {len(parts) - 1} places for {len(figures)} figures"
+    out = parts[0]
+    for i, figure in enumerate(figures):
+        out += ("{}" if i == keep else figure) + parts[i + 1]
+    return out
+
+
+def checks(r: Reader) -> list[Check]:
+    """Every printed figure, ``ROWS`` expanded into one check per figure."""
+    out = [Check(*pin) for pin in PINS]
+    for doc, template, values in ROWS:
+        cells = [Check(doc, "{}", source, pointer, fmt) for source, pointer, fmt in values]
+        figures = [cell.figure(r) for cell in cells]
+        for i, cell in enumerate(cells):
+            out.append(Check(doc, _fill(template, figures, i), cell.source, cell.pointer, cell.fmt))
+    return out
+
+
+def failures(r: Reader) -> list[str]:
+    """Every check that does not hold with the reports ``r`` reads: pins, claims and the scan."""
+    texts = {key: document(key) for key in DOCUMENTS}
+    problems = [f"{c.label}: the document lacks {_fill(c.phrase, [c.figure(r)], -1)!r}"
+                for c in checks(r) if not c.pattern(r).search(texts[c.doc])]
+    for doc, phrase, condition in CLAIMS:
+        if _collapse(phrase) not in texts[doc]:
+            problems.append(f"{doc}: the claim {phrase!r} is not in the document")
+        elif not condition(r):
+            problems.append(f"{doc}: the reports no longer support {phrase!r}")
+    problems += [f"{doc}: {token!r} at {at} is neither pinned nor allowed" for doc, token, at in uncovered(r, texts)]
+    return problems
+
+
+def uncovered(r: Reader, texts: dict[str, str]) -> list[tuple[str, str, int]]:
+    """Every number-like token outside a pinned figure and outside an allowed match."""
+    spans: dict[str, list[tuple[int, int]]] = {key: [] for key in texts}
+    for c in checks(r):
+        spans[c.doc] += [m.span(1) for m in c.pattern(r).finditer(texts[c.doc])]
+    for docs, pattern, _reason, _check in ALLOWED:
+        for doc in docs:
+            spans[doc] += [m.span() for m in re.finditer(pattern, texts[doc])]
+    return [(doc, m[0], m.start()) for doc, text in texts.items() for m in NUMBER.finditer(text)
+            if not any(start <= m.start() and m.end() <= end for start, end in spans[doc])]
+
+
+# --- the tests ----------------------------------------------------------------------------------
+
+READER = Reader(REPO)
+CHECKS = checks(READER)
+
+
+@pytest.mark.parametrize("check", CHECKS, ids=[c.label for c in CHECKS])
+def test_every_printed_figure_is_the_reports_figure_in_its_phrase(check):
+    text = document(check.doc)
+    assert check.pattern(READER).search(text), (
+        f"{DOCUMENTS[check.doc]} lacks {_fill(check.phrase, [check.figure(READER)], -1)!r}: {check.source} "
+        f"{check.pointer} printed as {check.fmt}. Either the document is stale or the report moved; "
+        f"read the JSON, never an earlier draft")
+
+
+@pytest.mark.parametrize("doc, phrase, condition", CLAIMS, ids=[f"{d}|{p[:40]}" for d, p, _ in CLAIMS])
+def test_every_claim_in_words_holds_in_the_reports(doc, phrase, condition):
+    assert _collapse(phrase) in document(doc), f"{DOCUMENTS[doc]} no longer says {phrase!r}; update CLAIMS"
+    assert condition(READER), f"the reports no longer support {phrase!r} ({condition.__name__})"
+
+
+def test_every_number_in_the_documents_is_pinned_or_allowed():
+    texts = {key: document(key) for key in DOCUMENTS}
+    left = uncovered(READER, texts)
+    assert left == [], "numbers no pin and no allowed entry accounts for: " + ", ".join(
+        f"{doc} {token!r} ({texts[doc][max(0, at - 40):at + 20]!r})" for doc, token, at in left)
+    found = {key: len(NUMBER.findall(text)) for key, text in texts.items()}
+    assert found["README"] >= 300 and found["CARD"] >= 80, f"the scan found almost nothing: {found}"
+
+
+@pytest.mark.parametrize("docs, pattern, reason, check", ALLOWED, ids=[a[1][:30] for a in ALLOWED])
+def test_every_allowed_number_has_a_reason_is_used_and_matches_the_code(docs, pattern, reason, check):
+    assert len(reason.split()) >= 3, f"{pattern!r} needs a reason"
+    for doc in docs:
+        matches = list(re.finditer(pattern, document(doc)))
+        assert matches, f"{pattern!r} allows nothing in {DOCUMENTS[doc]}; remove it there"
+        assert all(NUMBER.search(m[0]) for m in matches), f"{pattern!r} matches text without a number"
+        if check is not None:
+            assert all(check(m) for m in matches), f"{DOCUMENTS[doc]}: {pattern!r} disagrees with the code"
+
+
+def moved_values(value, fmt: str) -> list:
+    """The report value moved one unit of its printed precision either way: a number by the format's
+    unit, a list by one item (its length is what is printed), a text by one character at its start."""
+    if fmt in ("len", "lenword", "lenWord", "json"):
+        return [[*value, value[-1]], value[:-1]]
+    if FORMATS[fmt].unit is None:
+        return ["x" + value, value[1:]]
+    unit = FORMATS[fmt].unit(FORMATS[fmt].number(value))
+    return [value + unit, value - unit]
+
+
+@pytest.mark.parametrize("check", CHECKS, ids=[c.label for c in CHECKS])
+def test_a_one_unit_move_of_the_report_value_breaks_its_pin(check):
+    """A pin that a moved report would still satisfy protects nothing. The value is moved in the report
+    itself, one unit of its printed precision up and down (a derived figure is moved where it is
+    computed), and the phrase the check requires must then be gone from the document."""
+    text = document(check.doc)
+    printed = check.figure(READER)
+    if check.source == "derived":
+        fmt = FORMATS[check.fmt]
+        x = check.number(READER)
+        figures = [fmt.show(x + fmt.unit(x)), fmt.show(x - fmt.unit(x))]
+    else:
+        value = READER.get(check.source, check.pointer)
+        figures = [check.figure(Moved(READER, check.source, check.pointer, moved))
+                   for moved in moved_values(value, check.fmt)]
+    for figure in figures:
+        assert figure != printed, f"{check.label}: a one-unit move does not change {printed!r}"
+        assert not check.pattern(READER, figure).search(text), (
+            f"{check.label}: {figure!r} also stands in this phrase, so a report moving to it would leave the pin "
+            f"green; anchor the phrase better")
+
+
+def test_a_moved_report_value_reddens_every_place_that_prints_it():
+    """End to end: the headline ratio moved by one unit in a copy of the summary, and every check is run
+    again on it; each place that prints the ratio must fail, in both documents."""
+    pointer = "/paired_leakage/sightlinenet/ratio/mean"
+    problems = failures(Moved(READER, SUMMARY, pointer, READER.get(SUMMARY, pointer) + 0.01))
+    printed = [c for c in CHECKS if c.pointer == pointer]
+    named = [p for p in problems if f"|{pointer}|" in p]
+    assert len(printed) >= 3 and {c.doc for c in printed} == set(DOCUMENTS)
+    assert len(named) == len(printed), problems
+
+
+def test_reports_written_with_another_indent_leave_every_pin_holding(tmp_path):
+    """The checks read values, not text: every report and the page's results re-indented with four spaces
+    must pass exactly as the committed files do."""
+    sources = {SUMMARY, LEAKAGE, LEGACY, EXPORT, RESULTS, *(p.relative_to(REPO).as_posix()
+                                                         for p in (REPO / "reports" / "runs").glob("*.json"))}
+    changed = 0
+    for rel in sorted(sources):
+        original = (REPO / rel).read_text(encoding="utf-8")
+        rewritten = json.dumps(json.loads(original), indent=4)
+        changed += rewritten != original
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(rewritten, encoding="utf-8")
+    assert changed == len(sources), "a rewritten report kept its layout, so this test proves nothing"
+    assert failures(Reader(tmp_path)) == []
+    assert failures(READER) == []
+
+
+def test_figures_come_only_from_the_reports_and_the_page_results():
+    used = {c.source for c in CHECKS if c.source != "derived"}
+    assert all((rel.startswith("reports/") and rel.endswith(".json")) or rel == RESULTS for rel in used), used
+    assert {SUMMARY, LEAKAGE, LEGACY, EXPORT, RESULTS} <= used
+    assert all(name in DERIVED for name in {c.pointer for c in CHECKS if c.source == "derived"})
+
+
+def test_the_checks_are_not_vacuous():
+    per_doc = {key: sum(c.doc == key for c in CHECKS) for key in DOCUMENTS}
+    assert len(CHECKS) >= 300 and per_doc["README"] >= 220 and per_doc["CARD"] >= 70, per_doc
+    assert len(CLAIMS) >= 30 and len(ALLOWED) >= 20
+
+
+@pytest.mark.parametrize("text, tokens", [
+    ("3.05 ± 0.61, 1,073.2 s and 1.8e-04°", ["3.05", "0.61", "1,073.2", "1.8e-04"]),
+    ("frame t−2 and (N, 66, 200, 6)", ["2", "66", "200", "6"]),
+    ("drive2018, sightlinenet-1f, s2, sha256, 0.jpg and uint8", []),
+    ("8,469, 57 ms", ["8,469", "57"]),
+])
+def test_the_scan_reads_numbers_as_a_reader_does(text, tokens):
+    assert NUMBER.findall(text) == tokens
+
+
+def test_a_figure_is_found_only_as_a_number_of_its_own():
+    assert phrase_pattern("off by {}°", "3.05").search("off by 3.05°")
+    assert not phrase_pattern("{}°", "3.05").search("off by 13.05°")
+    assert not phrase_pattern("{}°", "3.05").search("off by 0.3.05°")
+    assert not phrase_pattern("by {}", "3.0").search("off by 3.05")
+    assert phrase_pattern("is {}.", "2.74").search("delivers is 2.74. Next")
