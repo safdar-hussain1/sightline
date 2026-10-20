@@ -9,9 +9,11 @@ each test module is collected and after each test's setup, call and teardown: a 
 training processes have memory-mapped must never change under them. A change fails the
 collection of the module that made it, or the phase of the test it happened in; a change
 made while a module's or the session's fixtures were torn down is reported at the teardown
-of the test after which they were, and says so. Each change is reported once. Every check
-also compares with the record from the start of the session, which nothing changes, and a
-repository without caches is watched as well: a cache folder deleted or made is a change.
+of the test after which they were, and says so. When that collection or phase failed on its
+own as well, the message names its error too, so the tripwire never hides a test's own
+failure. Each change is reported once. Every check also compares with the record from the
+start of the session, which nothing changes, and a repository without caches is watched as
+well: a cache folder deleted or made is a change.
 
 Synthetic drives are tiny, deterministic stand-ins for the real dataset. Each frame is a
 455x256 BGR image with a bright vertical bar whose horizontal position follows the
@@ -100,9 +102,9 @@ def workspace_changes(before: dict, root: Path) -> list[str]:
     return state_changes(before, workspace_state(root))
 
 
-def _fail(changes: list[str], when: str) -> None:
+def _fail(changes: list[str], when: str, also: str = "") -> None:
     pytest.fail(f"the repository's drive caches or label files changed{when}: {', '.join(changes)}; "
-                "a test writes only under its own tmp folder", pytrace=False)
+                f"a test writes only under its own tmp folder{also}", pytrace=False)
 
 
 def check_workspace(before: dict, root: Path, when: str = "") -> None:
@@ -129,9 +131,10 @@ def pytest_sessionstart(session):
     start_tripwire(session)
 
 
-def tripwire(session, when: str, root: Path = REPO) -> None:
+def tripwire(session, when: str, root: Path = REPO, also: str = "") -> None:
     """Fail with every change since the last check, and every difference from the start of the
-    session that no check has reported yet; ``when`` says when it happened."""
+    session that no check has reported yet; ``when`` says when it happened, and ``also`` is added
+    to the message (the phase's own error, when it failed as well)."""
     watched = session.stash.get(TRIPWIRE, None)
     if watched is None:
         pytest.fail("the tripwire has no record from the start of the session; run the tests from the "
@@ -142,52 +145,74 @@ def tripwire(session, when: str, root: Path = REPO) -> None:
     watched["state"] = after
     watched["reported"] |= set(from_origin)
     if found:
-        _fail(found, when)
+        _fail(found, when, also)
+
+
+def error_summary(error: BaseException) -> str:
+    """One line naming ``error``: its type and the first line of its message."""
+    lines = str(error).strip().splitlines()
+    return f"{type(error).__name__}: {lines[0]}" if lines else type(error).__name__
+
+
+def report_summary(text: str) -> str:
+    """One line from a failed report's text: its last error line (``E   ...``), else its last line."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line[1:].strip() for line in lines if line.startswith("E ")]
+    return (errors or lines or [""])[-1]
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_make_collect_report(collector):
     report = yield
     if isinstance(collector, pytest.Module):  # collecting a test module imports it: its top level runs
+        # a module that failed to import keeps its own error: named in the message, in full below it
+        own = report.longreprtext if report.failed else ""
         try:
-            tripwire(collector.session, f" while {collector.nodeid} was imported")
+            tripwire(collector.session, f" while {collector.nodeid} was imported",
+                     also=f"; its collection also failed: {report_summary(own)}" if own else "")
         except pytest.fail.Exception as exc:
-            report.outcome, report.longrepr = "failed", str(exc)
+            report.outcome, report.longrepr = "failed", str(exc) + (f"\n\n{own}" if own else "")
     return report
+
+
+def _watched(session, when: str):
+    """The body of a test phase's hook wrapper: the phase runs, then the tripwire checks the caches
+    and labels. When the phase raised too, the tripwire's failure names that error rather than
+    hiding it; an interrupted session is left to stop."""
+    try:
+        result = yield
+    except (KeyboardInterrupt, pytest.exit.Exception):
+        raise
+    except BaseException as error:
+        tripwire(session, when, also=f"; it also raised {error_summary(error)}")
+        raise
+    tripwire(session, when)
+    return result
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_setup(item):
-    try:
-        return (yield)
-    finally:
-        tripwire(item.session, f" while {item.nodeid} was set up")
+    return (yield from _watched(item.session, f" while {item.nodeid} was set up"))
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
-    try:
-        return (yield)
-    finally:
-        tripwire(item.session, f" while {item.nodeid} ran")
+    return (yield from _watched(item.session, f" while {item.nodeid} ran"))
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
-    try:
-        return (yield)
-    finally:
-        # a test's teardown also tears down its module's fixtures when the next test is in
-        # another module, and the session's after the last test
-        module = item.getparent(pytest.Module)
-        name = item.nodeid if module is None else module.nodeid
-        if nextitem is None:
-            also = f" and the fixtures of {name} and of the session were"
-        elif nextitem.getparent(pytest.Module) is not module:
-            also = f" and the fixtures of {name} were"
-        else:
-            also = " was"
-        tripwire(item.session, f" while {item.nodeid}{also} torn down")
+    # a test's teardown also tears down its module's fixtures when the next test is in another
+    # module, and the session's after the last test
+    module = item.getparent(pytest.Module)
+    name = item.nodeid if module is None else module.nodeid
+    if nextitem is None:
+        also = f" and the fixtures of {name} and of the session were"
+    elif nextitem.getparent(pytest.Module) is not module:
+        also = f" and the fixtures of {name} were"
+    else:
+        also = " was"
+    return (yield from _watched(item.session, f" while {item.nodeid}{also} torn down"))
 
 
 # --- synthetic drives -------------------------------------------------------------------------

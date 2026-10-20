@@ -322,14 +322,34 @@ run_dir.mkdir(parents=True, exist_ok=True)
 """
 
 
+def _load_matrix(monkeypatch, name: str = "train_matrix"):
+    """The matrix script as a module; the source folder it may put on sys.path is taken off again."""
+    monkeypatch.setattr(sys, "path", [*sys.path])
+    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / "train_matrix.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.fixture
 def matrix(monkeypatch):
-    spec = importlib.util.spec_from_file_location("train_matrix", REPO / "scripts" / "train_matrix.py")
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "train_matrix", module)
-    spec.loader.exec_module(module)
+    module = _load_matrix(monkeypatch)
     monkeypatch.setattr(module, "POLL_SECONDS", 0.02)
     return module
+
+
+def test_the_matrix_takes_its_split_defaults_from_the_splits_module(matrix, monkeypatch):
+    from sightline.data import splits
+
+    opts = matrix.parse_args([])
+    assert (opts.firewall, opts.block) == (splits.FIREWALL, splits.BLOCK)
+    # read from the splits module when the script loads, never typed in it: other settings there are
+    # other defaults
+    monkeypatch.setattr(splits, "FIREWALL", splits.FIREWALL + 7)
+    monkeypatch.setattr(splits, "BLOCK", splits.BLOCK + 70)
+    opts = _load_matrix(monkeypatch, "train_matrix_with_other_settings").parse_args([])
+    assert (opts.firewall, opts.block) == (splits.FIREWALL, splits.BLOCK)
 
 
 def _history(job, epochs=20, firewall=250, block=1500, patience=0, **extra):

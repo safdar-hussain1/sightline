@@ -47,6 +47,12 @@ from pathlib import Path
 from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
+# every run is trained by this checkout's code (see _child_env), so its split settings default to this
+# checkout's splits module as well
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+from sightline.data.splits import BLOCK, FIREWALL  # noqa: E402
+
 SEEDS = (0, 1, 2)
 #: (model, protocols), in the order each seed's runs start
 MATRIX = (
@@ -295,8 +301,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--epochs", type=_int_from(1), default=20)
     p.add_argument("--patience", type=_int_from(0), default=0,
                    help="early-stopping patience passed to every run; 0 trains every epoch")
-    p.add_argument("--firewall", type=_int_from(0), default=250)
-    p.add_argument("--block", type=_int_from(1), default=1500)
+    p.add_argument("--firewall", type=_int_from(0), default=FIREWALL)
+    p.add_argument("--block", type=_int_from(1), default=BLOCK)
     p.add_argument("--device", default="auto", choices=DEVICES)
     p.add_argument("--only", metavar="REGEX", help="train only the runs whose name matches")
     p.add_argument("--dry-run", action="store_true", help="print what would run; change nothing")

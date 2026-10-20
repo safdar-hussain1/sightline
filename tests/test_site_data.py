@@ -1479,6 +1479,16 @@ def test_a_summary_that_disagrees_with_the_run_reports_is_refused(site, tmp_path
     (lambda r: r["leakage"]["pairs"][1]["blocked"].pop("gap_s"), "'pairs.1.blocked.gap_s'", "sightline leakage"),
     (lambda r: r["legacy"]["drives"]["drive2017"].pop("label_sha256"), "'drives.drive2017.label_sha256'",
      "sightline legacy"),
+    # values results.json copies whole, which only the page reads
+    (lambda r: r["summary"]["paired_leakage"]["sightlinenet"]["ratio"].pop("values"),
+     "'paired_leakage.sightlinenet.ratio.values'", "sightline report"),
+    (lambda r: r["leakage"]["gaps"]["leaky"]["test"].pop("frac_within_1"), "'gaps.leaky.test.frac_within_1'",
+     "sightline leakage"),
+    (lambda r: r["leakage"]["gaps"]["blocked"]["test"].pop("min_frames"), "'gaps.blocked.test.min_frames'",
+     "sightline leakage"),
+    (lambda r: r["shipped"]["test"]["baselines"]["zero"].pop("n"), "'test.baselines.zero.n'", "sightline eval --all"),
+    (lambda r: r["twin"]["cross_drive"]["baselines"]["zero"].pop("n"), "'cross_drive.baselines.zero.n'",
+     "sightline eval --all"),
 ])
 def test_a_report_lacking_a_key_the_site_reads_is_a_one_line_error(site, tmp_path, capsys, change, named, command):
     reports = _reports_with(site, tmp_path, change)
@@ -1646,9 +1656,6 @@ def test_a_build_from_the_reports_of_many_runs_writes_the_sizes_of_every_protoco
      "recorded 1120/160/159 train/validation/test frames for its blocked split"),
     (lambda r: r.update(protocol="honest"),
      "the splits module cannot make its honest split of 1600 frames: unknown protocol 'honest'"),
-    (lambda r: r["paired"].update(frames_sha256="0" * 64),
-     "paired frames (sha256 000000000000), but the splits module pairs"),
-    (lambda r: r["paired"].update(n=r["paired"]["n"] + 1), "but the splits module pairs"),
 ])
 def test_a_run_report_that_disagrees_with_the_shipped_run_or_the_splits_module_is_refused(
         site, tmp_path, change, message):
@@ -1659,6 +1666,70 @@ def test_a_run_report_that_disagrees_with_the_shipped_run_or_the_splits_module_i
     with pytest.raises(ValueError) as exc:
         _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports_dir)
     assert message in str(exc.value) and report["run"] in str(exc.value) and "\n" not in str(exc.value)
+    assert not (tmp_path / "public").exists()
+
+
+@pytest.mark.parametrize("whose", ["a blocked run", "a shuffled run", "the twin"])
+@pytest.mark.parametrize("change", [
+    lambda paired: paired.update(frames_sha256="0" * 64),
+    lambda paired: paired.update(n=paired["n"] + 1),
+], ids=["digest", "count"])
+def test_paired_frames_that_are_not_the_ones_the_splits_module_pairs_are_refused_for_either_protocol(
+        site, tmp_path, whose, change):
+    """Both protocols scored on the paired frames have them checked: an extra blocked or shuffled run,
+    and the shuffled twin itself."""
+    if whose == "the twin":
+        run, reports_dir = site.twin, _reports_with(site, tmp_path, lambda loaded: change(loaded["twin"]["paired"]))
+    else:
+        shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
+        report = _run_report(shipped, {"a blocked run": "blocked", "a shuffled run": "leaky"}[whose], 1)
+        change(report["paired"])
+        run, reports_dir = report["run"], _reports_with_runs(site, tmp_path, [report])
+    with pytest.raises(ValueError) as exc:
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched), reports=reports_dir)
+    message = str(exc.value)
+    assert f"run {run!r} recorded " in message and " paired frames (sha256 " in message, message
+    assert "but the splits module pairs" in message and "\n" not in message
+    assert not (tmp_path / "public").exists()
+
+
+def _validation_moved(protocol, n, seed=0, firewall=splits.FIREWALL, block=splits.BLOCK):
+    """``make_split`` with the blocked split's validation block one block earlier (TVTTTET instead of
+    TTVTTET): the same sizes and the same test frames, other validation and training frames."""
+    if protocol == "blocked":
+        return splits.blocked_split(n, block=block, firewall=firewall, pattern="TVTTTET")
+    return make_split(protocol, n, seed=seed, firewall=firewall, block=block)
+
+
+def test_a_split_that_moves_validation_frames_alone_is_found_by_the_saved_splits(site, tmp_path, monkeypatch):
+    moved, made = _validation_moved("blocked", N, firewall=FIREWALL, block=BLOCK), \
+        make_split("blocked", N, firewall=FIREWALL, block=BLOCK)
+    assert (moved.train.size, moved.val.size, moved.test.size) == (made.train.size, made.val.size, made.test.size)
+    assert np.array_equal(moved.test, made.test) and not np.array_equal(moved.val, made.val)
+    monkeypatch.setattr(site_data, "make_split", _validation_moved)
+    # the reports cannot tell: the split sizes and the paired test frames are the same
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    site_data._check_reports(reports)
+    with pytest.raises(ValueError, match=rf"^run '{site.shipped}': its saved (train|val) frames \((train|val)_idx\.npy\) "
+                                         rf"are not the blocked split the splits module makes of the {N} frames of "
+                                         rf"drive2018 with seed 0, firewall {FIREWALL} and block {BLOCK}; the split "
+                                         "rules are not the ones it was trained with$"):
+        _build(site, tmp_path, _workspace_with(site, tmp_path, _untouched))
+    assert not (tmp_path / "public").exists()
+
+
+def test_a_twin_whose_saved_split_is_not_the_one_its_report_describes_is_refused(site, tmp_path):
+    def trade_a_frame(runs, data):
+        # one validation frame and one training frame change places: the same sizes, other frames
+        train, val = (np.load(runs / site.twin / f"{split}_idx.npy") for split in ("train", "val"))
+        train[0], val[0] = val[0], train[0]
+        np.save(runs / site.twin / "train_idx.npy", train)
+        np.save(runs / site.twin / "val_idx.npy", val)
+
+    with pytest.raises(ValueError, match=rf"^run '{site.twin}': its saved train frames \(train_idx\.npy\) are not "
+                                         rf"the shuffled split the splits module makes of the {N} frames of drive2018 "
+                                         "with seed 0"):
+        _build(site, tmp_path, _workspace_with(site, tmp_path, trade_a_frame))
     assert not (tmp_path / "public").exists()
 
 

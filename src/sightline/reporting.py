@@ -184,7 +184,10 @@ def evaluation_cutoffs() -> dict:
     """The cutoffs every split is scored with, in degrees: the edges of the steering regimes
     (``regime_bins_deg``: straight below the first, sharp from the second on), the smallest
     |angle| the sign agreement counts (``sign_min_abs_deg``) and the tolerances of the shares of
-    frames within them (``tolerances_deg``)."""
+    frames within them (``tolerances_deg``). These are the code's values when the summary is
+    written: a run report records the tolerances, in the names of its shares, which ``aggregate``
+    checks, but neither the regime edges nor the sign cutoff, so those two cannot be checked
+    against the runs."""
     return {"regime_bins_deg": [float(edge) for edge in REGIME_BINS], "sign_min_abs_deg": float(SIGN_MIN_ABS_DEG),
             "tolerances_deg": [float(tolerance) for tolerance in TOLERANCES_DEG]}
 

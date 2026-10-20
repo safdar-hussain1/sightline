@@ -193,10 +193,11 @@ def session_on_a_stand_in(pytester, tests: dict[str, str]):
     return pytester.runpytest_subprocess("-p", "no:cacheprovider", "tests")
 
 
-def _reported(result, nodeid: str, when: str, changes: str) -> bool:
-    """Whether the session's output names ``nodeid`` with the tripwire's message for ``when``."""
+def _reported(result, nodeid: str, when: str, changes: str, also: str = "") -> bool:
+    """Whether the session's output names ``nodeid`` with the tripwire's message for ``when``, and
+    ``also`` right after it (the phase's own error, when it failed as well)."""
     return f"the repository's drive caches or label files changed while {nodeid}{when}: {changes}; " \
-        "a test writes only under its own tmp folder" in result.stdout.str()
+        f"a test writes only under its own tmp folder{also}" in result.stdout.str()
 
 
 def test_the_tripwire_fails_the_phase_a_change_happens_in_and_reports_each_change_once(pytester):
@@ -247,14 +248,51 @@ def test_the_tripwire_fails_the_phase_a_change_happens_in_and_reports_each_chang
 
 def test_the_tripwire_fails_the_collection_of_a_module_that_writes_when_it_is_imported(pytester):
     result = session_on_a_stand_in(pytester, {
-        "test_a.py": "def test_first():\n    pass\n",
-        "test_b.py": "(CACHE / 'meta.json').unlink()\ndef test_never_runs():\n    pass\n",
+        "test_1_writes_when_imported.py": "(CACHE / 'meta.json').unlink()\ndef test_never_runs():\n    pass\n",
+        # imported second, which it checks: the file is gone by then
+        "test_2_imported_after.py": ("assert not (CACHE / 'meta.json').exists(), 'imported before the writer'\n"
+                                     "def test_later():\n    pass\n"),
     })
-    # the record from the start of the session sees the write; a record taken at the first
-    # test's setup would have made it the baseline
+    # the first module collected writes as it is imported: only a record taken when the session
+    # starts, before any module is imported, sees the write; a record taken at the first check,
+    # the first module's collection, or at the first test's setup would have made it the baseline
     assert result.ret != 0
     result.assert_outcomes(errors=1)
-    assert _reported(result, "tests/test_b.py", " was imported", "runs/cache/drive2018/meta.json (deleted)")
+    assert _reported(result, "tests/test_1_writes_when_imported.py", " was imported",
+                     "runs/cache/drive2018/meta.json (deleted)")
+
+
+def test_the_tripwire_names_a_failing_tests_own_error_with_the_change(pytester):
+    result = session_on_a_stand_in(pytester, {"test_a.py": (
+        "def test_writes_and_fails():\n"
+        "    (CACHE / 'inputs.u8').write_bytes(b'other frames')\n"
+        "    assert False, 'its own failure'\n"
+        "@pytest.fixture\n"
+        "def writes_and_breaks():\n"
+        "    (CACHE / 'angles.npy').write_bytes(b'other angles')\n"
+        "    raise RuntimeError('the fixture broke')\n"
+        "def test_with_a_fixture_that_writes_and_breaks(writes_and_breaks):\n"
+        "    pass\n"
+        "def test_fails_on_its_own():\n"
+        "    assert False, 'nothing written'\n")})
+    result.assert_outcomes(failed=2, errors=1)
+    assert _reported(result, "tests/test_a.py::test_writes_and_fails", " ran", "runs/cache/drive2018/inputs.u8 (changed)",
+                     also="; it also raised AssertionError: its own failure")
+    assert _reported(result, "tests/test_a.py::test_with_a_fixture_that_writes_and_breaks", " was set up",
+                     "runs/cache/drive2018/angles.npy (changed)", also="; it also raised RuntimeError: the fixture broke")
+    # a test that fails without writing is reported as itself, with no word of the tripwire
+    assert "nothing written" in result.stdout.str()
+    assert "test_fails_on_its_own ran" not in result.stdout.str()
+
+
+def test_the_tripwire_names_a_failed_imports_own_error_with_the_change(pytester):
+    result = session_on_a_stand_in(pytester, {
+        "test_a.py": "(CACHE / 'meta.json').unlink()\nraise ValueError('the module broke')\n"})
+    result.assert_outcomes(errors=1)
+    assert _reported(result, "tests/test_a.py", " was imported", "runs/cache/drive2018/meta.json (deleted)",
+                     also="; its collection also failed: ValueError: the module broke")
+    # and the module's own report follows in full
+    assert "raise ValueError('the module broke')" in result.stdout.str()
 
 
 def test_the_tripwire_hooks_keep_watching_once_the_cache_folder_is_gone(pytester):

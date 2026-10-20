@@ -40,7 +40,8 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     ``split_sizes`` gives each protocol's train, validation and test frame counts from the run
     reports, and the frames its firewalls dropped; every run of a protocol must have recorded
     the same counts, they must be the ones the splits module makes from those settings, and
-    every blocked and shuffled run's paired frames (their count and digest) the ones it pairs.
+    every blocked and shuffled run's paired frames (their count and digest) the ones it pairs;
+    the build also checks the shipped run's and its twin's saved splits frame by frame.
 ``data/clips/<id>/``
     A demo clip of ``clip_frames`` scored frames: ``c2018`` from the blocked test stretches
     of the drive the shipped run trained on (minutes it never trained on), ``c2017`` from
@@ -89,9 +90,10 @@ shipped run trained on is then measured; under 2·firewall + 1 frames it is refu
 is picked for being worth watching, so its MAE describes the clip, not the model.
 
 Every check that needs only the inputs runs before anything is written: the reports, the
-checkpoints, the caches, the drives and the clip rule. The build is then staged in a folder
-beside ``out_dir`` (``web/.public-*`` for ``web/public``), which is always removed, and
-export.json in a hidden file beside its own final path. The models are exported there and
+checkpoints and the saved splits of the shipped run and its twin, the caches, the drives and the
+clip rule. The build is then staged in a folder beside ``out_dir`` (``web/.public-*`` for
+``web/public``), which is always removed, and export.json in a hidden file beside its own final
+path. The models are exported there and
 must pass their parity gates and the size limit, the sprites are written and decoded and the
 videos encoded, so a failure at any of those steps leaves ``out_dir`` and export.json as
 they were. Only then is the build swapped in: the previous build's files are moved into
@@ -211,9 +213,10 @@ CAMERA_SIZE = (455, 256)
 #: the largest model the page downloads, bytes
 MAX_MODEL_BYTES = 2_000_000
 #: the parity the shipped models must meet against PyTorch on every clip and self-test input.
-#: The trained SightlineNet checkpoints measure 1.2e-4 to 1.8e-4 deg on those inputs and up to
-#: 3.4e-4 deg on their own test frames (float32 rounding ahead of the output scale), and under
-#: 2e-5 in saliency; a structural export fault is off by whole degrees.
+#: Measured on six checkpoints, the two-frame SightlineNet runs of seeds 0 to 2 on the blocked and
+#: on the shuffled split: 1.2e-4 to 1.8e-4 deg on those inputs and up to 3.4e-4 deg on each run's
+#: own test frames (float32 rounding ahead of the output scale), and under 2e-5 in saliency; a
+#: structural export fault is off by whole degrees.
 SHIPPED_ANGLE_TOLERANCE_DEG = 5e-4
 SHIPPED_SALIENCY_TOLERANCE = 1e-4
 #: a drive profile averages this many consecutive frames into one point: 998 points for the
@@ -273,7 +276,7 @@ def _regimes(prefix: str) -> tuple[str, ...]:
 
 def _scores(split: str) -> tuple[str, ...]:
     """What the site reads of a run report's score on ``split`` (``test`` or ``cross_drive``)."""
-    return (f"{split}.n", f"{split}.model.n", f"{split}.model.mae_deg",
+    return (f"{split}.n", f"{split}.model.n", f"{split}.model.mae_deg", f"{split}.baselines.zero.n",
             *(f"{split}.baselines.{name}.mae_deg" for name in BASELINE_KEYS), f"{split}.pearson_r",
             f"{split}.skill_vs_zero")
 
@@ -283,8 +286,12 @@ def _scores(split: str) -> tuple[str, ...]:
 #: whole. ``*`` stands for every key of a mapping or every item of a list, of which there must be
 #: one at least. ``load_reports`` checks the reports before anything is computed, and
 #: ``export_parity`` the export record, so a report made by an older command is refused in one
-#: line naming what it lacks, never read half-way. Every key the site reads is listed here, and
-#: only here; which drives, groups or models must be there is the checks' business, not a key's.
+#: line naming what it lacks, never read half-way. What this module reads is listed in full, which a
+#: test checks by taking every key of the reports away in turn: a key this module reads but this list
+#: does not name makes the build fail some other way. What the page reads is listed from the page's
+#: code by hand, as nothing in this package reads the page; a key the page starts to read must be
+#: added here with it. A ``*`` never names an entry, so which drives, groups, models or protocols the
+#: page needs is not checked here.
 REQUIRED = {
     "summary": ((
         "shipped.run", "shipped.seed", "shipped.model", "shipped.protocol", "twin.run", "runs", "versions",
@@ -299,8 +306,8 @@ REQUIRED = {
                                                             "ratio", "difference_deg", "zero_mae_deg")),
         *(f"paired_leakage.*.{stat}.{part}" for stat in ("ratio", "difference_deg", "shuffled_mae_deg",
                                                           "blocked_mae_deg") for part in ("mean", "sd")),
-        "regimes.protocol", "regimes.split", *_regimes("regimes.zero"), "regimes.models.*.run",
-        "regimes.models.*.seed", *_regimes("regimes.models.*.regimes"),
+        "paired_leakage.*.ratio.values", "regimes.protocol", "regimes.split", *_regimes("regimes.zero"),
+        "regimes.models.*.run", "regimes.models.*.seed", *_regimes("regimes.models.*.regimes"),
     ), "sightline report"),
     #: the shipped run's report and its twin's
     "run": ((
@@ -315,7 +322,8 @@ REQUIRED = {
     #: every run report of a protocol scored on the paired frames too (``PAIRED_PROTOCOLS``)
     "paired": (("paired.n", "paired.frames_sha256"), "sightline eval --all"),
     "leakage": ((
-        "drive", "seed", "dt_s", "splits.firewall", "splits.block", "paired.n", "paired.frames_sha256", "gaps.*.*",
+        "drive", "seed", "dt_s", "splits.firewall", "splits.block", "paired.n", "paired.frames_sha256",
+        "gaps.*.test.frac_within_1", "gaps.*.test.min_frames",
         *(f"memoriser.{protocol}.{key}" for protocol in LOOKUP_PROTOCOLS for key in ("n", "mae_deg")),
         "pairs.*.frame", "pairs.*.angle_deg",
         *(f"pairs.*.{protocol}.{key}" for protocol in LOOKUP_PROTOCOLS for key in PAIR_KEYS),
@@ -766,7 +774,9 @@ def _check_runs(reports: Reports, setting: dict) -> None:
     whose split sizes are not the ones the splits module makes from its drive's frames, its
     protocol, its seed and the settings it records, and a blocked or shuffled run, or the
     leakage report, whose paired frames are not the ones the splits module pairs: equal sizes
-    do not show that the splits are the same, the frames they pair do."""
+    do not show that two splits test on the same frames, the test frames they pair do. No
+    validation frame is paired, so a split that moves validation frames alone passes here; the
+    build compares the shipped run's and the twin's saved splits as well (``_check_saved_splits``)."""
     drive = setting["drive"]
     shipped_with = {"firewall": setting["firewall"], "block": setting["block"]}
     recorded = (reports.summary["drives"].get(drive) or {}).get("frames")
@@ -844,6 +854,31 @@ def _check_reports(reports: Reports) -> dict:
     _check_runs(reports, {"drive": drive, **splits})
     _check_summary_against_runs(reports)
     return {"drive": drive, "cross_drive": cross_drive, **splits}
+
+
+def _check_saved_splits(workspace: Workspace, reports: Reports) -> None:
+    """Refuse a shipped run or twin whose saved split, the training, validation and test frames
+    its run folder holds (``<split>_idx.npy``), is not the split the splits module makes of its
+    drive's frames with its protocol, its seed and the settings its report records. The reports
+    alone show the split sizes and the test frames the paired measurement uses; a split that
+    moves validation frames alone keeps both, and only the saved frames show it. The run folders
+    are not part of a clone, so this runs where the site data is built, never in
+    ``site_results``."""
+    for role in ("shipped", "twin"):
+        name = reports.summary[role]["run"]
+        report = reports.runs[name]
+        frames, splits = _frames_of(report), report["splits"]
+        label = PUBLIC_NAMES.get(report["protocol"], report["protocol"])
+        made = make_split(report["protocol"], frames, seed=report["seed"], firewall=splits["firewall"],
+                          block=splits["block"])
+        run_dir = workspace.run_dir(name)
+        for split in ("train", "val", "test"):
+            if not np.array_equal(load_split_indices(run_dir, split), getattr(made, split)):
+                raise ValueError(
+                    f"run {name!r}: its saved {split} frames ({split}_idx.npy) are not the {label} split the "
+                    f"splits module makes of the {frames} frames of {report['drive']} with seed {report['seed']}, "
+                    f"firewall {splits['firewall']} and block {splits['block']}; the split rules are not the ones "
+                    "it was trained with")
 
 
 # --- models -------------------------------------------------------------------------------
@@ -1192,7 +1227,9 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
     or the split settings, a run report whose split sizes or paired frames are not the ones the
     splits module makes from its settings, or a summary whose figures for the shipped run or its
     twin differ from their run reports; a run whose best.pt is not the checkpoint its report
-    describes; a cache that is missing or not built from the drive's labels as they are now; a
+    describes, or whose saved training, validation or test frames are not the split the splits
+    module makes from its report's settings (``_check_saved_splits``, the shipped run and its
+    twin); a cache that is missing or not built from the drive's labels as they are now; a
     drive whose labels are not the ones the reports were made from; a 2018 clip closer than
     ``2 * firewall + 1`` frames to a frame the shipped run trained on. A model whose parity or size
     fails its gate is refused after the build was staged, and nothing of it is kept.
@@ -1206,6 +1243,7 @@ def build_site_data(summary_path: str | Path, workspace: Workspace, out_dir: str
     summary = reports.summary
     models = [_load_model(workspace, key, summary[which]["run"], reports.runs[summary[which]["run"]])
               for key, which in (("sightline", "shipped"), ("shuffled", "twin"))]
+    _check_saved_splits(workspace, reports)
     lags = tuple(int(lag) for lag in models[0].model.frame_lags)
     lead_in = max(lags, default=0)
     drives = {"c2018": setting["drive"], "c2017": setting["cross_drive"]}
