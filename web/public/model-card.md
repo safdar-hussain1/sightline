@@ -6,7 +6,8 @@ split of drive2018 (run `drive2018_sightlinenet_blocked_s2`). The page also ship
 and seed trained on shuffled frames, there only to show what a shuffled test split hides.
 
 Every measured number in this card is read from the project's reports, and a test fails if the card
-and the reports disagree. Source code, reports and the README: <https://github.com/safdar-hussain1/sightline>.
+and the reports disagree. Source code, reports and the README:
+<https://github.com/safdar-hussain1/sightline>.
 
 ## Intended use
 
@@ -38,45 +39,47 @@ largest saliency difference 7.5e-06 (gate 0.0001).
 ## Training data
 
 - **drive2018** of the Sully Chen driving datasets (<https://github.com/SullyChen/driving-datasets>,
-  MIT License): 63,825 frames over 55.9 minutes from one dashcam, a timestamp on every frame, a
-  median 57.0 ms apart.
-- **Labels**: the human's steering-wheel angle in degrees. 368 single-frame sensor dropouts, a
-  logged zero between two large steering angles of the same sign, are repaired by interpolating
-  their neighbours.
-- **Split**: blocked. The drive is cut into blocks of 1,500 frames dealt by the repeating pattern
-  `TTVTTET` (T train, V validation, E test), and 250 frames are dropped on each side of every
-  boundary between a training block and an evaluation block, so every evaluation frame is at least
-  501 frames from a training frame: 39,825 training, 6,000 validation and 6,000 test frames.
+  MIT License): 63,825 dashcam frames over 55.9 minutes, a timestamp on every frame. Consecutive
+  frames are 25 to 338 ms apart, a median 57.0 ms.
+- **Labels**: the human's steering-wheel angle in degrees. The steering sensor sometimes logs a zero
+  for a frame in the middle of a turn: the 368 zeros whose neighbours are both at least 15° and of
+  the same sign are repaired by interpolating the neighbours, and zeros between smaller angles are
+  left as logged.
+- **Split**: blocked. The drive is cut into blocks of 1,500 frames dealt out by the repeating
+  pattern `TTVTTET` (T train, V validation, E test), and 250 frames are dropped on each side of
+  every boundary between a training block and an evaluation block. Every evaluation frame is then
+  at least 501 frames, and at least 24.2 s of driving, from any training frame: 39,825 training,
+  6,000 validation and 6,000 test frames.
 - **Recipe**: 20 epochs of AdamW on a cosine schedule from a learning rate of 0.0003, weight decay
-  0.0001, batches of 128, a Huber loss on the angle, dropout 0.3, and strong augmentation (flips
-  with the angle negated, brightness, contrast, shadows, position, colour, noise, occlusion), every
-  draw but the per-pixel noise applied to both frames alike. The checkpoint with the lowest
-  validation error is kept.
-- **Seed choice**: three seeds were trained; the one with the lowest validation error ships (seed 2,
-  7.15°). Test and another-day scores took no part in the choice.
+  0.0001, batches of 128, a Huber loss on the angle, dropout 0.3 after the head's first layer, and
+  strong augmentation (flips with the angle negated, brightness, contrast, shadows, position,
+  colour, noise, occlusion), every draw but the per-pixel noise applied to both frames alike. The
+  checkpoint with the lowest validation error is kept.
+- **Seed choice**: three seeds were trained; the seed with the lowest validation error ships
+  (seed 2, 7.15°). Test and another-day scores took no part in the choice.
 
 ## Evaluation
 
 All errors are mean absolute errors in degrees, computed on the CPU, beside baselines scored on the
 same frames.
 
-- **Four rungs**: *shuffled* (frames shuffled, then dealt 70%, 15% and 15%), *blocked* (above),
+- **Four tests**: *shuffled* (frames shuffled, then dealt 70%, 15% and 15%), *blocked* (above),
   *later in the drive* (train on the first 70% of the drive, test on its end) and *another day*
   (drive2017, a different day, every frame from frame 2 on).
 - **The paired set**: the test frames the blocked split and a seed's shuffled split have in common,
-  893, 889 and 943 frames for the three seeds, on which the two models of each seed are compared.
-- **Baselines**: always steering straight (0°) and always the training mean; and two oracles that
-  read the human's own previous angles, which no camera model sees: they are bounds, not
-  competitors.
+  893, 889 and 943 frames for the three seeds, on which each seed's shuffled-split and
+  blocked-split models are compared.
+- **Baselines**: always steering straight (0°) and always the training mean. Oracles that read the
+  human's own previous angles, which no camera model sees, are bounds, not competitors.
 
 ## Results
 
 Means ± standard deviations over three seeds unless the line names the shipped run.
 
 - **The paired leakage measurement.** On identical held-out frames, the model trained on the
-  blocked split is off by 3.05 ± 0.61 times as much as the one trained on shuffled frames
-  (PilotNet: 3.17 ± 0.14). Testing on shuffled frames makes the same kind of model look about three
-  times better than it is on road it has not seen nearby.
+  blocked split is off by 3.05 ± 0.61 times as much as the model trained on shuffled frames
+  (PilotNet: 3.17 ± 0.14). Testing on shuffled frames makes the same kind of model look about
+  three times better than it is on road it has not seen nearby.
 - **Blocked test frames**: 10.24° ± 0.68°, where always steering straight scores 17.48°: 41% ± 4%
   better than always straight.
 - **Another day**: 10.64° ± 1.30°, where always steering straight scores 15.52°: 31% ± 8% better.
@@ -85,24 +88,29 @@ Means ± standard deviations over three seeds unless the line names the shipped 
   always steering straight scores 2.76° and wins; 5.52° on gentle turns (12.60°); 36.05° on sharp
   ones (78.41°).
 - **Trained on shuffled frames**, as the twin is, SightlineNet scores 2.90° ± 0.09° on its own
-  shuffled test frames and 7.96° ± 0.13° on another day. The defect is the score the shuffled split
-  reports, not the model it trains: on another day it is the more accurate of the two, in every
-  seed.
+  shuffled test frames and 7.96° ± 0.13° on another day. For SightlineNet, the defect is the score
+  the shuffled split reports, not the model it trains: on another day the SightlineNet trained on
+  shuffled frames is more accurate than SightlineNet trained on the blocked split, in every seed.
+  PilotNet is different: trained on shuffled frames, it is worse on another day than trained on
+  the blocked split (21.75° ± 2.24° against 19.28° ± 1.22°).
 
 ## The multi-frame caveat
 
-The model reads motion between two frames, so its input depends on timing. It learned frame pairs
-114 ms apart on drive2018; drive2017 has no timestamps and is taken to run at the same rate.
-Footage from another camera or frame rate, a dropped frame, or a cut breaks that assumption, and
-the model cannot tell. The first two frames of any sequence have no history: evaluation starts at
-frame 2, and the page's clips carry the two frames before their first scored frame. On the page,
-the model reads the clips' frames from image sheets made from the drive, not from the playing
-video, and its expected outputs were computed on those same decoded frames.
+The model reads motion between frame t−2 and frame t, so its input depends on timing. Frames t−2
+and t are a median 100 ms apart (66–157 ms for the middle 90% of frame pairs) on the 2018 drive,
+whose frames carry timestamps: the spacing varies from pair to pair. drive2017 has no timestamps;
+there frame t−2 is simply the frame two back. Footage from another
+camera or frame rate, a dropped frame, or a cut changes what that motion means, and the model
+cannot tell. The first two frames of any sequence have no history: evaluation starts at frame 2,
+and the page's clips carry the two frames before their first scored frame. On the page, the model
+reads the clips' frames from image sheets made from the drive, not from the playing video, and its
+expected outputs were computed on those same decoded frames.
 
 ## Limitations
 
-- One car and one camera: two drives in daylight around Rancho Palos Verdes and San Pedro in
-  Southern California. Nothing here measures night, rain, other cars or other places.
+- One dataset, one area: two daytime drives around Rancho Palos Verdes and San Pedro, California
+  (the dataset page names the places), with camera framing that differs slightly between them.
+  Nothing here measures night, rain, other cameras or other places.
 - Open loop only: every score compares the model with what the human did, frame by frame. The model
   never steered, so nothing here says how it would drive.
 - On frames steered 30° or more, the shipped run is still off by 36.05°.
@@ -118,23 +126,25 @@ video, and its expected outputs were computed on those same decoded frames.
 ## Ethical considerations
 
 - **Safety.** A steering estimate that looks good on a screen invites being trusted on a road. This
-  one must never be: it is open loop, trained on one car, and its error on sharp turns is large.
-  The dataset's author asks that no one ever pilot a car with software trained on it.
+  estimate must never be: it is open loop, trained on drive2018 alone, and its error on sharp turns
+  is large. The dataset's author asks that nobody ever pilot a car with software trained on it.
 - **Measurement.** The project exists because a shuffled split overstates accuracy by about three
   times here; any number quoted from this model should name the protocol it was measured under.
-- **Footage.** The drives are public dashcam footage of public roads; other vehicles and buildings
-  appear in them. The page shows short excerpts at the drive's own low resolution.
+- **Footage.** The drives are dashcam footage their author published, mostly of public streets;
+  other vehicles and buildings appear in them. The page shows short excerpts at the drive's own
+  low resolution.
 
 ## Versions
 
-- Training and evaluation: Python 3.12.13, PyTorch 2.13.0, NumPy 2.5.1. Training ran on an Apple
-  GPU through PyTorch's `mps` device; every evaluation ran on the `cpu`.
+- Evaluation: Python 3.12.13, PyTorch 2.13.0, NumPy 2.5.1. Training ran on an Apple GPU through
+  PyTorch's `mps` device; every evaluation ran on the `cpu`.
 - Export: onnx 1.22.0 and onnxruntime 1.28.0.
 - Code: trained at commit `493b3b8`, evaluated at commit `ed7ca37`.
 
 ## Licence
 
-The model files are released under the MIT License, with the project's code, for research use only,
-since they were trained on the Sully Chen driving datasets (MIT License, Copyright (c) 2018 Sully
-Chen), whose author asks that the data be used purely for research and statistics and never to
-pilot a vehicle.
+The model files are released under the MIT License with the project's code. They were trained on
+the Sully Chen driving datasets (MIT License, Copyright (c) 2018 Sully Chen), whose author asks
+that the data be used purely for research and statistics and never to pilot a vehicle. That is the
+author's request, not a term of either licence; this project asks the same of anyone who uses the
+models.
