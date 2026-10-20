@@ -178,18 +178,19 @@ def test_no_tracked_file_holds_a_nul_byte_unless_its_format_is_binary():
 # each a run of ASCII letters and digits in lower case, or a section sign on its own, with a token of
 # digits, alone or followed by one or two letters (an item number such as ``11a``), written ``#``; a
 # phrase is one to three consecutive tokens joined by single spaces. The tokens of a phrase are parted
-# by nothing but whitespace in the text: spaces and line breaks, and after a line break the mark that
-# carries a comment or a quote on to the next line (``#``, ``//``, ``*``, ``>``), so that a phrase
-# wrapped onto the next line is still one; any other mark parts them, so ``self.word`` or
-# ``count[word] += 1`` is never a phrase. An EXACT digest names a phrase that is refused whole. A
-# STEMS digest names the beginning, four characters or more, of a token or of a two- or three-token
-# phrase, reaching into its last token, so that one stem refuses every inflection of a word; a word
-# whose stem would also begin innocent words is held exact instead. Two tokens joined by hyphens or
-# underscores alone are also read as one word, for the stems; they never join the tokens of a phrase.
-# A word whose digest is in FLAGS may stand as a command-line flag, ``--word`` in lower case and a
-# token of its own; anywhere else it is refused like the rest. Each digest carries the kind of rule it
-# keeps, which a finding names. The scans read every tracked text file as it stands and as it decodes
-# (``readable_text``), every tracked path, and the names and message of every commit.
+# in the text by whitespace alone (spaces and line breaks, and after a line break the mark that carries
+# a comment or a quote on to the next line: ``#``, ``//``, ``*``, ``>``), so that a phrase wrapped onto
+# the next line is still one, or by hyphens, underscores and slashes alone, which stand for spaces in a
+# name or a path; any other mark parts them, so code such as ``self.word`` or ``count[word] += 1`` is
+# never a phrase. An EXACT digest names a phrase that is refused whole. A STEMS digest names the
+# beginning, four characters or more, of a token or of a two- or three-token phrase, reaching into its
+# last token, so that one stem refuses every inflection of a word; a word whose stem would also begin
+# innocent words is held exact instead. Two tokens joined by hyphens or underscores alone are also
+# read as one word, for the stems. A word whose digest is in FLAGS may stand as a command-line flag,
+# ``--word`` in lower case and a token of its own; anywhere else it is refused like the rest. Each
+# digest carries the kind of rule it keeps, which a finding names. The scans read every tracked text
+# file as it stands and as it decodes (``readable_text``), every tracked path, and the names and
+# message of every commit.
 #
 # The probes further down plant made-up words whose digests they write out: they show that the
 # machinery finds each form a rule covers and leaves the rest alone, not that the lists below name the
@@ -268,6 +269,9 @@ NUMBER = re.compile(r"[0-9]+[A-Za-z]{0,2}")
 #: comment or a quote on to that line; nothing at all where a section sign touches a token. Each run of
 #: whitespace has one way to match, so a long gap that fails does so at once.
 SPACE = re.compile(r"[^\S\n]*(?:\n[^\S\n]*(?:(?:#+|/{2,}|\*+|>+)[^\S\n]*)?)*")
+#: what else may part them: hyphens, underscores and slashes alone, which stand for spaces in a name
+#: or a path
+LINK = re.compile(r"[-_/]+")
 #: what may stand between two tokens that are read as one word for the stems
 JOINER = re.compile(r"[-_]+")
 #: a command-line flag: two hyphens, then a lower-case token of its own
@@ -345,6 +349,12 @@ class Banned:
 BANNED = Banned(EXACT, STEMS, FLAGS)
 
 
+def in_one_phrase(text: str, start: int, end: int) -> bool:
+    """Whether ``text[start:end]``, all that stands between two tokens, lets them be read as words of
+    one phrase: whitespace (``SPACE``), or hyphens, underscores and slashes alone (``LINK``)."""
+    return SPACE.fullmatch(text, start, end) is not None or LINK.fullmatch(text, start, end) is not None
+
+
 def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str]]:
     """Each refused word or phrase in ``text``: its offset, the text it spans and its kind. A word
     ``banned`` allows as a flag is left out where it stands as one."""
@@ -357,14 +367,14 @@ def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str
             found.append((start, end, kind))
         if i + 1 < len(tokens):
             b_start, b_end, b = tokens[i + 1]
-            spaced = SPACE.fullmatch(text, end, b_start) is not None
-            kind = (banned.pair(a, b) if spaced else None) \
+            phrase = in_one_phrase(text, end, b_start)
+            kind = (banned.pair(a, b) if phrase else None) \
                 or (banned.joined(a, b) if JOINER.fullmatch(text, end, b_start) else None)
             if kind:
                 found.append((start, b_end, kind))
-            if spaced and i + 2 < len(tokens):
+            if phrase and i + 2 < len(tokens):
                 c_start, c_end, c = tokens[i + 2]
-                kind = banned.triple(a, b, c) if SPACE.fullmatch(text, b_end, c_start) else None
+                kind = banned.triple(a, b, c) if in_one_phrase(text, b_end, c_start) else None
                 if kind:
                     found.append((start, c_end, kind))
     return [(start, text[start:end], kind) for start, end, kind in found]
@@ -462,33 +472,37 @@ def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
     ("fer, xfern, basal and bas alt", []),
     # a stem shorter than four characters finds nothing
     ("an owl and owls", []),
-    # two words, only whole, and parted by nothing but whitespace: spaces, line breaks, and after a line
-    # break the mark that carries a comment or a quote on to the next line
-    ("a purple heron, a PURPLE\n  HERON, purple\n    # heron and purple\r\n// heron",
-     ["purple heron", "PURPLE\n  HERON", "purple\n    # heron", "purple\r\n// heron"]),
-    ("purple\n * heron and purple\n> heron", ["purple\n * heron", "purple\n> heron"]),
+    # a one-word stem ends a phrase at its own word
+    ("a marigold grows", ["marigold"]),
+    # two words, only whole, parted by whitespace (line breaks included, and after a line break the mark
+    # that carries a comment or a quote on) or by hyphens, underscores and slashes, as in a name or a path
+    ("a purple heron, a PURPLE\n  HERON, purple-heron, purple_heron and purple/heron",
+     ["purple heron", "PURPLE\n  HERON", "purple-heron", "purple_heron", "purple/heron"]),
+    ("purple\n    # heron, purple\r\n// heron, purple\n * heron and purple\n> heron",
+     ["purple\n    # heron", "purple\r\n// heron", "purple\n * heron", "purple\n> heron"]),
     ("purple herons and purpleheron", []),
-    # any other mark parts them, so ordinary code is left alone; a hyphen or an underscore joins two
-    # tokens into one word for the stems only
-    ("purple.heron, purple-heron, purple_heron, purple/heron, purple, heron and purple # heron", []),
-    ("if (self.purple) heron(); count[lantern] += 1; lantern(7)", []),
+    # any other mark parts them, so code such as ``this.word`` or ``count[word] += 1`` is left alone
+    ("purple.heron, purple(heron), purple[heron], purple=heron, purple+heron, purple, heron, purple # heron "
+     "and purple - heron", []),
+    ("if (this.purple) heron(); count[lantern] += 1; lantern(7)", []),
     # a section sign may touch the word before it
-    ("lantern §4, Lantern§ and lantern\n§", ["lantern §", "Lantern§", "lantern\n§"]),
-    ("lantern.§ and lantern-§", []),
+    ("lantern §4, Lantern§, lantern\n§ and lantern-§", ["lantern §", "Lantern§", "lantern\n§", "lantern-§"]),
+    ("lantern.§ and lantern(§)", []),
     # a two-word stem: its last word inflected
-    ("velvet moths and a Velvet Moth", ["velvet moths", "Velvet Moth"]),
+    ("velvet moths, a Velvet Moth flies and velvet_moths", ["velvet moths", "Velvet Moth", "velvet_moths"]),
     ("velvet and moth, velvet.moths", []),
     # three words
-    ("slow amber tide; slow\namber\n  tide", ["slow amber tide", "slow\namber\n  tide"]),
-    ("Slow, amber; tide, slow amber-tide and slow amber", []),
+    ("slow amber tide; slow\namber\n  tide; slow_amber_tide and slow-amber/tide",
+     ["slow amber tide", "slow\namber\n  tide", "slow_amber_tide", "slow-amber/tide"]),
+    ("Slow, amber; tide, slow, amber tide, slow amber.tide and slow amber", []),
     # a three-word stem: its last word inflected, once the stem reaches into it
-    ("quiet 4 brooks, Quiet 11b Brook and quiet 2\nbrooklets",
-     ["quiet 4 brooks", "Quiet 11b Brook", "quiet 2\nbrooklets"]),
-    ("quiet 4, quiet 4 broo and quiet-4 brooks", []),
+    ("quiet 4 brooks, Quiet 11b Brook, quiet 2\nbrooklets and quiet-4-brooks",
+     ["quiet 4 brooks", "Quiet 11b Brook", "quiet 2\nbrooklets", "quiet-4-brooks"]),
+    ("quiet 4, quiet 4 broo and quiet.4 brooks", []),
     # digits, alone or followed by one or two letters (an item number), are one sign
-    ("lantern 7, Lantern 2026, lantern 11a: and LANTERN 3RD",
-     ["lantern 7", "Lantern 2026", "lantern 11a", "LANTERN 3RD"]),
-    ("lantern7, lantern 7abc, lantern seven and lantern-12", []),
+    ("lantern 7, Lantern 2026, lantern 11a:, LANTERN 3RD and lantern-12.5",
+     ["lantern 7", "Lantern 2026", "lantern 11a", "LANTERN 3RD", "lantern-12"]),
+    ("lantern7, lantern 7abc, lantern seven and lantern(12)", []),
     # a word allowed as a flag: as a lower-case token of its own after two hyphens, and nowhere else
     ("pip install --zebrafish pip", []),
     ("`--zebrafish`", []),
@@ -609,10 +623,11 @@ def test_the_scan_blanks_an_inline_payload_and_reads_what_follows_it(tmp_path, m
     ("notes/Zebrafish-Notes.md", ["Zebrafish"]),
     ("web/MARIGOLDS/index.js", ["MARIGOLDS"]),
     ("web/mari-golds_11a.css", ["mari-golds"]),
-    ("data/lantern 12b.txt", ["lantern 12b"]),
-    ("docs/purple heron.png", ["purple heron"]),
-    # the words of a phrase are parted by whitespace alone, in a path as in a text
-    ("data/lantern-12.txt", []),
+    ("data/lantern-12.txt", ["lantern-12"]),
+    ("data/lantern/12b.txt", ["lantern/12b"]),
+    ("docs/purple_heron.png", ["purple_heron"]),
+    ("docs/purple/heron.png", ["purple/heron"]),
+    ("docs/purple.heron.png", []),
     ("src/sightline/cli.py", []),
 ])
 def test_a_tracked_path_is_scanned_like_text_in_any_case(path, found):
