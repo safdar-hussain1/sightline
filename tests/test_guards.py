@@ -71,10 +71,12 @@ def is_base64(text: str) -> bool:
 
 
 def _strings(tree, where: str, payload: bool = False, payloads: set | None = None):
-    """Every key and every string of a parsed JSON tree, with where it sits. Under a key that names a
-    base64 payload (``PAYLOAD_KEY``) a string that is base64 and nothing else is left out, and added to
-    ``payloads``; any other string there is read, and the walk goes into every mapping and list
-    whatever its key."""
+    """Every key and every string of a parsed JSON tree, with where it sits, and every list of two strings
+    or more joined into one as well: a notebook keeps its text one line to a string, so a phrase wrapped
+    onto the next line is whole only there. Under a key that names a base64 payload (``PAYLOAD_KEY``) a
+    string, or a list's joined text, that is base64 and nothing else is left out, a string so left out
+    being added to ``payloads``; any other string there is read, and the walk goes into every mapping
+    and list whatever its key."""
     if isinstance(tree, dict):
         for key, value in tree.items():
             yield f"{where}.{key}", key
@@ -83,6 +85,10 @@ def _strings(tree, where: str, payload: bool = False, payloads: set | None = Non
     elif isinstance(tree, list):
         for i, value in enumerate(tree):
             yield from _strings(value, f"{where}[{i}]", payload, payloads)
+        if len(tree) > 1 and all(isinstance(value, str) for value in tree):
+            joined = "".join(tree)
+            if not (payload and is_base64(joined)):
+                yield where, joined
     elif isinstance(tree, str):
         if payload and is_base64(tree):
             if payloads is not None:
@@ -113,8 +119,9 @@ def readable_text(path: Path) -> tuple[list[tuple[str, str]], list[str]]:
     """What a reader of ``path`` can read, as ``(where, text)`` pieces, and why any of it cannot be
     read. The file's text as it stands comes first, its inline base64 payloads blanked. A notebook or a
     JSON file adds every key and string as it decodes, its escapes read, its metadata, every output
-    and every traceback included, but no base64 payload; in its text as it stands, each string that
-    holds one of those payloads is blanked too. A JSON file that holds a key twice in one object is
+    and every traceback included, and each list of strings joined (a cell's lines, an output's), but
+    no base64 payload; in its text as it stands, each string that holds one of those payloads is
+    blanked too. A JSON file that holds a key twice in one object is
     read as text alone and named, as its parsed tree would keep one value only; a file with the JSON
     suffix that is not JSON (JSON with comments, say) is read as text alone."""
     rel = path.relative_to(REPO).as_posix()
@@ -169,17 +176,26 @@ def test_no_tracked_file_holds_a_nul_byte_unless_its_format_is_binary():
 # Every word and phrase refused here is held as the sha256 of its normal form, never spelled, so that
 # this file does not name what it keeps out of the repository. A text's normal form is its tokens:
 # each a run of ASCII letters and digits in lower case, or a section sign on its own, with a token of
-# digits alone written ``#``; a phrase is one to three consecutive tokens joined by single spaces,
-# whatever separates them in the text. An EXACT digest names a phrase that is refused whole. A STEMS
-# digest names the beginning, four characters or more, of a token or of a two-token phrase, so that
-# one stem refuses every inflection of a word; a word whose stem would also begin innocent words is
-# held exact instead. Two tokens joined by hyphens or underscores alone are also read as one word,
-# for the stems. A word whose digest is in FLAGS may stand as a command-line flag, ``--word`` in
-# lower case and a token of its own; anywhere else it is refused like the rest. Each digest carries
-# the kind of rule it keeps, which a finding names. The scans read every tracked text file as it
-# stands and as it decodes (``readable_text``), every tracked path, and the names and message of
-# every commit. The probes further down plant made-up words whose digests they write out, so every
-# rule is shown to find what it must.
+# digits, alone or followed by one or two letters (an item number such as ``11a``), written ``#``; a
+# phrase is one to three consecutive tokens joined by single spaces. The tokens of a phrase are parted
+# by nothing but whitespace in the text: spaces and line breaks, and after a line break the mark that
+# carries a comment or a quote on to the next line (``#``, ``//``, ``*``, ``>``), so that a phrase
+# wrapped onto the next line is still one; any other mark parts them, so ``self.word`` or
+# ``count[word] += 1`` is never a phrase. An EXACT digest names a phrase that is refused whole. A
+# STEMS digest names the beginning, four characters or more, of a token or of a two- or three-token
+# phrase, reaching into its last token, so that one stem refuses every inflection of a word; a word
+# whose stem would also begin innocent words is held exact instead. Two tokens joined by hyphens or
+# underscores alone are also read as one word, for the stems; they never join the tokens of a phrase.
+# A word whose digest is in FLAGS may stand as a command-line flag, ``--word`` in lower case and a
+# token of its own; anywhere else it is refused like the rest. Each digest carries the kind of rule it
+# keeps, which a finding names. The scans read every tracked text file as it stands and as it decodes
+# (``readable_text``), every tracked path, and the names and message of every commit.
+#
+# The probes further down plant made-up words whose digests they write out: they show that the
+# machinery finds each form a rule covers and leaves the rest alone, not that the lists below name the
+# right words, which no test can read here. The lists are pinned instead (``PINNED``), so that a digest
+# dropped, added or changed fails; the readable list they are made from is kept privately, outside the
+# repository, where a script checks that these digests are the digests of its entries.
 
 EXACT = {
     "history": {
@@ -196,11 +212,11 @@ EXACT = {
         "2cc80c031e19249bd930b952b27967f49329d8ca25c12bf31474c4eb6c232e21",
         "32503795554682dd08640f18b380b9e9476a96efd5cd743f8bcf728fac232d1d",
         "5249804f2a9a1499425c32a6ffe94c43984cdcf7cd2a7165344e8bb765aa4fba",
-        "530338f42218dbd3a9cc12ed2d6a91673cf7cab5b0568325956737b2c576789c",
         "53cfadbb46a7703e2d3606085b994cdd6a8a754a39112da968143687ad57bd00",
         "9d6e63ad6b8e50d3b09932c2f2605cb45b125968f317361d3ecbb34dd5ba69ef",
         "a6a226508be3fddffce96a315b70b6b91e46aae8aae7d1b273167ba61c29cfdc",
         "d30275523e5516ce8bc110627e40622229593f53e3c2096c89fb47d71e9cd36e",
+        "e3238faccb7585ba292c430afadbc021ee7b1828551378ee39d3be416655f1fd",
         "ec3f4a4cd18a80ef0278399034b7262590a4c80ed67cadddb91c6e8769e387b9",
     },
 }
@@ -220,6 +236,7 @@ STEMS = {
     },
     "process": {
         "132a0519893f35d86aafbf5cd9863a34867ef0c6595f32fb2e1d8c1e1951fdc5",
+        "530338f42218dbd3a9cc12ed2d6a91673cf7cab5b0568325956737b2c576789c",
         "94a168d2da574b00ec6c787377278465271cf2b97e68af076fc3eee87eba8664",
         "a85785ab0c6b89ed491e8108e32545e37111a4a4c77c93a7bf9910361856b79b",
         "b8fa9efbc8c8f043afca1b60f8f4c5245c54b5ff5bfb0603a71071f66c1ef295",
@@ -231,9 +248,26 @@ STEMS = {
 FLAGS = {
     "7fef9479c8bc5a3c86891cb82969cbf2ffc73c7350366c82286345d8292eebf5",
 }
+#: each list of digests pinned, kind by kind: how many it holds, and the sha256 of its digests sorted
+#: and joined by line breaks (``pins``), which names no word
+PINNED = {
+    "exact history": (3, "63f248469bd91edbd0a804f952a0fdffa9e935198d53aa1d1b01046f3c54bc35"),
+    "exact attribution": (1, "b742a79fb229d19f5c296cf13106eb936edcbe3edcbe1b3f1debb98ab15902f6"),
+    "exact process": (11, "8d3b46a26d1836622f841bf01d2f993ccc51d206515549e80fff85af8b2784f0"),
+    "stems history": (4, "116db9156e2f5e1ca7cb7ebc7002f5d29741de6d185bb61c14db8802e2b1249b"),
+    "stems attribution": (5, "3fd7a305f084ce166ada1e7feaea2a2cebe3cf4c84bf6ce1a4097a98f4e3ae43"),
+    "stems process": (8, "0a0efc2c0da768b9ff216e43c1123c786bdd342f1bb6a75e1c1cbf763071e846"),
+    "flags": (1, "cd61ad43b90e0e7d414497241533e4e45d901b323e88d402bbe565b8583e8c3d"),
+}
 
 #: a token of the normal form: a run of ASCII letters and digits, or a section sign
 TOKEN = re.compile(r"[A-Za-z0-9]+|§")
+#: a token written ``#``: digits, alone or followed by one or two letters (``12``, ``11a``, ``3rd``)
+NUMBER = re.compile(r"[0-9]+[A-Za-z]{0,2}")
+#: what may part two tokens of a phrase: whitespace, and after each line break the mark that carries a
+#: comment or a quote on to that line; nothing at all where a section sign touches a token. Each run of
+#: whitespace has one way to match, so a long gap that fails does so at once.
+SPACE = re.compile(r"[^\S\n]*(?:\n[^\S\n]*(?:(?:#+|/{2,}|\*+|>+)[^\S\n]*)?)*")
 #: what may stand between two tokens that are read as one word for the stems
 JOINER = re.compile(r"[-_]+")
 #: a command-line flag: two hyphens, then a lower-case token of its own
@@ -242,8 +276,17 @@ FLAG = re.compile(r"(?<![\w-])--([a-z0-9]+)(?![\w-])")
 SHORTEST_STEM = 4
 
 
+def pins(exact: dict, stems: dict, flags) -> dict:
+    """Each list's pin (``PINNED``), kind by kind: how many digests it holds, and the sha256 of its
+    digests sorted and joined by line breaks."""
+    lists = {**{f"exact {kind}": digests for kind, digests in exact.items()},
+             **{f"stems {kind}": digests for kind, digests in stems.items()}, "flags": flags}
+    return {name: (len(digests), hashlib.sha256("\n".join(sorted(digests)).encode()).hexdigest())
+            for name, digests in lists.items()}
+
+
 def _normal(token: str) -> str:
-    return "#" if token.isdigit() else token.lower()
+    return "#" if NUMBER.fullmatch(token) else token.lower()
 
 
 def normal_form(text: str) -> str:
@@ -289,8 +332,10 @@ class Banned:
         return self._kept(("pair", a, b), lambda: self.exact.get(digest(phrase)) or self._stem(phrase, len(a) + 2))
 
     def triple(self, a: str, b: str, c: str) -> str | None:
-        """The kind of the refused phrase ``a b c`` is."""
-        return self._kept(("triple", a, b, c), lambda: self.exact.get(digest(f"{a} {b} {c}")))
+        """The kind of the refused phrase ``a b c`` is, or of a stem that begins it and reaches into ``c``."""
+        phrase = f"{a} {b} {c}"
+        return self._kept(("triple", a, b, c),
+                          lambda: self.exact.get(digest(phrase)) or self._stem(phrase, len(a) + len(b) + 3))
 
     def joined(self, a: str, b: str) -> str | None:
         """The kind of a stem that begins the word ``a`` and ``b`` make together and reaches into ``b``."""
@@ -312,13 +357,16 @@ def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str
             found.append((start, end, kind))
         if i + 1 < len(tokens):
             b_start, b_end, b = tokens[i + 1]
-            kind = banned.pair(a, b) or (banned.joined(a, b) if JOINER.fullmatch(text, end, b_start) else None)
+            spaced = SPACE.fullmatch(text, end, b_start) is not None
+            kind = (banned.pair(a, b) if spaced else None) \
+                or (banned.joined(a, b) if JOINER.fullmatch(text, end, b_start) else None)
             if kind:
                 found.append((start, b_end, kind))
-            if i + 2 < len(tokens):
-                kind = banned.triple(a, b, tokens[i + 2][2])
+            if spaced and i + 2 < len(tokens):
+                c_start, c_end, c = tokens[i + 2]
+                kind = banned.triple(a, b, c) if SPACE.fullmatch(text, b_end, c_start) else None
                 if kind:
-                    found.append((start, tokens[i + 2][1], kind))
+                    found.append((start, c_end, kind))
     return [(start, text[start:end], kind) for start, end, kind in found]
 
 
@@ -356,6 +404,15 @@ def test_no_tracked_path_holds_a_banned_word():
     assert offenders == [], f"banned words in tracked paths: {offenders}"
 
 
+def test_the_lists_of_digests_are_the_pinned_ones():
+    """A digest dropped, added or changed fails here, and so does a stem made to need more characters;
+    that the lists name the right words is checked outside the repository, against the readable list."""
+    every = [*FLAGS, *(sha for table in (EXACT, STEMS) for digests in table.values() for sha in digests)]
+    assert [sha for sha in every if not re.fullmatch(r"[0-9a-f]{64}", sha)] == [], "not a sha256 in hex"
+    assert pins(EXACT, STEMS, FLAGS) == PINNED
+    assert SHORTEST_STEM == 4
+
+
 # --- the probes: made-up words, with the digests written out ------------------------------------------
 
 PROBE_EXACT = {
@@ -363,10 +420,14 @@ PROBE_EXACT = {
     "purple heron": "7491777e1f876fa84212fdf39e8c5e0ede079b67b21a695d8c3ccbf56b8d83c1",
     "slow amber tide": "6ff0aad45023d3076e4e34ca71e862a62cb269883eda412b6cceb5ee33476afb",
     "lantern #": "3c13cec09bdbd44f7eb77192d0e2ef44c0f94a447c29f393712a69aca05cab52",
+    "lantern §": "7007ef96f2a4e1761eb71f24216764a9dee6199a14f6a3a2e6f64c878e554392",
 }
 PROBE_STEMS = {
     "marigold": "a5055bbfef782d417823b27963363a96ccd48a9df697398805c6eaa8d30eddd7",
     "velvet moth": "51ec23d7f3e54a326de9ebb83479e9f0c592cfb903e6511a49920af2ce7036ff",
+    "quiet # brook": "276651eef78d5837af9413eb68883c1bba20d896580777c1dca3284a58886d22",
+    "fern": "f0a5da17e0ffa3a21c2b07c964d465799eb0deb62905ccb1b271ce7716614746",  # as short as a stem may be
+    "basalt": "8369762ae90ec0b2252931df46d51aa11a4c0727669c41c7157e6da8a88430f3",  # six letters
     "owl": "10f7127b980b0b06ef157749f8a02cca1c606d22642729dcb2d24dbbf2bf30df",  # shorter than any stem held
 }
 PROBE = Banned({"probe": set(PROBE_EXACT.values())}, {"probe": set(PROBE_STEMS.values())},
@@ -382,6 +443,8 @@ def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
     assert normal_form("PURPLE\n  heron") == normal_form("purple_heron") == normal_form("purple-heron") == "purple heron"
     assert normal_form("§12 and §§") == "§ # and § §"
     assert normal_form("quill_x9.1, drive2018") == "quill x9 # drive2018"
+    # digits followed by one or two letters are an item number, written as digits are
+    assert normal_form("lantern 11a, 3RD, 64px, 12abc and x9") == "lantern # # # 12abc and x9"
 
 
 @pytest.mark.parametrize("text, found", [
@@ -394,21 +457,38 @@ def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
     ("mari-golds and mari__gold", ["mari-golds", "mari__gold"]),
     # a stem only begins a token, and a space or a stop does not join two
     ("marigol, xmarigold, mari golds and mari.gold", []),
+    # a stem as short as a stem may be, and one of six letters: each finds itself and the words it begins
+    ("fern, Ferns, basalt and BASALTIC", ["fern", "Ferns", "basalt", "BASALTIC"]),
+    ("fer, xfern, basal and bas alt", []),
     # a stem shorter than four characters finds nothing
     ("an owl and owls", []),
-    # two words, whatever separates them, and only whole
-    ("a purple heron, a PURPLE\n  HERON, purple-heron and purple_heron",
-     ["purple heron", "PURPLE\n  HERON", "purple-heron", "purple_heron"]),
+    # two words, only whole, and parted by nothing but whitespace: spaces, line breaks, and after a line
+    # break the mark that carries a comment or a quote on to the next line
+    ("a purple heron, a PURPLE\n  HERON, purple\n    # heron and purple\r\n// heron",
+     ["purple heron", "PURPLE\n  HERON", "purple\n    # heron", "purple\r\n// heron"]),
+    ("purple\n * heron and purple\n> heron", ["purple\n * heron", "purple\n> heron"]),
     ("purple herons and purpleheron", []),
+    # any other mark parts them, so ordinary code is left alone; a hyphen or an underscore joins two
+    # tokens into one word for the stems only
+    ("purple.heron, purple-heron, purple_heron, purple/heron, purple, heron and purple # heron", []),
+    ("if (self.purple) heron(); count[lantern] += 1; lantern(7)", []),
+    # a section sign may touch the word before it
+    ("lantern §4, Lantern§ and lantern\n§", ["lantern §", "Lantern§", "lantern\n§"]),
+    ("lantern.§ and lantern-§", []),
     # a two-word stem: its last word inflected
     ("velvet moths and a Velvet Moth", ["velvet moths", "Velvet Moth"]),
-    ("velvet and moth", []),
+    ("velvet and moth, velvet.moths", []),
     # three words
-    ("slow amber tide; Slow, amber; tide", ["slow amber tide", "Slow, amber; tide"]),
-    ("slow amber", []),
-    # digits: any number of them is one sign
-    ("lantern 7, Lantern 2026 and lantern-12.5", ["lantern 7", "Lantern 2026", "lantern-12"]),
-    ("lantern7, lantern 7b and lantern seven", []),
+    ("slow amber tide; slow\namber\n  tide", ["slow amber tide", "slow\namber\n  tide"]),
+    ("Slow, amber; tide, slow amber-tide and slow amber", []),
+    # a three-word stem: its last word inflected, once the stem reaches into it
+    ("quiet 4 brooks, Quiet 11b Brook and quiet 2\nbrooklets",
+     ["quiet 4 brooks", "Quiet 11b Brook", "quiet 2\nbrooklets"]),
+    ("quiet 4, quiet 4 broo and quiet-4 brooks", []),
+    # digits, alone or followed by one or two letters (an item number), are one sign
+    ("lantern 7, Lantern 2026, lantern 11a: and LANTERN 3RD",
+     ["lantern 7", "Lantern 2026", "lantern 11a", "LANTERN 3RD"]),
+    ("lantern7, lantern 7abc, lantern seven and lantern-12", []),
     # a word allowed as a flag: as a lower-case token of its own after two hyphens, and nowhere else
     ("pip install --zebrafish pip", []),
     ("`--zebrafish`", []),
@@ -456,23 +536,41 @@ def test_a_json_file_that_holds_a_key_twice_is_refused(tmp_path, monkeypatch):
 
 
 def test_the_scan_reads_everything_a_notebook_holds_but_its_images(tmp_path, monkeypatch):
-    notebook = {"metadata": {"title": "the purple heron notes"}, "cells": [{
-        "cell_type": "code", "metadata": {"tags": ["marigolds"]}, "source": ["print(1)\n", "# lantern 7\n"],
-        "outputs": [
-            {"output_type": "display_data", "data": {"image/png": PAYLOAD, "text/plain": ["the velvet moths"],
-                                                     "application/json": {"note": "slow amber tide"}}},
-            {"output_type": "error", "ename": "ValueError", "evalue": "ZEBRAFISH", "traceback": ["line one", "a zebrafish"]},
-        ]}]}
+    # a notebook keeps its text one line to a string: a phrase wrapped onto the next line, in a cell or in
+    # an output, is whole only where the lines are joined
+    notebook = {"metadata": {"title": "the purple heron notes"}, "cells": [
+        {"cell_type": "markdown", "metadata": {}, "source": ["the slow amber\n", "tide, wrapped"]},
+        {"cell_type": "code", "metadata": {"tags": ["marigolds"]},
+         "source": ["print(1)\n", "# lantern 7, a purple\n", "# heron\n"],
+         "outputs": [
+             {"output_type": "stream", "name": "stdout", "text": ["a velvet\n", "moth\n"]},
+             {"output_type": "display_data", "data": {"image/png": PAYLOAD, "text/plain": ["the velvet moths"],
+                                                      "application/json": {"note": "slow amber tide"}}},
+             {"output_type": "error", "ename": "ValueError", "evalue": "ZEBRAFISH",
+              "traceback": ["line one", "a zebrafish"]},
+         ]}]}
     # the error's value is written with an escape, as a notebook's text may hold it
     text = json.dumps(notebook).replace("ZEBRAFISH", "\\u005aEBRAFISH")
     found = _planted(tmp_path, monkeypatch, {"n.ipynb": text})
-    decoded = sorted(entry.split(": ", 1)[1] for entry in found if not entry.startswith("n.ipynb:"))
-    as_it_stands = sorted(entry.split(": ", 1)[1] for entry in found if entry.startswith("n.ipynb:"))
-    assert decoded == sorted(["'purple heron' (probe)", "'marigolds' (probe)", "'lantern 7' (probe)",
-                              "'velvet moths' (probe)", "'slow amber tide' (probe)", "'ZEBRAFISH' (probe)",
-                              "'zebrafish' (probe)"])
-    # the text as it stands has all but the escaped word, and neither has the image's bytes
-    assert as_it_stands == sorted(set(decoded) - {"'ZEBRAFISH' (probe)"})
+    code, outputs = "n.ipynb.cells[1]", "n.ipynb.cells[1].outputs"
+    # decoded: every string, and every list of strings joined
+    assert sorted(entry for entry in found if not entry.startswith("n.ipynb:")) == sorted([
+        "n.ipynb.metadata.title:1: 'purple heron' (probe)",
+        "n.ipynb.cells[0].source:1: 'slow amber\\ntide' (probe)",
+        f"{code}.metadata.tags[0]:1: 'marigolds' (probe)",
+        f"{code}.source[1]:1: 'lantern 7' (probe)",
+        f"{code}.source:2: 'lantern 7' (probe)", f"{code}.source:2: 'purple\\n# heron' (probe)",
+        f"{outputs}[0].text:1: 'velvet\\nmoth' (probe)",
+        f"{outputs}[1].data.text/plain[0]:1: 'velvet moths' (probe)",
+        f"{outputs}[1].data.application/json.note:1: 'slow amber tide' (probe)",
+        f"{outputs}[2].evalue:1: 'ZEBRAFISH' (probe)",
+        f"{outputs}[2].traceback[1]:1: 'zebrafish' (probe)", f"{outputs}[2].traceback:1: 'zebrafish' (probe)",
+    ])
+    # the text as it stands has neither the wrapped phrases nor the escaped word, and neither has the
+    # image's bytes
+    assert sorted(entry for entry in found if entry.startswith("n.ipynb:")) == sorted(
+        f"n.ipynb:1: {word!r} (probe)"
+        for word in ["purple heron", "marigolds", "lantern 7", "velvet moths", "slow amber tide", "zebrafish"])
 
 
 def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tmp_path, monkeypatch):
@@ -481,6 +579,9 @@ def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tm
         "not-base64.json": {"saliency_f32_b64": "a zebrafish, not a payload"},
         "nested.json": {"saliency_f32_b64": {"note": ["a zebrafish"]}},
         "plain-key.json": {"title": PAYLOAD},
+        # a list of strings, joined, under the same rule: the payload's bytes cut in two
+        "cut-payload.json": {"frames_b64": ["AAAA+zebra", "fish/BBBBB"]},
+        "cut-plain-key.json": {"title": ["AAAA+zebra", "fish/BBBBB"]},
     }
     found = _planted(tmp_path, monkeypatch, {name: json.dumps(tree) for name, tree in cases.items()})
     assert {name: [entry.split(":", 1)[0] for entry in found if entry.startswith(name)] for name in cases} == {
@@ -488,6 +589,8 @@ def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tm
         "not-base64.json": ["not-base64.json", "not-base64.json.saliency_f32_b64"],
         "nested.json": ["nested.json", "nested.json.saliency_f32_b64.note[0]"],
         "plain-key.json": ["plain-key.json", "plain-key.json.title"],
+        "cut-payload.json": [],
+        "cut-plain-key.json": ["cut-plain-key.json.title"],
     }
     assert is_base64(PAYLOAD) and is_base64("QUJD\nREVG") and not is_base64("zebrafish") \
         and not is_base64("QUJDRA=") and not is_base64("QU JD")
@@ -505,8 +608,11 @@ def test_the_scan_blanks_an_inline_payload_and_reads_what_follows_it(tmp_path, m
 @pytest.mark.parametrize("path, found", [
     ("notes/Zebrafish-Notes.md", ["Zebrafish"]),
     ("web/MARIGOLDS/index.js", ["MARIGOLDS"]),
-    ("data/lantern-12.txt", ["lantern-12"]),
-    ("docs/purple_heron.png", ["purple_heron"]),
+    ("web/mari-golds_11a.css", ["mari-golds"]),
+    ("data/lantern 12b.txt", ["lantern 12b"]),
+    ("docs/purple heron.png", ["purple heron"]),
+    # the words of a phrase are parted by whitespace alone, in a path as in a text
+    ("data/lantern-12.txt", []),
     ("src/sightline/cli.py", []),
 ])
 def test_a_tracked_path_is_scanned_like_text_in_any_case(path, found):

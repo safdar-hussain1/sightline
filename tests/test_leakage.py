@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from conftest import make_drive
+from conftest import REPO, make_drive
+from sightline import leakage
 from sightline.cli import main
 from sightline.data.cache import DriveCache
 from sightline.data.labels import load_labels
@@ -235,6 +236,15 @@ def test_pair_gaps_in_seconds_follow_the_timestamps_not_the_median_interval(tmp_
     for gaps in report["gaps"].values():
         for g in gaps.values():
             assert g["median_s"] == pytest.approx(g["median_frames"] * report["dt_s"], rel=1e-12)
+
+
+def test_the_module_gives_the_median_frame_interval_the_site_data_records_and_leaves_the_spread_to_it():
+    """The intervals between frames are spread wide, so the module's opening paragraph names its figure
+    as the median, the one results.json records under ``timing``, and points there for the rest."""
+    timing = json.loads((REPO / "web" / "public" / "data" / "results.json").read_text())["timing"]
+    median_ms = round(timing["drive2018"]["frame_interval_s"]["median"] * 1000)
+    opening = " ".join(leakage.__doc__.split("\n\n")[1].split())
+    assert f"{median_ms} ms apart at the median" in opening and "results.json ``timing``" in opening, opening
 
 
 def test_the_seed_picks_the_shuffled_split_and_so_the_paired_frames(drive, tmp_path):

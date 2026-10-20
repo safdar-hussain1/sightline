@@ -1,9 +1,10 @@
 """Why a shuffled split flatters a steering model, measured in time and in pixels.
 
-Consecutive dashcam frames are near-duplicates: about 57 ms apart, same
-road, same steering. Shuffle the frames before splitting and almost every
-test frame has a training frame right next to it; split the drive into
-blocks with a firewall and none is closer than ``2 * firewall + 1`` frames.
+Consecutive dashcam frames are near-duplicates: 57 ms apart at the median
+(results.json ``timing`` holds the spread of the intervals), same road, same
+steering. Shuffle the frames before splitting and almost every test frame
+has a training frame right next to it; split the drive into blocks with a
+firewall and none is closer than ``2 * firewall + 1`` frames.
 
 ``temporal_gaps``
     For every validation or test frame, the distance in frames to the

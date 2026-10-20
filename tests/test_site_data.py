@@ -2149,6 +2149,29 @@ def test_a_twin_whose_saved_split_is_not_the_one_its_report_describes_is_refused
     assert not (tmp_path / "public").exists()
 
 
+@pytest.mark.parametrize("saved_seed", [3, 0])
+def test_a_twins_saved_split_is_the_shuffled_split_of_the_seed_its_report_records(site, tmp_path, saved_seed):
+    """With seed 3 recorded for the shipped run and its twin (the blocked split takes no seed), the twin's
+    saved split must be the shuffled split of seed 3: that one passes, and the one of seed 0 is refused."""
+    reports = site_data.load_reports(site.reports / "summary.json", site.reports)
+    reseeded = replace(reports, runs={**reports.runs, **{name: {**reports.runs[name], "seed": 3}
+                                                         for name in (site.shipped, site.twin)}})
+
+    def save_the_split_of_the_seed(runs, data):
+        made = make_split("leaky", N, seed=saved_seed, firewall=FIREWALL, block=BLOCK)
+        for split in ("train", "val", "test"):
+            np.save(runs / site.twin / f"{split}_idx.npy", getattr(made, split))
+
+    workspace = _workspace_with(site, tmp_path, save_the_split_of_the_seed)
+    if saved_seed == 3:
+        site_data._check_saved_splits(workspace, reseeded)
+        return
+    with pytest.raises(ValueError, match=rf"^run '{site.twin}': its saved train frames \(train_idx\.npy\) are not "
+                                         rf"the shuffled split the splits module makes of the {N} frames of drive2018 "
+                                         "with seed 3, "):
+        site_data._check_saved_splits(workspace, reseeded)
+
+
 def test_a_run_report_filed_under_another_runs_name_is_refused(site, tmp_path):
     shipped = json.loads((site.reports / "runs" / f"{site.shipped}.json").read_text())
     report = _run_report(shipped, "blocked", 1)
