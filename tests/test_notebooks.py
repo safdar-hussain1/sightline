@@ -12,8 +12,11 @@ import json
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from sightline.data.labels import load_labels
+from sightline.data.splits import make_split
 from sightline.evaluate import TOLERANCES_DEG, within_key
 
 REPO = Path(__file__).resolve().parents[1]
@@ -222,7 +225,7 @@ def test_the_results_notebook_shows_the_splits_and_their_gaps():
                      f"{gap['median_frames']:,g}", f"{gap['frac_within_1']:.1%}"])
         medians.append(f"{gap['median_frames']:,g}")
     blocked = runs[f"{DRIVE}_sightlinenet_blocked_s{leakage['seed']}"]["splits"]
-    dt, need = summary["drives"][DRIVE]["median_dt_s"], 2 * blocked["firewall"] + 1
+    need = 2 * blocked["firewall"] + 1
     other = summary["drives"]["drive2017"]["frames"]
     (scored,) = {r["cross_drive"]["n"] for r in runs.values()}  # every run scores the same frames of the other drive
     counts = ", ".join(f"{rung} in {sum(r['protocol'] == protocol for r in runs.values())} runs" for protocol, rung in RUNGS.items())
@@ -230,13 +233,23 @@ def test_the_results_notebook_shows_the_splits_and_their_gaps():
         "median distance to the nearest training frame, from the shuffled split to the later-in-the-drive split: "
         + ", ".join(medians) + " frames; another day is a different drive",
         f"blocked: blocks of {blocked['block']:,} frames; {blocked['firewall']} frames dropped on each side of every "
-        f"training/evaluation boundary, so every evaluation frame is at least {need} frames "
-        f"({need * dt:.1f} s at the median frame interval of {1000 * dt:.1f} ms) from a training frame",
+        f"training/evaluation boundary, so every evaluation frame is at least {need} frames from a training frame; "
+        "01-data-and-leakage.ipynb measures how far that is in seconds, from the drive's timestamps",
         f"another day: {scored:,} of the {other:,} frames of drive2017, all but the first {other - scored}",
         f"the shuffled split above is seed {leakage['seed']}'s; every run of a split deals the same numbers of frames: {counts}",
     ]
     _assert_shows("02-results.ipynb", tokens=tokens, rows=rows)
     assert float(medians[0].replace(",", "")) < float(medians[1].replace(",", "")) < float(medians[2].replace(",", ""))
+
+
+def test_the_results_notebook_leaves_the_gap_in_seconds_to_the_data_notebook():
+    """The reports hold the drive's median frame interval, not the time between two frames, and the
+    interval varies along the drive: a distance in frames times the median interval is not how far
+    apart two frames are. The results notebook, which reads the reports alone, gives the distance in
+    frames; the data notebook, which has the timestamps, gives it in seconds."""
+    code = "\n".join("".join(cell["source"]) for cell in _code("02-results.ipynb"))
+    assert "median_dt_s" not in code
+    assert not re.search(r"\d s at the median frame interval", _shown("02-results.ipynb"))
 
 
 def test_the_results_notebook_shows_the_shipped_choice():
@@ -416,6 +429,45 @@ def test_the_data_notebook_gives_the_memoriser_one_column_per_tolerance_of_the_e
         rows.append([RUNGS[protocol], str(m["n"]), f"{m['mae_deg']:.3f}", f"{m['rmse_deg']:.2f}", f"{m['medae_deg']:.2f}",
                      *(f"{m[within_key(x)]:.1%}" for x in TOLERANCES_DEG)])
     _assert_shows("01-data-and-leakage.ipynb", rows=rows)
+
+
+#: what the data notebook prints of the blocked split's closest validation and test frames
+CLOSEST = re.compile(r"blocked (validation|test) frames: the closest to a training frame by the drive's timestamps is "
+                     r"frame ([\d,]+), (\d+\.\d) s from training frame ([\d,]+) \(([\d,]+) frames away\)")
+
+
+def _closest_in_seconds(stamps: np.ndarray, held: np.ndarray, trained: np.ndarray) -> tuple[float, int, int]:
+    """The time from the evaluation frame of ``held`` nearest a training frame of ``trained`` to that
+    training frame, in seconds by ``stamps``, with the two frames: checked against every training frame,
+    not only its neighbours."""
+    best = (np.inf, -1, -1)
+    for frame in held:
+        apart = np.abs(stamps[trained] - stamps[frame])
+        k = int(np.argmin(apart))
+        if apart[k] < best[0]:
+            best = (float(apart[k]), int(frame), int(trained[k]))
+    return best
+
+
+def test_the_data_notebook_gives_the_closest_blocked_evaluation_frames_in_seconds_from_the_timestamps():
+    leakage, summary = _report("leakage.json"), _report("summary.json")
+    split = make_split("blocked", summary["drives"][DRIVE]["frames"], firewall=leakage["splits"]["firewall"],
+                       block=leakage["splits"]["block"])
+    found = {m[1]: m for m in CLOSEST.finditer(_shown("01-data-and-leakage.ipynb"))}
+    assert sorted(found) == ["test", "validation"], "the closest validation and test frames, in seconds"
+    labels = REPO / "data" / DRIVE / "data.txt"
+    stamps = load_labels(labels.parent).timestamps_s if labels.is_file() else None
+    for which, title in (("val", "validation"), ("test", "test")):
+        line = found[title]
+        frame, trained, apart = (int(line[k].replace(",", "")) for k in (2, 4, 5))
+        seconds = float(line[3])
+        # an evaluation frame and the training frame next to it, no closer than the firewall allows
+        assert frame in getattr(split, which) and trained in split.train and apart == abs(frame - trained)
+        assert not np.isin(np.arange(min(frame, trained) + 1, max(frame, trained)), split.train).any()
+        assert apart >= leakage["gaps"]["blocked"][which]["min_frames"] and seconds > 0
+        if stamps is not None:  # the dataset is here: the time is measured again from its timestamps
+            measured, closest, nearest = _closest_in_seconds(stamps, getattr(split, which), np.sort(split.train))
+            assert (f"{measured:.1f}", closest, nearest) == (line[3], frame, trained), title
 
 
 def test_the_data_notebook_shows_the_reports_current_values():
