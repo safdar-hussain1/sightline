@@ -42,9 +42,9 @@ largest saliency difference 7.5e-06 (gate 0.0001).
   MIT License): 63,825 dashcam frames over 55.9 minutes, a timestamp on every frame. Consecutive
   frames are 25 to 338 ms apart, a median 57.0 ms.
 - **Labels**: the human's steering-wheel angle in degrees. The steering sensor sometimes logs a zero
-  for a frame in the middle of a turn: the 368 zeros whose neighbours are both at least 15° and of
-  the same sign are repaired by interpolating the neighbours, and zeros between smaller angles are
-  left as logged.
+  for a frame in the middle of a turn: the 368 zeros whose neighbours both steer at least 15° the
+  same way are repaired by interpolating the neighbours, and zeros between smaller angles are left
+  as logged.
 - **Split**: blocked. The drive is cut into blocks of 1,500 frames dealt out by the repeating
   pattern `TTVTTET` (T train, V validation, E test), and 250 frames are dropped on each side of
   every boundary between a training block and an evaluation block. Every evaluation frame is then

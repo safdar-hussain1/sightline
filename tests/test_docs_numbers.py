@@ -259,7 +259,7 @@ PINS: list[tuple[str, str, str, str, str]] = [
     ("CARD", "`models/sightline-shuffled.onnx` (run `{}`)", SUMMARY, "/twin/run", "text"),
     ("CARD", "| parameters | {} |", SHIPPED_RUN, "/n_params", "int,"),
     ("CARD", "frame t first and frame t−{} second", EXPORT, "/models/sightline/frame_lags/0", "int"),
-    ("CARD", "the {} zeros whose neighbours are both at least 15° and of the same sign are repaired by "
+    ("CARD", "the {} zeros whose neighbours both steer at least 15° the same way are repaired by "
      "interpolating the neighbours", SUMMARY, "/drives/drive2018/repaired_labels", "int"),
     ("CARD", "**{} tests**:", SUMMARY, "/ladder/sightlinenet", "lenWord"),
     ("CARD", "*later in the drive* (train on the first {}% of the drive, test on its end)", RESULTS,
@@ -497,7 +497,7 @@ ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
     ("README", "Every run trains on drive2018: {} frames, {} minutes, a timestamp on every frame.", [
         (SUMMARY, "/drives/drive2018/frames", "int,"),
         (RESULTS, "/drive_profile/drives/drive2018/duration_s", "min1")]),
-    ("README", "The {} zeros whose neighbours are both at least 15° and of the same sign are repaired by "
+    ("README", "The {} zeros whose neighbours both steer at least 15° the same way are repaired by "
      "interpolating the neighbours ({} in drive2017);", [
         (SUMMARY, "/drives/drive2018/repaired_labels", "int"),
         (SUMMARY, "/drives/drive2017/repaired_labels", "int")]),
@@ -962,7 +962,8 @@ def _shuffled_neighbour_same_angle(r: Reader) -> bool:
 
 
 def _blocked_neighbour_minutes_away(r: Reader) -> bool:
-    return all(p["blocked"]["gap_s"] >= 60 for p in _pairs(r))
+    """Over a minute away: every one of the six blocked-split neighbours is more than sixty seconds off."""
+    return all(p["blocked"]["gap_s"] > 60 for p in _pairs(r))
 
 
 def _blocked_neighbour_often_elsewhere(r: Reader) -> bool:
@@ -1172,7 +1173,7 @@ CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
     ("README", "the nearest-looking training frame under the shuffled split is the frame next door",
      _shuffled_neighbour_next_door),
     ("README", "steering at nearly the same angle", _shuffled_neighbour_same_angle),
-    ("README", "Under the blocked split it is minutes away", _blocked_neighbour_minutes_away),
+    ("README", "Under the blocked split it is over a minute away", _blocked_neighbour_minutes_away),
     ("README", "and often steering somewhere else", _blocked_neighbour_often_elsewhere),
     ("README", "the drive's last stretch is calmer than the drive as a whole", _later_rung_calmer),
     ("README", "Its test frames come after the whole validation stretch", _forward_test_after_validation),
@@ -1398,7 +1399,7 @@ ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None
     (("CARD",), r"\[0, 1\]", "the saliency map's range: each map is scaled from its minimum to its maximum", None),
     (("README",), r"units of (?P<deg>\d+)°", "the Huber loss's scale, the training code's HUBER_SCALE_DEG", _huber),
     (("README",), r"past ±?(?P<deg>\d+)°", "the arctangent head's limit, the standard-recipe code's CAP_DEG", _cap),
-    (("README", "CARD"), r"neighbours are both at least (?P<deg>\d+)° and of the same sign",
+    (("README", "CARD"), r"neighbours both steer at least (?P<deg>\d+)° the same way",
      "the dropout repair's threshold, the default of repair_dropouts' min_neighbor_deg", _repair_threshold),
     (("README", "CARD"), r"for the middle (?P<pct>\d+)% of frame pairs", "the share of frame pairs between the "
      "5th and 95th percentiles the timing records (SPREAD_PERCENTILES)", _middle_share),
@@ -1467,7 +1468,7 @@ ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None
 
 #: "at least" before these is a rule's own threshold, a constant of the code an ALLOWED entry checks, not a
 #: measured bound that could be rounded the wrong way
-DEFINED_BOUNDS = (r"neighbours are both at least (\d+)° and of the same sign",)
+DEFINED_BOUNDS = (r"neighbours both steer at least (\d+)° the same way",)
 
 
 # --- matching -----------------------------------------------------------------------------------

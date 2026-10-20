@@ -156,8 +156,8 @@ read from the drive's timestamps.
 | 60,913 (234.35°) | 60,912 | 30 ms | 234.25° | 21,414 | 2,065.9 s | −337.11° |
 
 In all six, the nearest-looking training frame under the shuffled split is the frame next door,
-steering at nearly the same angle. Under the blocked split it is minutes away, and often steering
-somewhere else.
+steering at nearly the same angle. Under the blocked split it is over a minute away, and often
+steering somewhere else.
 
 ### Against the baselines
 
@@ -277,8 +277,8 @@ standard augmentation and dropout 0.2 after each of its hidden fully connected l
 
 Every run trains on drive2018: 63,825 frames, 55.9 minutes, a timestamp on every frame. Its
 steering sensor sometimes logs a zero for a frame in the middle of a turn. The 368 zeros whose
-neighbours are both at least 15° and of the same sign are repaired by interpolating the
-neighbours (268 in drive2017); zeros between smaller angles are left as logged.
+neighbours both steer at least 15° the same way are repaired by interpolating the neighbours
+(268 in drive2017); zeros between smaller angles are left as logged.
 
 - **Shuffled** (`--protocol leaky`): shuffle the frames, then deal 70% to training, 15% to
   validation and 15% to test: 44,677, 9,574 and 9,574 frames. 90.9% of the test frames sit within
