@@ -11,10 +11,12 @@
  * The router shows one view and hides the other, marks the nav link of the
  * view on screen, and fades the view in -- except under reduced motion, where
  * the switch is instant. Following a link starts the new view at its top, or
- * at the place the link names, and moves focus there; going back and forward
- * leaves the scroll position and focus to the browser, which restores where
- * the visitor was (focus pulled to a view's top would send the next Tab away
- * from it). It
+ * at the place the link names, and moves focus there. Going back and forward
+ * leaves the scroll position to the browser, which restores where the visitor
+ * was; once it has, focus moves, without scrolling, to the heading or region
+ * nearest the top of the screen in the view now shown, so the next Tab carries
+ * on from where the visitor is rather than from a place in the view just
+ * hidden. Focus already on something still on screen stays where it is. It
  * never changes the document's title: the title is what search engines index,
  * and it names the page, not the view.
  */
@@ -36,7 +38,43 @@ export interface RouterOptions {
   readonly animate?: (el: HTMLElement) => void;
   /** Hears each switch, and the view the page opens on. */
   readonly onShow?: (view: ViewName) => void;
+  /** Calls back once the browser has put back the scroll position it
+   * restores on Back and Forward: after two animation frames, unless a test
+   * says otherwise. */
+  readonly afterRestore?: (callback: () => void) => void;
 }
+
+/** What focus may land on after Back or Forward: the view's headings and its
+ * labelled regions. */
+const PLACES = "h2, h3, section[aria-label], section[aria-labelledby]";
+
+/** Of `boxes`, the index of the one whose top is nearest the top of a
+ * viewport `height` tall, among those at least partly in view; a heading wins
+ * a tie with a region (it says more). Null when none is in view. */
+export function nearestToTop(
+  boxes: ReadonlyArray<{ readonly top: number; readonly bottom: number; readonly heading: boolean }>,
+  height: number,
+): number | null {
+  let best: number | null = null;
+  boxes.forEach((box, i) => {
+    if (box.bottom <= 0 || box.top >= height) return;
+    const current = best === null ? null : boxes[best];
+    const distance = Math.abs(box.top);
+    if (
+      current === null ||
+      current === undefined ||
+      distance < Math.abs(current.top) ||
+      (distance === Math.abs(current.top) && box.heading && !current.heading)
+    ) {
+      best = i;
+    }
+  });
+  return best;
+}
+
+const afterTwoFrames = (callback: () => void) => {
+  requestAnimationFrame(() => requestAnimationFrame(callback));
+};
 
 const fadeIn = (el: HTMLElement) => {
   el.animate?.(
@@ -57,11 +95,13 @@ export class Router {
   private followed: string | null = null;
   private readonly reduced: () => boolean;
   private readonly animate: (el: HTMLElement) => void;
+  private readonly afterRestore: (callback: () => void) => void;
   private readonly listening = new AbortController();
 
   constructor(private readonly options: RouterOptions) {
     this.reduced = options.reducedMotion ?? prefersReducedMotion;
     this.animate = options.animate ?? fadeIn;
+    this.afterRestore = options.afterRestore ?? afterTwoFrames;
   }
 
   /** The view on screen. */
@@ -124,12 +164,38 @@ export class Router {
     }
     if (followed) {
       const focus = place ?? document.querySelector<HTMLElement>(this.options.focus[view]);
-      if (focus) {
-        if (!focus.hasAttribute("tabindex")) focus.tabIndex = -1;
-        focus.focus({ preventScroll: true });
-      }
+      if (focus) this.focusOn(focus);
+    } else {
+      // Back, Forward, or a hash typed in: the browser puts the visitor back
+      // where they were, then focus follows them there.
+      this.afterRestore(() => this.refocus(view));
     }
     if (panel && !this.reduced()) this.animate(panel);
+  }
+
+  private focusOn(element: HTMLElement): void {
+    if (!element.hasAttribute("tabindex")) element.tabIndex = -1;
+    element.focus({ preventScroll: true });
+  }
+
+  /** Focus, without scrolling, the heading or region nearest the top of the
+   * screen in `view` -- unless the visitor has moved on, or focus is on
+   * something still on screen. */
+  private refocus(view: ViewName): void {
+    if (this.current !== view) return;
+    const panel = this.panel(view);
+    if (!panel) return;
+    const active = document.activeElement;
+    const lost = active === null || active === document.body || !active.isConnected || active.closest(".view[hidden]") !== null;
+    if (!lost) return;
+    const places = [...panel.querySelectorAll<HTMLElement>(PLACES)];
+    const boxes = places.map((place) => {
+      const { top, bottom } = place.getBoundingClientRect();
+      return { top, bottom, heading: /^H\d$/.test(place.tagName) };
+    });
+    const nearest = nearestToTop(boxes, innerHeight);
+    const target = nearest === null ? document.querySelector<HTMLElement>(this.options.focus[view]) : places[nearest];
+    if (target) this.focusOn(target);
   }
 
   private panel(view: ViewName): HTMLElement | null {

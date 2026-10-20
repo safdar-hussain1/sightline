@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Router, viewForHash, type ViewName } from "./router.ts";
+import { Router, nearestToTop, viewForHash, type ViewName } from "./router.ts";
 
 const TITLE = "Sightline — a steering model that shows where it looks";
 
@@ -16,7 +16,7 @@ function page(): void {
     <main>
       <div class="view" data-view="demo">
         <section id="cockpit" aria-label="Live demo">cockpit</section>
-        <section id="how-it-works"><h2>How it works</h2></section>
+        <section id="how-it-works" aria-labelledby="how-title"><h2 id="how-title">How it works</h2></section>
         <a id="to-results" href="#results">See what the measurements found</a>
       </div>
       <div class="view" data-view="results" hidden>
@@ -39,19 +39,39 @@ let titleWrites = 0;
 
 let router: Router | null = null;
 
+/** The browser's restoration of the scroll position after Back or Forward:
+ * the router waits for it, and the test says when it is done. */
+let restored: Array<() => void> = [];
+const restore = () => {
+  const waiting = restored;
+  restored = [];
+  for (const callback of waiting) callback();
+};
+
 function start(reduced = false): Router {
   router = new Router({
     focus: { demo: "#cockpit", results: "#results-title" },
     reducedMotion: () => reduced,
     animate: (el) => void animations.push({ el }),
+    afterRestore: (callback) => void restored.push(callback),
   });
   router.start();
   return router;
 }
 
+/** Where each element sits in the viewport, by id (happy-dom lays nothing out). */
+function layout(tops: Record<string, number>, height = 40): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const top = tops[this.id] ?? 5000;
+    const box = { x: 0, y: top, top, bottom: top + height, left: 0, right: 800, width: 800, height };
+    return { ...box, toJSON: () => box } as DOMRect;
+  });
+}
+
 beforeEach(() => {
   page();
   animations = [];
+  restored = [];
   scrolls = [];
   titleWrites = 0;
   history.replaceState(null, "", "/");
@@ -134,7 +154,7 @@ describe("the router", () => {
     expect(document.activeElement?.id).toBe("results-title");
   });
 
-  it("goes back and forward with the browser, leaving the scroll position and focus to it", async () => {
+  it("goes back and forward with the browser, leaving the scroll position to it", async () => {
     start();
     link("results").click();
     await ticks();
@@ -146,13 +166,68 @@ describe("the router", () => {
     expect(location.hash).toBe("");
     expect(shown()).toEqual(["demo"]);
     expect(scrolls).toEqual([]);
-    // Focus is not pulled to the top of a view the browser is scrolling down.
-    expect(document.activeElement).toBe(document.body);
     history.forward();
     await ticks(6);
     expect(shown()).toEqual(["results"]);
     expect(scrolls).toEqual([]);
-    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("after Back, once the browser has restored the scroll, puts focus where the visitor is, without scrolling", async () => {
+    start();
+    link("results").click();
+    await ticks();
+    expect(document.activeElement?.id).toBe("results-title");
+    scrolls.length = 0;
+    const focusing: Array<[string, FocusOptions | undefined]> = [];
+    const focus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      focusing.push([this.id, options]);
+      focus.call(this, options);
+    });
+    const into = vi.fn();
+    Element.prototype.scrollIntoView = into;
+    history.back();
+    await ticks(6);
+    expect(shown()).toEqual(["demo"]);
+    // Nothing moves before the browser has put the visitor back where they were.
+    expect(focusing).toEqual([]);
+    // The browser restores the demo scrolled down to How it works.
+    layout({ cockpit: -620, "how-it-works": 30, "how-title": 30, "results-title": 0 }, 700);
+    restore();
+    // The heading of the section at the top of the screen, not the region
+    // that has scrolled away.
+    expect(document.activeElement?.id).toBe("how-title");
+    expect(focusing).toEqual([["how-title", { preventScroll: true }]]);
+    expect(scrolls).toEqual([]);
+    expect(into).not.toHaveBeenCalled();
+  });
+
+  it("after Forward, focuses the heading nearest the top of the restored view", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    expect(document.activeElement?.id).toBe("cockpit");
+    history.back();
+    await ticks(6);
+    expect(shown()).toEqual(["results"]);
+    layout({ "results-title": -12, cockpit: 0, "how-it-works": 0, "how-title": 0 });
+    restore();
+    expect(document.activeElement?.id).toBe("results-title");
+  });
+
+  it("leaves focus alone after Back when it is on something still on screen", async () => {
+    start();
+    link("results").click();
+    await ticks();
+    const toggle = document.createElement("button");
+    document.querySelector("header")?.append(toggle);
+    toggle.focus();
+    history.back();
+    await ticks(6);
+    layout({ cockpit: 0, "how-it-works": 700, "how-title": 700 });
+    restore();
+    expect(document.activeElement).toBe(toggle);
   });
 
   it("switches instantly under reduced motion", async () => {
@@ -213,5 +288,26 @@ describe("the router", () => {
     await ticks(6);
     expect(titleWrites).toBe(0);
     expect(document.title).toBe(TITLE);
+  });
+});
+
+describe("nearestToTop", () => {
+  const box = (top: number, heading = true, height = 40) => ({ top, bottom: top + height, heading });
+
+  it("picks the place whose top is nearest the top of the screen, above or below it", () => {
+    expect(nearestToTop([box(300), box(-20), box(600)], 800)).toBe(1);
+    expect(nearestToTop([box(-700, false, 900), box(120)], 800)).toBe(1);
+    expect(nearestToTop([box(-90, false, 900), box(120)], 800)).toBe(0);
+  });
+
+  it("skips places wholly above or below the screen, and finds none when none is in view", () => {
+    expect(nearestToTop([box(-60), box(500)], 800)).toBe(1);
+    expect(nearestToTop([box(-60), box(900)], 800)).toBeNull();
+    expect(nearestToTop([], 800)).toBeNull();
+  });
+
+  it("prefers a heading to a region that starts at the same place", () => {
+    expect(nearestToTop([box(30, false, 700), box(30)], 800)).toBe(1);
+    expect(nearestToTop([box(30), box(30, false, 700)], 800)).toBe(0);
   });
 });

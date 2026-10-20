@@ -251,7 +251,7 @@ describe("the Results band", () => {
       status: () => ({ state: "ready" }) as LiveStatus,
     } as unknown as LiveCockpit;
     band.attach(cockpit);
-    expect(text('[data-results="trust-text"]')).toBe(parityState(agreement, "ready").text);
+    expect(text('[data-results="trust-verdict"]')).toBe(parityState(agreement, "ready").text);
     expect(q('[data-results="trust"]').dataset["state"]).toBe("checked");
 
     // The wrong model served under Sightline's name: its frames decode the
@@ -259,25 +259,67 @@ describe("the Results band", () => {
     agreement = { ...agreement, maxDiffDeg: 124.8157 };
     vi.advanceTimersByTime(700);
     expect(q('[data-results="trust"]').dataset["state"]).toBe("mismatch");
-    expect(text('[data-results="trust-text"]')).toMatch(/do not match the same model run in Python/);
+    expect(text('[data-results="trust-verdict"]')).toMatch(/do not match the same model run in Python/);
 
     agreement = { ...agreement, check: "differ", maxDiffDeg: 0 };
     vi.advanceTimersByTime(700);
     expect(q('[data-results="trust"]').dataset["state"]).toBe("note");
   });
 
+  it("announces the live check's verdict politely, once, and never its progress", async () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset["view"] = "results";
+    const { band } = mount(true);
+    const verdict = q('[data-results="trust-verdict"]');
+    const progress = q('[data-results="trust-text"]');
+    expect(verdict.getAttribute("role")).toBe("status");
+    expect(progress.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+
+    const clipFile = { title: "2018: minutes it never trained on", tolerance: { angle_deg: 0.001 } } as Clip;
+    let agreement: Agreement = { clip: clipFile, model: "sightline", check: "match", compared: 96, total: 420, maxDiffDeg: 0.0000305 };
+    band.attach({ agreement: () => agreement, status: () => ({ state: "ready" }) as LiveStatus } as unknown as LiveCockpit);
+    expect(progress.textContent).toMatch(/^Checking Sightline live: 96 of 420 frames/);
+    expect(progress.hidden).toBe(false);
+    expect(verdict.textContent).toBe("");
+
+    const writes: MutationRecord[] = [];
+    new MutationObserver((records) => void writes.push(...records)).observe(verdict, { childList: true, characterData: true, subtree: true });
+    agreement = { ...agreement, compared: 300 };
+    vi.advanceTimersByTime(700);
+    await Promise.resolve();
+    expect(writes).toEqual([]);
+    expect(progress.textContent).toMatch(/300 of 420 frames/);
+
+    agreement = { ...agreement, compared: 420 };
+    vi.advanceTimersByTime(700);
+    expect(verdict.textContent).toBe(parityState(agreement, "ready").text);
+    expect(progress.hidden).toBe(true);
+    // Read again and again while the view is open, the verdict is written once.
+    vi.advanceTimersByTime(5000);
+    await Promise.resolve();
+    expect(writes).toHaveLength(1);
+  });
+
   it("says why there is no live check when the demo's code never started", () => {
     const { band } = mount(true);
     band.attach(null);
-    expect(text('[data-results="trust-text"]')).toBe("The live check needs the demo, which could not start in this browser.");
+    expect(text('[data-results="trust-verdict"]')).toBe("The live check needs the demo, which could not start in this browser.");
     expect(q('[data-results="trust"]').dataset["state"]).toBe("note");
+  });
+
+  it("calls the paired figure flattery only when both networks' ratios are above one", () => {
+    const json = resultsFixture();
+    patch(json, "paired_leakage.pilotnet.ratio", { mean: 0.9, sd: 0.1, values: [0.8, 0.9, 1] });
+    const { band } = mount(true);
+    band.show(readFigures(json));
+    expect(text('[data-results="paired-label"]')).toBe(pairedLabel(0.9));
   });
 
   it("names both networks in the paired figure", () => {
     const { band } = mount(true);
     band.show(figures());
     const names = [...document.querySelectorAll('.finding--hero .finding__split')].map((el) => el.textContent);
-    expect(names).toEqual(["Sightline", "PilotNet"]);
+    expect(names).toEqual(["SightlineNet", "PilotNet"]);
   });
 
   it("stops calling the paired ratio flattery if it falls below one, and still counts it from one", () => {
@@ -302,8 +344,6 @@ describe("the Results band", () => {
     band.fail(error);
     expect(text('[data-results="lede"]')).toBe(measurementsFailure(error));
     expect(q('[data-results="root"]').dataset["state"]).toBe("unavailable");
-    // The explainer of the splits gives way too: nothing stands alone under a heading.
-    expect(q('[data-results="splits"]').hidden).toBe(true);
   });
 });
 
@@ -462,9 +502,9 @@ describe("How it works", () => {
     const how = mount(true);
     how.attach(cockpit);
     // Before results.json says which drive has timestamps, nothing is timed.
-    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two before it");
+    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two frames before it");
     how.setIntervals(INTERVALS);
-    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two before it");
+    expect(text('[data-how="frames-title"]')).toBe("This frame and the one two frames before it");
     expect(text('[data-how="age-1"]')).toBe("two frames before");
     expect(text('[data-how="frames-text"]')).toMatch(/on the 2018 drive, whose frames do, two frames are 114 ms apart/);
   });

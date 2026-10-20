@@ -29,7 +29,7 @@ import {
   pairedRuler,
   parityState,
   resultsLede,
-  splitsText,
+  type ParityLook,
 } from "./copy.ts";
 import type { Figures } from "./figures.ts";
 import { onScreen, prefersReducedMotion } from "./motion.ts";
@@ -66,6 +66,7 @@ export class Headline {
   private onView = false;
   private cockpit: LiveCockpit | null | undefined = undefined;
   private checking = 0;
+  private listener: ((look: ParityLook, text: string) => void) | null = null;
 
   /** `frames` is the clock the counts run on: the page's own unless a test
    * passes one. */
@@ -100,17 +101,16 @@ export class Headline {
 
   /** Write the figures in, and count them up if the band is on screen. */
   show(figures: Figures): void {
-    const { paired, anotherDay, memoriser, gaps, runs } = figures;
+    const { paired, anotherDay, memoriser, runs } = figures;
     const day = anotherDayFigure(anotherDay);
     this.part("lede").textContent = resultsLede(runs);
-    this.part("paired-label").textContent = pairedLabel(paired.sightlinenet.ratio.mean);
+    // One label speaks for both networks' figures: it calls the paired ratio
+    // flattery only when neither ratio is one or less.
+    this.part("paired-label").textContent = pairedLabel(Math.min(paired.sightlinenet.ratio.mean, paired.pilotnet.ratio.mean));
     this.part("paired-note").textContent = pairedNote(paired);
     this.part("another-day-label").textContent = day.label;
     this.part("another-day-note").textContent = anotherDayNote(anotherDay);
     this.part("memoriser-note").textContent = memoriserNote(memoriser);
-    const splits = splitsText(gaps);
-    this.part("shuffled").textContent = splits.shuffled;
-    this.part("blocked").textContent = splits.blocked;
 
     // The rulers: the errors behind the paired ratio and behind another
     // day's skill, every bar on one scale.
@@ -173,7 +173,6 @@ export class Headline {
   /** Say why there are no figures, in place of them. */
   fail(error: unknown): void {
     this.part("lede").textContent = measurementsFailure(error);
-    this.part("splits").hidden = true;
     this.root.dataset["state"] = "unavailable";
   }
 
@@ -216,16 +215,32 @@ export class Headline {
     this.part(`bar-${part}`).style.setProperty("--share", String(Math.max(0, degrees) / this.scale));
   }
 
-  /** Read the live check now, and again shortly while the view is on screen. */
+  /** Read the live check now, and again shortly while the view is on screen.
+   * Its progress is written where it is seen but never announced; its
+   * verdict goes into a polite status region, written only when it changes,
+   * so a screen reader hears each verdict once. */
   private check(): void {
     clearTimeout(this.checking);
     if (this.cockpit === undefined) return; // the cockpit's code is still on its way
     const cockpit = this.cockpit;
     const { look, text } = parityState(cockpit?.agreement() ?? null, cockpit ? cockpit.status().state : "absent");
-    this.part("trust-text").textContent = text;
+    const settled = look !== "checking";
+    const progress = this.part("trust-text");
+    progress.hidden = settled;
+    if (!settled) progress.textContent = text;
+    const verdict = this.part("trust-verdict");
+    const said = settled ? text : "";
+    if (verdict.textContent !== said) verdict.textContent = said;
     this.part("trust").dataset["state"] = look;
+    this.listener?.(look, text);
     if (cockpit && this.onView && document.visibilityState !== "hidden") {
       this.checking = window.setTimeout(() => this.check(), CHECK_MS);
     }
+  }
+
+  /** Hears every reading of the live check, for the parts of the view that
+   * repeat it. */
+  onCheck(listener: (look: ParityLook, text: string) => void): void {
+    this.listener = listener;
   }
 }

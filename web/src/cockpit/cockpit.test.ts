@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssetError } from "../data/load.ts";
 import type { Clip, Results } from "../data/types.ts";
 import { Cockpit } from "./cockpit.ts";
+import { modelNote } from "./copy.ts";
 import { mountCockpitMarkup } from "./markup.ts";
 import { ErrorStrip } from "./strip.ts";
 
@@ -443,6 +444,20 @@ describe("the twin, when it cannot be had", () => {
     expect(checked("cockpit-model")).toBe("sightline");
     expect(shown("notice")).toMatch(/^The twin could not be loaded/);
     expect(shown("status")).toBe("");
+  });
+
+  it("sizes the note's slot to the longer of the two models' notes on the clip, so switching moves nothing", async () => {
+    const { video } = await playing();
+    video.present(1);
+    const sizers = () => [...document.querySelectorAll('[data-cockpit="note-sizer"]')].map((el) => el.textContent);
+    const clip = makeClip("c2018");
+    expect(sizers()).toEqual([modelNote("sightline", clip), modelNote("shuffled", clip)]);
+    for (const sizer of document.querySelectorAll('[data-cockpit="note-sizer"]')) {
+      expect(sizer.getAttribute("aria-hidden")).toBe("true");
+    }
+    pick("cockpit-model", "shuffled");
+    await until(() => say("model-name") === "Its twin", "the twin is on screen");
+    expect(sizers()).toEqual([modelNote("sightline", clip), modelNote("shuffled", clip)]);
   });
 
   it("switches to the twin with the clip's own account of what it trained on", async () => {

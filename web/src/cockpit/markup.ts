@@ -76,7 +76,7 @@ export function cockpitHtml(): string {
           </div>
 
           <div class="cockpit__side">
-            <p class="model-note" data-cockpit="note"></p>
+            <div class="model-note"><p class="model-note__text" data-cockpit="note"></p><p class="model-note__sizer" data-cockpit="note-sizer" aria-hidden="true"></p><p class="model-note__sizer" data-cockpit="note-sizer" aria-hidden="true"></p></div>
 
             <div class="instruments">
               <div class="wheel-box" data-cockpit="wheel">${wheelSvg()}</div>

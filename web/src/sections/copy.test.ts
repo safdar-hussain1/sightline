@@ -5,6 +5,30 @@ import { AssetError } from "../data/load.ts";
 import { frameTiming } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import {
+  barWords,
+  driveTitle,
+  exactDeg,
+  exportText,
+  ladderAlt,
+  legacyAlt,
+  legacyText,
+  pairedAlt,
+  pairedFrames,
+  pairedLead,
+  pairedMeaning,
+  pairedRatioLabel,
+  pairedScale,
+  patternWords,
+  protocolTexts,
+  recipeNote,
+  regimeNames,
+  regimesAlt,
+  regimesText,
+  rungCaption,
+  rungNote,
+  skillLabel,
+  skillWords,
+  twoFramesText,
   accuracyCaption,
   accuracyLabel,
   accuracySentence,
@@ -27,7 +51,7 @@ import {
   timesInWords,
   upperBound,
 } from "./copy.ts";
-import { readFigures } from "./figures.ts";
+import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits } from "./figures.ts";
 import { patch, resultsFixture } from "./fixture.ts";
 
 const figures = () => readFigures(resultsFixture());
@@ -134,7 +158,7 @@ describe("the Results view's figures", () => {
 
   it("explains the paired ratio's source and its spread over seeds", () => {
     expect(pairedNote(figures().paired)).toBe(
-      "Mean of three trainings each way, each pair scored on the frames both of its splits held out. Spread ±0.6 for Sightline, ±0.1 for PilotNet.",
+      "Mean of three trainings each way, each pair scored on the frames both of its splits held out. Spread ±0.6 for SightlineNet, ±0.1 for PilotNet.",
     );
   });
 
@@ -160,10 +184,10 @@ describe("the Results view's figures", () => {
 
   it("describes the two errors behind each summary figure, from the same numbers the rulers draw", () => {
     expect(pairedRuler(figures().paired.sightlinenet)).toBe(
-      "Sightline’s mean error over three trainings on the frames both splits held out: 3.3° when trained on the shuffled split, 10.1° when trained on the blocked split.",
+      "SightlineNet’s mean error over three trainings on the frames both splits held out: 3.3° when trained on the shuffled split, 10.1° when trained on the blocked split.",
     );
     expect(anotherDayRuler(figures().anotherDay)).toBe(
-      "Mean error over three trainings on another day’s drive: Sightline 10.6°, always steering straight 15.5°.",
+      "Mean error over three trainings on another day’s drive: SightlineNet 10.6°, always steering straight 15.5°.",
     );
   });
 
@@ -255,13 +279,26 @@ describe("the live check against Python", () => {
     });
   });
 
-  it("counts the frames checked so far while the model is still running", () => {
+  it("counts the frames checked so far while the model is still running, naming the model", () => {
     expect(parityState(agreement({ compared: 96 }), "ready")).toEqual({
       look: "checking",
-      text: "Checking live: 96 of 420 frames of the demo’s 2018 clip so far, every one within 0.00004° of the same model run in Python.",
+      text: "Checking Sightline live: 96 of 420 frames of the demo’s 2018 clip so far, every one within 0.00004° of the same model run in Python.",
     });
     expect(parityState(agreement({ compared: 96, maxDiffDeg: 0 }), "ready").text).toBe(
-      "Checking live: 96 of 420 frames of the demo’s 2018 clip so far, every one identical to the same model run in Python.",
+      "Checking Sightline live: 96 of 420 frames of the demo’s 2018 clip so far, every one identical to the same model run in Python.",
+    );
+    expect(parityState(agreement({ compared: 96, model: "shuffled" }), "ready").text).toBe(
+      "Checking the twin live: 96 of 420 frames of the demo’s 2018 clip so far, every one within 0.00004° of the same model run in Python.",
+    );
+  });
+
+  it("says a mismatch found while the model is still running is over the frames run so far", () => {
+    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12 }), "ready")).toEqual({
+      look: "mismatch",
+      text: "Sightline’s angles in this browser do not match the same model run in Python: on the 12 frames of the demo’s 2018 clip run so far, they differ by up to 0.002°, more than the 0.001° allowed.",
+    });
+    expect(parityState(agreement({ maxDiffDeg: 0.0012, compared: 12, model: "shuffled" }), "ready").text).toMatch(
+      /^The twin’s angles in this browser do not match .*: on the 12 frames of the demo’s 2018 clip run so far, /,
     );
   });
 
@@ -287,7 +324,13 @@ describe("the live check against Python", () => {
   it("says what it is waiting for, and why there is no check without a running demo", () => {
     const waiting = { look: "checking", text: "Checking this browser against the same model run in Python…" };
     expect(parityState(null, "loading")).toEqual(waiting);
-    expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN }), "loading")).toEqual(waiting);
+    expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN }), "loading")).toEqual({
+      look: "checking",
+      text: "Checking Sightline in this browser against the same model run in Python…",
+    });
+    expect(parityState(agreement({ compared: 0, maxDiffDeg: Number.NaN, model: "shuffled" }), "ready").text).toBe(
+      "Checking the twin in this browser against the same model run in Python…",
+    );
     expect(parityState(null, "unavailable")).toEqual({
       look: "note",
       text: "The live check needs the demo, and the demo is not running.",
@@ -313,7 +356,7 @@ describe("how it works", () => {
 
   it("counts frames, not milliseconds, on a drive without timestamps, and quotes the other drive's measured spacing", () => {
     const another = clip({ id: "c2017", drive: "drive2017", title: "2017: another day" });
-    expect(framesTitle(another, untimed)).toBe("This frame and the one two before it");
+    expect(framesTitle(another, untimed)).toBe("This frame and the one two frames before it");
     expect(framesAges(another, untimed)).toEqual(["now", "two frames before"]);
     expect(framesText(another, untimed)).toBe(
       "The frame on screen and the one two frames before it, cropped to the road and shrunk to 200 × 66 pixels. This drive’s frames carry no timestamps; on the 2018 drive, whose frames do, two frames are 114 ms apart. Two frames show which way the view is moving, which one frame cannot.",
@@ -337,5 +380,204 @@ describe("how it works", () => {
   it("states how long the model takes here only once it has been measured", () => {
     expect(speedText(2.5312)).toBe("Here it takes about 2.5 ms a frame.");
     expect(speedText(null)).toBe("");
+  });
+});
+
+describe("the names and small words of the Results view", () => {
+  it("names a drive by its year", () => {
+    expect(driveTitle("drive2018")).toBe("the 2018 drive");
+    expect(driveTitle("highway")).toBe("the drive highway");
+  });
+
+  it("prints an angle the data states exactly with only the decimals it has", () => {
+    expect(exactDeg(5)).toBe("5°");
+    expect(exactDeg(30)).toBe("30°");
+    expect(exactDeg(2.5)).toBe("2.5°");
+    expect(exactDeg(180)).toBe("180°");
+  });
+
+  it("says a skill as better, worse or level, never a negative better", () => {
+    expect(skillWords(0.3145251314711981)).toBe("31% better than always steering straight");
+    expect(skillWords(-0.4485684827442407)).toBe("45% worse than always steering straight");
+    expect(skillWords(0)).toBe("level with always steering straight");
+    expect(skillWords(0.0004, "it")).toBe("0.04% better than it");
+    expect(skillLabel(-0.24229235843871808)).toBe("−24%");
+    expect(skillLabel(0.7788633029556049)).toBe("78%");
+  });
+});
+
+describe("the paired experiment's sentences", () => {
+  const paired = () => readPaired(resultsFixture());
+
+  it("says what each network scored, trained each way, and what the ratio means", () => {
+    expect(pairedLead("SightlineNet", paired().sightlinenet)).toBe(
+      "On the frames both splits held out, SightlineNet trained on shuffled frames is off by 3.3° on average. Trained with whole stretches held back, the same network is off by 10.1°.",
+    );
+    expect(pairedLead("PilotNet", paired().pilotnet)).toBe(
+      "On the frames both splits held out, PilotNet trained on shuffled frames is off by 4.1° on average. Trained with whole stretches held back, the same network is off by 13.1°.",
+    );
+    expect(pairedMeaning("SightlineNet", paired().sightlinenet.ratio.mean)).toBe(
+      "So a shuffled test makes SightlineNet look about three times better than it is on road it has not seen nearby.",
+    );
+  });
+
+  it("never calls a ratio of one or less flattery, and calls one under 1.25 a little", () => {
+    expect(pairedMeaning("PilotNet", 1)).toBe("On these frames, a shuffled test does not make PilotNet look any better than it is.");
+    expect(pairedMeaning("PilotNet", 0.7)).toBe(pairedMeaning("PilotNet", 1));
+    expect(pairedMeaning("PilotNet", 1.2)).toMatch(/look a little better/);
+    expect(pairedMeaning("PilotNet", 1.25)).toMatch(/look about one and a half times better/);
+  });
+
+  it("gives steering straight on the same frames for scale, as a range over seeds", () => {
+    expect(pairedScale(paired().sightlinenet)).toBe("Always steering straight is off by 16.2° to 18.8° on the same frames.");
+    const json = resultsFixture();
+    for (const i of [0, 1, 2]) {
+      for (const network of ["sightlinenet", "pilotnet"]) patch(json, `paired_leakage.${network}.per_seed.${i}.zero_mae_deg`, 17.3);
+    }
+    expect(pairedScale(readPaired(json).sightlinenet)).toBe("Always steering straight is off by 17.3° on the same frames.");
+  });
+
+  it("names each seed's frames, never one count for all of them", () => {
+    expect(pairedFrames(paired().sightlinenet)).toBe(
+      "Each line is one training seed: the network trained on that seed’s shuffled split and on its blocked split, both scored on the frames the two splits both held out (893, 889 and 943 frames).",
+    );
+    expect(pairedRatioLabel(paired().sightlinenet.ratio.mean)).toBe("3.0× on average");
+  });
+
+  it("describes the chart with every number it draws", () => {
+    expect(pairedAlt("SightlineNet", paired().sightlinenet)).toEqual({
+      title: "SightlineNet’s mean error on the frames both splits held out, trained each way",
+      desc:
+        "Seed 0, 893 frames: 3.0° trained on shuffled frames, 11.2° trained with stretches held back, 3.7× as much; always steering straight 17.3°. " +
+        "Seed 1, 889 frames: 3.3° trained on shuffled frames, 8.6° trained with stretches held back, 2.6× as much; always steering straight 16.2°. " +
+        "Seed 2, 943 frames: 3.8° trained on shuffled frames, 10.5° trained with stretches held back, 2.8× as much; always steering straight 18.8°. " +
+        "Mean of the three seeds: 3.3° and 10.1°; the held-back error is on average 3.0× the shuffled one.",
+    });
+  });
+});
+
+describe("the ladder's sentences", () => {
+  const ladder = () => readLadder(resultsFixture());
+  const splits = () => readSplits(resultsFixture());
+
+  it("says what moved further from the training frames on each rung", () => {
+    expect(ladder().rungs.map((rung) => rungCaption(rung, splits()))).toEqual([
+      "Test frames are dealt out at random, so 91% of them sit within one frame of a frame the network trained on.",
+      "Whole stretches of the drive are held back, so no test frame is closer than 501 frames to one the network trained on.",
+      "It trains on the first 70% of the drive and is tested on the last 15%, never closer than 10,075 frames to anything it trained on.",
+      "A drive recorded on another day: 45,404 frames of the 2017 drive, none of them seen in training.",
+    ]);
+  });
+
+  it("gives steering straight on each rung, and names the network not trained this way", () => {
+    expect([0, 1, 2, 3].map((i) => rungNote(ladder(), i))).toEqual([
+      "Always steering straight is off by 13.1° on these frames. SightlineNet with one frame was not trained this way.",
+      "Always steering straight is off by 17.5° on these frames.",
+      "Always steering straight is off by 9.4° on these frames. SightlineNet with one frame was not trained this way.",
+      "Always steering straight is off by 15.5° on these frames.",
+    ]);
+  });
+
+  it("puts each bar in words, in either view, and a missing one as not trained this way", () => {
+    const { bars } = ladder();
+    expect(barWords("pilotnet", bars.pilotnet[2] ?? null, "skill")).toBe("PilotNet: 45% worse than always steering straight (±44%)");
+    expect(barWords("sightlinenet", bars.sightlinenet[0] ?? null, "skill")).toBe("SightlineNet: 78% better than always steering straight (±0.04%)");
+    expect(barWords("pilotnet", bars.pilotnet[2] ?? null, "error")).toBe("PilotNet: 13.6° (each training: 15.1°, 9.0°, 16.9°)");
+    expect(barWords("sightlinenet-1f", null, "skill")).toBe("SightlineNet, one frame: not trained this way");
+  });
+
+  it("describes the chart in the view on screen, with every number it draws", () => {
+    const skill = ladderAlt(ladder(), "skill");
+    expect(skill.title).toBe("How much better than always steering straight each network is, on each rung");
+    expect(skill.desc).toBe(
+      "Mean of three trainings, with the spread over them. " +
+        "Shuffled: SightlineNet: 78% better than always steering straight (±0.04%); PilotNet: 70% better than always steering straight (±1%); SightlineNet, one frame: not trained this way. " +
+        "Blocked: SightlineNet: 41% better than always steering straight (±4%); PilotNet: 26% better than always steering straight (±1%); SightlineNet, one frame: 35% better than always steering straight (±3%). " +
+        "Later in the drive: SightlineNet: 34% better than always steering straight (±3%); PilotNet: 45% worse than always steering straight (±44%); SightlineNet, one frame: not trained this way. " +
+        "Another day: SightlineNet: 31% better than always steering straight (±8%); PilotNet: 24% worse than always steering straight (±8%); SightlineNet, one frame: 2% better than always steering straight (±4%).",
+    );
+    const error = ladderAlt(ladder(), "error");
+    expect(error.title).toBe("Each network’s mean error in degrees on each rung, beside always steering straight");
+    expect(error.desc).toMatch(/^Mean of three trainings, with each training’s error\. Shuffled: SightlineNet: 2\.9° \(each training: 2\.8°, 2\.9°, 3\.0°\); /);
+    expect(error.desc).toMatch(/Another day: .*SightlineNet, one frame: 15\.2° \(each training: 14\.5°, 15\.6°, 15\.6°\); always steering straight: 15\.5°\.$/);
+  });
+});
+
+describe("the cards' sentences", () => {
+  it("says what the second frame buys, calling a skill near zero level", () => {
+    expect(twoFramesText(readLadder(resultsFixture()))).toEqual({
+      lead: "On another day’s drive, SightlineNet with one frame is about level with always steering straight (2% better than it). With two frames it is 31% better than always steering straight.",
+      also: "On held-back stretches of its own drive: 41% better than steering straight with two frames, 35% better than it with one.",
+    });
+    const json = patch(resultsFixture(), "groups.sightlinenet-1f/blocked.cross_skill", { mean: 0.12, sd: 0.01 });
+    expect(twoFramesText(readLadder(json))?.lead).toMatch(/^On another day’s drive, SightlineNet with one frame is 12% better than always steering straight\./);
+    const worse = patch(resultsFixture(), "groups.sightlinenet-1f/blocked.cross_skill", { mean: -0.049, sd: 0.01 });
+    expect(twoFramesText(readLadder(worse))?.lead).toMatch(/about level with always steering straight \(4.9% worse than it\)|about level with always steering straight \(5% worse than it\)/);
+  });
+
+  it("names the regimes by the edges in the data", () => {
+    expect(regimeNames([5, 30])).toEqual({ straight: "Straight, wheel under 5°", gentle: "Gentle curve, 5° to 30°", sharp: "Sharp curve, 30° or more" });
+    expect(regimeNames([2.5, 45]).gentle).toBe("Gentle curve, 2.5° to 45°");
+  });
+
+  it("says where Sightline struggles, and that steering straight wins on straight road", () => {
+    const regimes = readRegimes(resultsFixture());
+    expect(regimesText(regimes)).toEqual({
+      lead: "Sightline’s 6,000 test frames, sorted by how hard the driver was turning. It is furthest off on sharp curves: 36.0°, where always steering straight is off by 78.4°.",
+      straight: "On straight road, always steering straight wins: it is off by 2.8°, Sightline by 6.1°.",
+    });
+    expect(regimesAlt(regimes)).toBe(
+      "Mean error by how hard the driver was turning. Straight, wheel under 5° (2,731 frames): Sightline 6.1°, always steering straight 2.8°. " +
+        "Gentle curve, 5° to 30° (2,416 frames): Sightline 5.5°, always steering straight 12.6°. " +
+        "Sharp curve, 30° or more (853 frames): Sightline 36.0°, always steering straight 78.4°.",
+    );
+    const better = patch(resultsFixture(), "regimes.models.sightlinenet.regimes.straight.mae_deg", 2.1);
+    expect(regimesText(readRegimes(better)).straight).toBe("On straight road Sightline beats always steering straight too: 2.1° against 2.8°.");
+  });
+
+  it("tells the standard recipe's story from its report", () => {
+    const legacy = readLegacy(resultsFixture());
+    expect(legacyText(legacy)).toEqual({
+      lead: "On its own training drive, the 2017 drive, it is off by 4.5°: better than always steering straight (15.5°).",
+      other:
+        "On the 2018 drive, which it never saw, it does worse than always steering straight: 22.0° against 17.5° on the held-back stretches Sightline is tested on, " +
+        "and 19.4° against 9.4° on the drive’s last part.",
+      cap: "Its arctangent output can never pass 180°, half a turn of the wheel: its largest answer is 169.8°, yet the driver turned past 180° on 235 frames of the 2018 drive.",
+    });
+    expect(recipeNote(legacy.recipe)).toBe(
+      "The recipe, as its report records it: PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, atan output head limited to ±180°.",
+    );
+    const mixed = readLegacy(patch(resultsFixture(), "legacy.eval.drive2018_forward_test.model.mae_deg", 8.9));
+    expect(legacyText(mixed).other).toBe(
+      "On the 2018 drive, which it never saw, it is off by 22.0° on the held-back stretches Sightline is tested on, worse than always steering straight (17.5°), " +
+        "and by 8.9° on the drive’s last part, better than always steering straight (9.4°).",
+    );
+    expect(legacyAlt(legacy)).toBe(
+      "Mean error of the standard-recipe PilotNet against always steering straight: on its own training drive (45,404 frames), 4.5° against 15.5°; " +
+        "on the held-back stretches of the 2018 drive (6,000 frames), 22.0° against 17.5°; on the last part of the 2018 drive (9,324 frames), 19.4° against 9.4°.",
+    );
+  });
+
+  it("states the export check against its gate, and a failed gate as a failure", () => {
+    expect(exportText(readParity(resultsFixture()))).toBe(
+      "When each model was exported, onnxruntime 1.28.0 reproduced PyTorch on 848 frame stacks: Sightline’s angles to within 0.0002°, its twin’s to within 0.0002°, under a gate of 0.0005°.",
+    );
+    const failed = patch(resultsFixture(), "parity.shuffled.max_abs_angle_deg", 0.0007);
+    expect(exportText(readParity(failed))).toBe("When the models were exported, onnxruntime and PyTorch differed by up to 0.0007°, more than the 0.0005° allowed.");
+  });
+
+  it("states each protocol with its arithmetic", () => {
+    expect(patternWords("TTVTTET")).toBe("train, train, validate, train, train, test, train");
+    expect(protocolTexts(readSplits(resultsFixture()))).toEqual({
+      shuffled: "The 63,825 frames of the 2018 drive are shuffled and dealt 70%, 15% and 15%: 44,677 to train, 9,574 to validate and 9,574 to test.",
+      blocked:
+        "The drive is cut into blocks of 1,500 frames, dealt train, train, validate, train, train, test, train, over and over. " +
+        "At every boundary between a training block and a held-out one, 250 frames are dropped on each side: 24 boundaries × 500 frames = 12,000 frames, " +
+        "so every test frame is at least 250 + 250 + 1 = 501 frames from training. That leaves 39,825 to train, 6,000 to validate and 6,000 to test.",
+      later:
+        "The first 70% of the drive trains, the next 15% validates and the last 15% tests, with 250 frames dropped on each side of both boundaries (1,000 in all): " +
+        "44,427 to train, 9,074 to validate and 9,324 to test.",
+      anotherDay: "The 2017 drive, recorded on another day: 45,404 of its frames, scored by the networks trained with stretches held back.",
+    });
   });
 });

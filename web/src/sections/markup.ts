@@ -220,9 +220,9 @@ export function resultsHtml(): string {
           </div>
           <ul class="headline" data-results="band" role="list">
             <li class="finding finding--hero">
-              <p class="finding__values finding__values--pair"><span class="finding__pair">${count("ratio")}<span class="finding__split">Sightline</span></span><span class="finding__pair finding__pair--also">${count("ratio-pilotnet")}<span class="finding__split">PilotNet</span></span></p>
+              <p class="finding__values finding__values--pair"><span class="finding__pair">${count("ratio")}<span class="finding__split">SightlineNet</span></span><span class="finding__pair finding__pair--also">${count("ratio-pilotnet")}<span class="finding__split">PilotNet</span></span></p>
               <p class="finding__label" data-results="paired-label">How much better testing on shuffled frames makes the same kind of model look</p>
-              ${ruler("ruler-paired", "Sightline’s mean error on the same frames", [
+              ${ruler("ruler-paired", "SightlineNet’s mean error on the same frames", [
                 ["reported", "shuffled split", "paired-shuffled"],
                 ["model", "blocked split", "paired-blocked"],
               ])}
@@ -232,10 +232,10 @@ export function resultsHtml(): string {
               <p class="finding__values">${count("another-day")}</p>
               <p class="finding__label" data-results="another-day-label">Better than always steering straight, on a drive it never saw</p>
               ${ruler("ruler-another-day", "Mean error on another day’s drive", [
-                ["model", "Sightline", "day-model"],
+                ["model", "SightlineNet", "day-model"],
                 ["straight", "steering straight", "day-straight"],
               ])}
-              <p class="finding__note" data-results="another-day-note">Sightline on another day’s drive, against steering straight on the same frames.</p>
+              <p class="finding__note" data-results="another-day-note">SightlineNet on another day’s drive, against steering straight on the same frames.</p>
             </li>
             <li class="finding">
               <p class="finding__values finding__values--pair"><span class="finding__pair">${count("memoriser-shuffled")}<span class="finding__split">shuffled split</span></span><span class="finding__pair">${count("memoriser-blocked")}<span class="finding__split">blocked split</span></span></p>
@@ -243,17 +243,215 @@ export function resultsHtml(): string {
               <p class="finding__note" data-results="memoriser-note">It learns nothing, so its error only shows how close the test frames sit to training frames.</p>
             </li>
           </ul>
-          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path class="trust__tick" d="m6.2 10.3 2.5 2.5 5.1-5.4"/><path class="trust__alert" d="M10 5.6v5.6M10 14.1v.3"/></svg><span data-results="trust-text">Checking this browser against the same model run in Python…</span></p>
-          <section class="splits" data-results="splits" aria-labelledby="splits-title">
-            <h3 class="splits__title" id="splits-title">Shuffled frames against held-back stretches</h3>
-            <dl class="splits__list">
-              <div class="splits__item"><dt>Shuffled split</dt><dd data-results="shuffled">Frames are dealt out at random, so most test frames sit right beside a frame the model trained on.</dd></div>
-              <div class="splits__item"><dt>Blocked split</dt><dd data-results="blocked">Whole stretches of road are held back, so every test frame is far from the frames the model trained on.</dd></div>
-            </dl>
-            <p class="splits__sources">Every number in this view is read from <a href="data/results.json">results.json</a>, which the repository generates from its training reports. The <a href="model-card.md">model card</a> says how the models were trained and where they fall short.</p>
-          </section>
+          <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path class="trust__tick" d="m6.2 10.3 2.5 2.5 5.1-5.4"/><path class="trust__alert" d="M10 5.6v5.6M10 14.1v.3"/></svg><span class="trust__text"><span data-results="trust-text">Checking this browser against the same model run in Python…</span><span data-results="trust-verdict" role="status"></span></span></p>
+          ${pairedHtml()}
+          ${ladderHtml()}
+          ${cardsHtml()}
         </div>
       `;
+}
+
+// -- The paired experiment ----------------------------------------------------------
+
+/** The frames of a stretch of drive in the explainer's sketch, and which of
+ * them each split holds out to test: the shuffled split's scattered, the
+ * blocked split's in stretches. A drawing of the idea, not of the data. */
+const SKETCH_FRAMES = 30;
+const SKETCH_SHUFFLED = [2, 6, 11, 14, 19, 24, 27];
+const SKETCH_BLOCKED = [9, 10, 11, 12, 13, 14, 15, 22, 23, 24, 25, 26, 27];
+
+function sketchRow(name: string, out: readonly number[], kind: string): string {
+  const cells = Array.from({ length: SKETCH_FRAMES }, (_, i) => `<span class="sketch__frame${out.includes(i) ? ` sketch__frame--${kind}` : ""}"></span>`).join("");
+  return `<div class="sketch__row"><span class="sketch__name">${name}</span><span class="sketch__frames">${cells}</span></div>`;
+}
+
+function sketchHtml(): string {
+  const both = SKETCH_SHUFFLED.filter((i) => SKETCH_BLOCKED.includes(i));
+  return `<div class="sketch__drawing" role="img" aria-label="A sketch of one stretch of the drive, frame by frame: the shuffled split holds out frames scattered at random, the blocked split holds out whole stretches, and the frames both hold out are the few that are both.">
+              ${sketchRow("shuffled split", SKETCH_SHUFFLED, "out")}
+              ${sketchRow("blocked split", SKETCH_BLOCKED, "out")}
+              ${sketchRow("held out by both", both, "both")}
+            </div>`;
+}
+
+export function pairedHtml(): string {
+  return `<div class="study study--paired paired" data-paired="root" data-state="loading">
+            <div class="paired__text">
+              <h3 class="study__title" id="paired-title">Trained two ways, scored on the same frames</h3>
+              <p class="study__lead" data-paired="lead">Each network is trained twice, once on shuffled frames and once with whole stretches of the drive held back, and both are scored on the very same frames.</p>
+              <p class="study__meaning" data-paired="meaning">A shuffled test makes the same kind of model look better than it is on road it has not seen nearby.</p>
+              <p class="study__scale" data-paired="scale"></p>
+              <figure class="sketch">
+                ${sketchHtml()}
+                <figcaption class="sketch__caption">
+                  <dl class="sketch__splits">
+                    <div><dt>Shuffled split</dt><dd data-paired="shuffled">Frames are dealt out at random, so most test frames sit right beside a frame the model trained on.</dd></div>
+                    <div><dt>Blocked split</dt><dd data-paired="blocked">Whole stretches of road are held back, so every test frame is far from the frames the model trained on.</dd></div>
+                  </dl>
+                  <p class="sketch__note">A sketch, not to scale: the frames both splits hold out are scored by a network trained each way.</p>
+                </figcaption>
+              </figure>
+            </div>
+            <figure class="chart chart--slope" data-paired="figure">
+              <div class="chart__head">
+                <p class="chart__title">Mean error on the frames both splits held out</p>
+                <fieldset class="segmented" data-paired="networks">
+                  <legend class="visually-hidden">Network</legend>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="paired-network" value="sightlinenet" checked /><span class="segmented__swatch segmented__swatch--sightlinenet" aria-hidden="true"></span>SightlineNet</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="paired-network" value="pilotnet" /><span class="segmented__swatch segmented__swatch--pilotnet" aria-hidden="true"></span>PilotNet</label>
+                </fieldset>
+              </div>
+              <div class="chart__plot chart__plot--slope" data-paired="plot">
+                ${SLOPE_PLACEHOLDER}
+                <div class="chart__tip" data-paired="tip" aria-hidden="true" hidden></div>
+              </div>
+              <ul class="legend" role="list">
+                <li><span class="legend__dot legend__dot--hollow" aria-hidden="true"></span>trained on shuffled frames</li>
+                <li><span class="legend__dot" aria-hidden="true"></span>trained with stretches held back</li>
+                <li><span class="legend__line" aria-hidden="true"></span>always steering straight</li>
+              </ul>
+              <figcaption class="chart__caption" data-paired="caption">Each line is one training seed: the network trained on that seed’s shuffled split and on its blocked split, both scored on the frames the two splits both held out.</figcaption>
+              <details class="numbers" data-paired="numbers">
+                <summary>All the numbers in this chart</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-paired="table"><caption>Each seed’s pair, on the frames both of its splits held out</caption></table></div>
+              </details>
+            </figure>
+          </div>`;
+}
+
+/** The slope chart before the data has loaded: its frame, in quiet grey. */
+const SLOPE_PLACEHOLDER = `<svg class="chart__svg slope slope--waiting" viewBox="0 0 600 340" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <path class="placeholder__grid" d="M38 30H596M38 96H596M38 162H596M38 228H596M38 294H596"/>
+                  <path class="placeholder__mark" d="M114 254 520 150M114 250 520 176M114 246 520 160"/>
+                </svg>`;
+
+// -- The ladder -------------------------------------------------------------------------
+
+/** The rungs as the reports name them; the data's own names replace these
+ * once it has loaded. */
+const RUNG_NAMES = ["shuffled", "blocked", "later in the drive", "another day"];
+
+const LADDER_PLACEHOLDER = `<svg class="chart__svg ladder-chart ladder-chart--waiting" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <path class="placeholder__grid" d="M42 18H1000M42 84H1000M42 149H1000M42 215H1000M42 280H1000"/>
+                  <path class="placeholder__mark" d="M101 149V48h26v101zM134 149V60h26v89zM351 149V95h26v54zM384 149v-34h26v34zM417 149v-46h26v46zM601 149v-44h26v44zM634 149v59h26v-59zM851 149v-41h26v41zM884 149v32h26v-32zM917 149v-4h26v4z"/>
+                </svg>`;
+
+export function ladderHtml(): string {
+  const steps = RUNG_NAMES.map(
+    (name, i) =>
+      `<label class="stepper__step"><input class="stepper__input" type="radio" name="ladder-rung" value="${i}"${i === RUNG_NAMES.length - 1 ? " checked" : ""} /><span class="stepper__mark" aria-hidden="true"></span><span class="stepper__name">${name}</span></label>`,
+  ).join("");
+  return `<div class="study study--ladder ladder" data-ladder="root" data-state="loading">
+            <div class="ladder__head">
+              <h3 class="study__title" id="ladder-title">Further from the training frames</h3>
+              <p class="study__lead">Each rung tests on frames further from anything the network trained on. A bar above the line beats always steering straight on the same frames; a bar below it does worse.</p>
+            </div>
+            <figure class="chart chart--ladder" data-ladder="figure">
+              <div class="chart__head">
+                <p class="chart__title" data-ladder="chart-title">How much better than always steering straight</p>
+                <fieldset class="segmented" data-ladder="views">
+                  <legend class="visually-hidden">Show</legend>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="ladder-view" value="skill" checked />Better than steering straight</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="ladder-view" value="error" />Error in degrees</label>
+                </fieldset>
+              </div>
+              <fieldset class="stepper" data-ladder="stepper">
+                <legend class="visually-hidden">Rung of the ladder</legend>
+                ${steps}
+              </fieldset>
+              <div class="ladder__caption" data-ladder="captions">
+                <p class="ladder__said" data-ladder="caption" aria-live="polite"><span class="ladder__rung" data-ladder="caption-rung">Another day</span> <span data-ladder="caption-text">A drive recorded on another day, none of it seen in training.</span></p>
+              </div>
+              <div class="chart__plot chart__plot--ladder" data-ladder="plot">
+                ${LADDER_PLACEHOLDER}
+                <div class="chart__tip" data-ladder="tip" aria-hidden="true" hidden></div>
+              </div>
+              <ul class="legend" role="list">
+                <li><span class="legend__swatch legend__swatch--sightlinenet" aria-hidden="true"></span>SightlineNet</li>
+                <li><span class="legend__swatch legend__swatch--pilotnet" aria-hidden="true"></span>PilotNet</li>
+                <li><span class="legend__swatch legend__swatch--oneframe" aria-hidden="true"></span>SightlineNet, one frame</li>
+                <li><span class="legend__line" aria-hidden="true"></span>always steering straight</li>
+              </ul>
+              <figcaption class="chart__caption" data-ladder="chart-caption">Mean of three trainings, with the spread over them.</figcaption>
+              <details class="numbers" data-ladder="numbers">
+                <summary>All the numbers in this chart</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-ladder="table"><caption>Each network on each rung, over its trainings</caption></table></div>
+              </details>
+            </figure>
+          </div>`;
+}
+
+// -- The cards --------------------------------------------------------------------------
+
+/** A card's chart before the data has loaded: quiet bars. */
+const CARD_PLACEHOLDER = `<svg class="chart__svg card-chart card-chart--waiting" viewBox="0 0 360 150" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <path class="placeholder__mark" d="M8 16h220v14H8zM8 36h120v14H8zM8 86h260v14H8zM8 106h200v14H8z"/>
+                </svg>`;
+
+/** The repository's files the numbers come from, linked where they live. */
+const SOURCES: ReadonlyArray<readonly [path: string, what: string]> = [
+  ["reports/summary.json", "the paired measurement, the ladder, the regimes and every group of three trainings"],
+  ["reports/runs", "each training run’s own report"],
+  ["reports/leakage.json", "the lookup table, and how close test frames sit to training frames"],
+  ["reports/legacy.json", "the standard-recipe PilotNet"],
+  ["reports/export.json", "the export check of the page’s two models"],
+  ["src/sightline/data/splits.py", "how each split cuts the drive"],
+];
+
+const REPOSITORY = "https://github.com/safdar-hussain1/sightline";
+
+/** A file's page in the repository; a folder's is its tree. */
+function sourceUrl(path: string): string {
+  return `${REPOSITORY}/${path.includes(".") ? "blob" : "tree"}/main/${path}`;
+}
+
+export function cardsHtml(): string {
+  const sources = SOURCES.map(([path, what]) => `<li><a href="${sourceUrl(path)}">${path}</a> <span class="sources__what">${what}</span></li>`).join("");
+  return `<div class="cards">
+            <article class="card card--frames" data-card="frames" data-state="loading">
+              <h3 class="card__title">What a second frame buys</h3>
+              <p class="card__lead" data-card="frames-lead">SightlineNet sees the frame on screen and one from just before it. The same network trained on one frame alone shows what the second one is worth.</p>
+              <figure class="card__figure"><div class="chart__plot" data-card="frames-plot">${CARD_PLACEHOLDER}</div></figure>
+              <p class="card__verdict" data-card="frames-also">Two frames show which way the view is moving, which one frame cannot.</p>
+            </article>
+            <article class="card card--regimes" data-card="regimes" data-state="loading">
+              <h3 class="card__title">Where it struggles</h3>
+              <p class="card__lead" data-card="regimes-lead">The test frames sorted by how hard the driver was turning: straight road, gentle curves and sharp ones.</p>
+              <figure class="card__figure"><div class="chart__plot" data-card="regimes-plot">${CARD_PLACEHOLDER}</div></figure>
+              <p class="card__verdict" data-card="regimes-straight">On straight road, always steering straight is hard to beat.</p>
+            </article>
+            <article class="card card--recipe" data-card="recipe" data-state="loading">
+              <h3 class="card__title">The standard recipe</h3>
+              <p class="card__lead">A PilotNet trained the widely copied way, scored here from its own weights. <span data-card="recipe-lead"></span> <span data-card="recipe-other"></span></p>
+              <p class="card__note" data-card="recipe-recipe"></p>
+              <figure class="card__figure"><div class="chart__plot" data-card="recipe-plot">${CARD_PLACEHOLDER}</div></figure>
+              <p class="card__verdict" data-card="recipe-cap">Its arctangent output cannot turn the wheel past half a turn, though the drivers did.</p>
+            </article>
+          </div>
+          <div class="sources-card" data-card="trust" data-state="loading">
+            <h3 class="study__title" id="sources-title">Where the numbers come from</h3>
+            <div class="sources-card__grid">
+              <div class="sources-card__part">
+                <h4 class="sources-card__heading">Checked twice</h4>
+                <p data-card="export">When each model was exported, onnxruntime was checked against PyTorch on every frame the page uses.</p>
+                <p data-card="live" data-state="checking">This browser’s answers are checked live against the same model run in Python.</p>
+              </div>
+              <div class="sources-card__part">
+                <h4 class="sources-card__heading">How each split cuts the drive</h4>
+                <dl class="protocols">
+                  <div><dt>Shuffled</dt><dd data-card="protocol-shuffled">Every frame is dealt at random to training, validation or test.</dd></div>
+                  <div><dt>Blocked</dt><dd data-card="protocol-blocked">The drive is cut into blocks, and frames are dropped either side of every boundary between a training block and a held-out one.</dd></div>
+                  <div><dt>Later in the drive</dt><dd data-card="protocol-later">The drive’s first part trains, the next validates and the last part tests.</dd></div>
+                  <div><dt>Another day</dt><dd data-card="protocol-another-day">A second drive, recorded on another day, scored by the networks trained with stretches held back.</dd></div>
+                </dl>
+              </div>
+              <div class="sources-card__part">
+                <h4 class="sources-card__heading">The files</h4>
+                <ul class="sources" role="list">${sources}</ul>
+                <p class="sources-card__note">Every number in this view is read from <a href="data/results.json">results.json</a>, which the repository generates from those reports. The <a href="model-card.md">model card</a> says how the shipped model was trained, what it is for and where it falls short.</p>
+              </div>
+            </div>
+          </div>`;
 }
 
 // -- Writing the sections in ------------------------------------------------------

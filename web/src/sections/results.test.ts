@@ -1,0 +1,458 @@
+// @vitest-environment happy-dom
+/**
+ * The Results view's studies as a visitor meets them: the paired experiment,
+ * the ladder and the cards, once results.json has loaded (or has not). happy-dom
+ * lays nothing out, so each test says how wide the charts are and whether they
+ * are on screen, and the motion runs on a clock the test moves by hand.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { ladderLayout } from "../charts/ladder.ts";
+import { slopeLayout } from "../charts/slope.ts";
+import { AssetError } from "../data/load.ts";
+import { Cards } from "./cards.ts";
+import {
+  exportText,
+  ladderAlt,
+  legacyText,
+  measurementsFailure,
+  pairedAlt,
+  pairedFrames,
+  pairedLead,
+  pairedMeaning,
+  pairedScale,
+  protocolTexts,
+  regimesAlt,
+  regimesText,
+  rungCaption,
+  rungNote,
+  splitsText,
+  twoFramesText,
+} from "./copy.ts";
+import type { Frames } from "./countup.ts";
+import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits } from "./figures.ts";
+import { patch, resultsFixture } from "./fixture.ts";
+import { LadderSection } from "./ladder.ts";
+import { resultsHtml } from "./markup.ts";
+import { PairedSection } from "./paired.ts";
+
+const raw = () => resultsFixture();
+const q = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector) as T;
+const all = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)];
+const text = (selector: string) => q(selector).textContent ?? "";
+
+/** Every element is `width` wide, on screen or not. */
+function layoutAs(width: number, visible = true): void {
+  const box = visible
+    ? { x: 0, y: 100, top: 100, bottom: 500, left: 0, right: width, width, height: 400 }
+    : { x: 0, y: 3000, top: 3000, bottom: 3400, left: 0, right: width, width, height: 400 };
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ ...box, toJSON: () => box } as DOMRect);
+}
+
+/** A clock the test moves by hand, one animation frame at a time. */
+function clock(): Frames & { tick(ms: number): void } {
+  let now = 0;
+  let queued: Array<(t: number) => void> = [];
+  return {
+    now: () => now,
+    request: (callback) => queued.push(callback),
+    cancel: () => void (queued = []),
+    tick(ms: number) {
+      now += ms;
+      const run = queued;
+      queued = [];
+      for (const callback of run) callback(now);
+    },
+  };
+}
+
+let observers: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+const intersect = () => {
+  for (const observe of observers) observe([{ isIntersecting: true }]);
+};
+
+function mountResults(): HTMLElement {
+  const section = document.createElement("section");
+  section.id = "results-view";
+  section.innerHTML = resultsHtml();
+  document.body.append(section);
+  return section;
+}
+
+beforeEach(() => {
+  document.body.innerHTML = "";
+  document.documentElement.dataset["view"] = "results";
+  observers = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        observers.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("ResizeObserver", undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  delete document.documentElement.dataset["view"];
+});
+
+// -- The paired experiment -----------------------------------------------------------------
+
+describe("the paired experiment", () => {
+  const mount = (reduced: boolean, frames = clock()) => {
+    mountResults();
+    return { section: new PairedSection(q('[data-paired="root"]'), () => reduced, frames), frames };
+  };
+  const lines = () => all(".slope__line");
+  const num = (el: Element, name: string) => Number(el.getAttribute(name));
+
+  it("writes its words, its table and its chart from the data, with no interaction", () => {
+    layoutAs(600, false);
+    const { section } = mount(false);
+    const paired = readPaired(raw());
+    section.show(paired, readFigures(raw()).gaps);
+    const network = paired.sightlinenet;
+    expect(text('[data-paired="lead"]')).toBe(pairedLead("SightlineNet", network));
+    expect(text('[data-paired="meaning"]')).toBe(pairedMeaning("SightlineNet", network.ratio.mean));
+    expect(text('[data-paired="scale"]')).toBe(pairedScale(network));
+    expect(text('[data-paired="caption"]')).toBe(pairedFrames(network));
+    const splits = splitsText(readFigures(raw()).gaps);
+    expect([text('[data-paired="shuffled"]'), text('[data-paired="blocked"]')]).toEqual([splits.shuffled, splits.blocked]);
+    expect(all('[data-paired="table"] tbody tr')).toHaveLength(6);
+    expect(text('[data-paired="table"] tbody tr')).toBe("SightlineNet0893" + "3.0°11.2°3.7×17.3°");
+    // The chart, final at once: its frame replaced, every seed drawn to its end.
+    const svg = q<SVGSVGElement>('[data-paired="plot"] svg');
+    expect(svg.getAttribute("role")).toBe("img");
+    expect(svg.classList.contains("slope--waiting")).toBe(false);
+    const alt = pairedAlt("SightlineNet", network);
+    expect([text("#paired-svg-title"), text("#paired-svg-desc")]).toEqual([alt.title, alt.desc]);
+    const layout = slopeLayout(network, [paired.sightlinenet, paired.pilotnet], 600);
+    expect(lines()).toHaveLength(3);
+    lines().forEach((line, i) => expect(num(line, "y2")).toBeCloseTo(layout.lines[i]?.y2 ?? NaN, 1));
+    expect(all(".slope .chart__value").map((el) => el.textContent)).toEqual(["3.3°mean", "10.1°mean"]);
+    expect(text(".slope__ratio")).toBe("3.0× as much, on average");
+    expect(q('[data-paired="root"]').dataset["state"]).toBe("ready");
+  });
+
+  it("draws itself in once it nears the screen in the Results view: shuffled scores first, then each line rising", () => {
+    layoutAs(600, false);
+    const { section, frames } = mount(false);
+    section.show(readPaired(raw()), readFigures(raw()).gaps);
+    const final = lines().map((line) => num(line, "x2"));
+    layoutAs(600, true);
+    intersect();
+    // The draw-in has started: every line still at its left end.
+    for (const line of lines()) expect(num(line, "x2")).toBe(num(line, "x1"));
+    expect(text(".slope__ratio")).toMatch(/^1\.0× /);
+    frames.tick(700);
+    const mid = lines().map((line) => num(line, "x2"));
+    mid.forEach((x, i) => expect(x).toBeLessThan(final[i] ?? 0));
+    expect(mid[0]).toBeGreaterThan(num(lines()[0] as Element, "x1"));
+    frames.tick(2000);
+    expect(lines().map((line) => num(line, "x2"))).toEqual(final);
+    expect(all(".slope .chart__value").map((el) => el.textContent)).toEqual(["3.3°mean", "10.1°mean"]);
+    // Once only.
+    intersect();
+    expect(lines().map((line) => num(line, "x2"))).toEqual(final);
+  });
+
+  it("does not draw itself in while its view is hidden behind the demo", () => {
+    document.documentElement.dataset["view"] = "demo";
+    layoutAs(600, true);
+    const { section } = mount(false);
+    section.show(readPaired(raw()), readFigures(raw()).gaps);
+    intersect();
+    for (const line of lines()) expect(num(line, "x2")).toBeGreaterThan(num(line, "x1"));
+  });
+
+  it("is final at once under reduced motion, and stays so", () => {
+    layoutAs(600, true);
+    const { section } = mount(true);
+    section.show(readPaired(raw()), readFigures(raw()).gaps);
+    intersect();
+    section.viewShown("results");
+    for (const line of lines()) expect(num(line, "x2")).toBeGreaterThan(num(line, "x1"));
+  });
+
+  it("morphs into PilotNet on the same scale when the visitor picks it, and says what PilotNet scored", () => {
+    layoutAs(600, true);
+    const { section, frames } = mount(true);
+    const paired = readPaired(raw());
+    section.show(paired, readFigures(raw()).gaps);
+    const before = lines().map((line) => num(line, "y2"));
+    const scale = all(".slope .chart__tick").map((el) => el.textContent);
+    const radio = q<HTMLInputElement>('input[name="paired-network"][value="pilotnet"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    // Under reduced motion the morph is instant.
+    const target = slopeLayout(paired.pilotnet, [paired.sightlinenet, paired.pilotnet], 600);
+    lines().forEach((line, i) => expect(num(line, "y2")).toBeCloseTo(target.lines[i]?.y2 ?? NaN, 1));
+    expect(lines().map((line) => num(line, "y2"))).not.toEqual(before);
+    expect(all(".slope .chart__tick").map((el) => el.textContent)).toEqual(scale);
+    expect(q("svg.slope").dataset["network"]).toBe("pilotnet");
+    expect(text('[data-paired="lead"]')).toBe(pairedLead("PilotNet", paired.pilotnet));
+    expect(text("#paired-svg-title")).toBe(pairedAlt("PilotNet", paired.pilotnet).title);
+    expect(all(".slope .chart__value").map((el) => el.textContent)).toEqual(["4.1°mean", "13.1°mean"]);
+    void frames;
+  });
+
+  it("morphs in motion: halfway is between the two networks, the end is PilotNet's", () => {
+    layoutAs(600, true);
+    const { section, frames } = mount(false);
+    const paired = readPaired(raw());
+    section.show(paired, readFigures(raw()).gaps);
+    frames.tick(5000); // the draw-in ends
+    const from = lines().map((line) => num(line, "y2"));
+    const radio = q<HTMLInputElement>('input[name="paired-network"][value="pilotnet"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    frames.tick(280);
+    const to = slopeLayout(paired.pilotnet, [paired.sightlinenet, paired.pilotnet], 600).lines.map((line) => line.y2);
+    lines().forEach((line, i) => {
+      const y = num(line, "y2");
+      expect(y).toBeLessThan(Math.max(from[i] ?? 0, to[i] ?? 0));
+      expect(y).toBeGreaterThan(Math.min(from[i] ?? 0, to[i] ?? 0));
+    });
+    frames.tick(1000);
+    lines().forEach((line, i) => expect(num(line, "y2")).toBeCloseTo(to[i] ?? NaN, 1));
+  });
+
+  it("names a seed and its numbers under the pointer, and puts them away after", () => {
+    layoutAs(600, true);
+    const { section } = mount(true);
+    const paired = readPaired(raw());
+    section.show(paired, readFigures(raw()).gaps);
+    const layout = slopeLayout(paired.sightlinenet, [paired.sightlinenet, paired.pilotnet], 600);
+    const line = layout.lines[1];
+    const plot = q('[data-paired="plot"]');
+    const x = ((line?.x1 ?? 0) + (line?.x2 ?? 0)) / 2;
+    const y = ((line?.y1 ?? 0) + (line?.y2 ?? 0)) / 2 + 100; // the box's top is at 100
+    plot.dispatchEvent(new PointerEvent("pointermove", { clientX: x, clientY: y, bubbles: true }));
+    expect(q('[data-paired="tip"]').hidden).toBe(false);
+    expect(text('[data-paired="tip"]')).toBe(
+      "Seed 1, 889 frames: 3.3° trained on shuffled frames, 8.6° with stretches held back (2.6×). Always steering straight: 16.2°.",
+    );
+    expect(lines()[1]?.classList.contains("is-lit")).toBe(true);
+    plot.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }));
+    expect(q('[data-paired="tip"]').hidden).toBe(true);
+  });
+
+  it("draws the network picked before the data arrived", () => {
+    layoutAs(600, true);
+    const { section } = mount(true);
+    q<HTMLInputElement>('input[name="paired-network"][value="pilotnet"]').checked = true;
+    section.show(readPaired(raw()), readFigures(raw()).gaps);
+    expect(q("svg.slope").dataset["network"]).toBe("pilotnet");
+    expect(all(".slope .chart__value").map((el) => el.textContent)).toEqual(["4.1°mean", "13.1°mean"]);
+  });
+
+  it("says why there is no chart when the measurements cannot be had", () => {
+    const { section } = mount(false);
+    const error = new AssetError("gone", "missing", "data/results.json");
+    section.fail(error);
+    expect(text('[data-paired="lead"]')).toBe(measurementsFailure(error));
+    expect(q('[data-paired="root"]').dataset["state"]).toBe("unavailable");
+  });
+});
+
+// -- The ladder -------------------------------------------------------------------------------
+
+describe("the ladder", () => {
+  const mount = (reduced: boolean, frames = clock()) => {
+    mountResults();
+    return { section: new LadderSection(q('[data-ladder="root"]'), () => reduced, frames), frames };
+  };
+  const bars = () => all(".ladder-chart__bar");
+  const pick = (name: string, value: string) => {
+    const radio = q<HTMLInputElement>(`input[name="${name}"][value="${value}"]`);
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  it("builds its stepper from the data's rungs, lights the furthest, and draws every bar at once", () => {
+    layoutAs(1000, false);
+    const { section } = mount(false);
+    const ladder = readLadder(raw());
+    const splits = readSplits(raw());
+    section.show(ladder, splits);
+    const steps = all(".stepper__step");
+    expect(steps.map((step) => step.textContent)).toEqual(["shuffled", "blocked", "later in the drive", "another day"]);
+    expect(q<HTMLInputElement>('input[name="ladder-rung"]:checked').value).toBe("3");
+    expect(text('[data-ladder="caption-rung"]')).toBe("Another day");
+    expect(text('[data-ladder="caption-text"]')).toBe(`${rungCaption(ladder.rungs[3] as never, splits)} ${rungNote(ladder, 3)}`);
+    // Every rung's sentence sits unseen beside it, so stepping moves nothing.
+    expect(all(".ladder__sizer")).toHaveLength(4);
+    expect(all(".ladder__sizer").every((sizer) => sizer.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(bars()).toHaveLength(10);
+    expect(all(".ladder-chart__missing").map((el) => el.textContent)).toEqual(["not trainedthis way", "not trainedthis way"]);
+    const alt = ladderAlt(ladder, "skill");
+    expect([text("#ladder-svg-title"), text("#ladder-svg-desc")]).toEqual([alt.title, alt.desc]);
+    expect(all('[data-ladder="table"] tbody tr')).toHaveLength(12);
+    expect(all('[data-ladder="table"] td').filter((cell) => cell.textContent === "not trained this way")).toHaveLength(2);
+    const labels = all(".ladder-chart__bars .chart__value").map((el) => el.textContent);
+    expect(labels).toContain("−45%");
+    expect(labels).toContain("78%");
+  });
+
+  it("draws PilotNet below the line where it does worse than steering straight", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    const ladder = readLadder(raw());
+    section.show(ladder, readSplits(raw()));
+    const layout = ladderLayout(ladder, "skill", 1000, 3);
+    const later = layout.bars.find((bar) => bar.model === "pilotnet" && bar.rung === 2);
+    expect(later?.end).toBeGreaterThan(later?.base ?? Infinity);
+    const path = bars().find((el) => el.getAttribute("class")?.includes("series--pilotnet") && (el.getAttribute("d") ?? "").includes(`V${Math.round((later?.base ?? 0) * 100) / 100}Z`));
+    expect(path).toBeDefined();
+  });
+
+  it("steps to a rung: the caption says what moved further away, and the light moves to its panel", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    const ladder = readLadder(raw());
+    const splits = readSplits(raw());
+    section.show(ladder, splits);
+    const before = q<SVGRectElement>(".ladder-chart__spotlight").style.transform;
+    pick("ladder-rung", "2");
+    expect(text('[data-ladder="caption-rung"]')).toBe("Later in the drive");
+    expect(text('[data-ladder="caption-text"]')).toBe(`${rungCaption(ladder.rungs[2] as never, splits)} ${rungNote(ladder, 2)}`);
+    expect(q<SVGRectElement>(".ladder-chart__spotlight").style.transform).not.toBe(before);
+  });
+
+  it("grows its bars from the line the first time it nears the screen, numbers counting in step", () => {
+    layoutAs(1000, false);
+    const { section, frames } = mount(false);
+    section.show(readLadder(raw()), readSplits(raw()));
+    const final = bars().map((bar) => bar.getAttribute("d"));
+    const finalLabels = all(".ladder-chart__bars .chart__value").map((el) => el.getAttribute("y"));
+    layoutAs(1000, true);
+    intersect();
+    // Started: every bar flat on its line, every label at zero.
+    expect(bars().every((bar) => /h[\d.]+$/.test(bar.getAttribute("d") ?? ""))).toBe(true);
+    frames.tick(600);
+    const growing = bars().map((bar) => bar.getAttribute("d"));
+    expect(growing).not.toEqual(final);
+    // Each label rides its growing bar: nearer the line than it will finally stand.
+    const riding = all(".ladder-chart__bars .chart__value").map((el) => el.getAttribute("y"));
+    expect(riding).not.toEqual(finalLabels);
+    frames.tick(3000);
+    expect(bars().map((bar) => bar.getAttribute("d"))).toEqual(final);
+    expect(all(".ladder-chart__bars .chart__value").map((el) => el.getAttribute("y"))).toEqual(finalLabels);
+  });
+
+  it("morphs into raw error: degrees, each training as a dot, each rung's own steering-straight line", () => {
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    const ladder = readLadder(raw());
+    section.show(ladder, readSplits(raw()));
+    frames.tick(5000);
+    pick("ladder-view", "error");
+    frames.tick(320);
+    // Halfway: the labels are changing over, the bars between the views.
+    frames.tick(2000);
+    const labels = all(".ladder-chart__bars .chart__value").map((el) => el.textContent);
+    expect(labels).toContain("13.6°");
+    expect(labels).toContain("2.9°");
+    expect(all(".ladder-chart__dot").every((dot) => dot.getAttribute("opacity") === "1")).toBe(true);
+    expect(all(".ladder-chart__whisker").every((w) => w.getAttribute("opacity") === "0")).toBe(true);
+    const ticks = all(".ladder-chart__baselines .chart__note").map((el) => el.textContent);
+    expect(ticks).toEqual(["13.1°", "17.5°", "9.4°", "15.5°"]);
+    const alt = ladderAlt(ladder, "error");
+    expect(text("#ladder-svg-title")).toBe(alt.title);
+    expect(text('[data-ladder="chart-title"]')).toBe("Mean error, in degrees of steering-wheel angle");
+  });
+
+  it("shows the view picked before the data arrived, whichever way it was picked", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    pick("ladder-view", "error");
+    section.show(readLadder(raw()), readSplits(raw()));
+    expect(text('[data-ladder="chart-title"]')).toBe("Mean error, in degrees of steering-wheel angle");
+    expect(all(".ladder-chart__bars .chart__value").map((el) => el.textContent)).toContain("13.6°");
+  });
+
+  it("shows the view a browser restored with the page, which comes with no change event", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    q<HTMLInputElement>('input[name="ladder-view"][value="error"]').checked = true;
+    section.show(readLadder(raw()), readSplits(raw()));
+    expect(text('[data-ladder="chart-title"]')).toBe("Mean error, in degrees of steering-wheel angle");
+    expect(all(".ladder-chart__bars .chart__value").map((el) => el.textContent)).toContain("13.6°");
+  });
+
+  it("says why there is no ladder when the measurements cannot be had", () => {
+    const { section } = mount(false);
+    const error = new AssetError("gone", "unreachable", "data/results.json");
+    section.fail(error);
+    expect(text('[data-ladder="caption-text"]')).toBe(measurementsFailure(error));
+    expect(q('[data-ladder="root"]').dataset["state"]).toBe("unavailable");
+  });
+});
+
+// -- The cards ----------------------------------------------------------------------------------
+
+describe("the cards", () => {
+  const mount = (reduced = true) => new Cards(mountResults(), () => reduced, clock());
+
+  it("write each card's words and chart from its own part of the data", () => {
+    layoutAs(340, true);
+    const cards = mount();
+    const ladder = readLadder(raw());
+    const regimes = readRegimes(raw());
+    const legacy = readLegacy(raw());
+    cards.showFrames(ladder);
+    cards.showRegimes(regimes);
+    cards.showRecipe(legacy);
+    cards.showTrust(readParity(raw()), readSplits(raw()));
+    const frames = twoFramesText(ladder);
+    expect([text('[data-card="frames-lead"]'), text('[data-card="frames-also"]')]).toEqual([frames?.lead, frames?.also]);
+    expect(text('[data-card="regimes-straight"]')).toBe(regimesText(regimes).straight);
+    expect(text('[data-card="recipe-cap"]')).toBe(legacyText(legacy).cap);
+    expect(text('[data-card="export"]')).toBe(exportText(readParity(raw())));
+    expect(text('[data-card="protocol-blocked"]')).toBe(protocolTexts(readSplits(raw())).blocked);
+    const regimesChart = q('[data-card="regimes-plot"] svg');
+    expect(regimesChart.getAttribute("role")).toBe("img");
+    expect(regimesChart.getAttribute("aria-labelledby")).toBe("regimes-chart-title regimes-chart-desc");
+    expect(text("#regimes-chart-desc")).toBe(regimesAlt(regimes));
+    expect(text("#regimes-chart-title")).toBe("Mean error by how hard the driver was turning");
+    expect(text("#frames-chart-desc")).toMatch(/^How much better than always steering straight SightlineNet is with two frames and with one: Another day’s drive: two frames 31% better/);
+    expect(text("#recipe-chart-desc")).toMatch(/Its largest answer is 169\.8°; its output can never pass 180°, and the driver turned past that on 235 frames of the 2018 drive\.$/);
+    expect(all('[data-card="regimes-plot"] .card-chart__bar')).toHaveLength(6);
+    expect(all('[data-card="recipe-plot"] .chart__value').map((el) => el.textContent)).toContain("largest answer 169.8°");
+    for (const name of ["frames", "regimes", "recipe", "trust"]) expect(q(`[data-card="${name}"]`).dataset["state"]).toBe("ready");
+  });
+
+  it("repeat the live check as the band reads it", () => {
+    const cards = mount();
+    cards.live("checked", "Checked live: on all 420 frames.");
+    expect(text('[data-card="live"]')).toBe("Checked live: on all 420 frames.");
+    expect(q('[data-card="live"]').dataset["state"]).toBe("checked");
+    expect(q('[data-card="live"]').closest("[aria-live], [role=status]")).toBeNull();
+  });
+
+  it("say why one card has no numbers without taking the others with it", () => {
+    layoutAs(340, true);
+    const cards = mount();
+    const json = patch(raw(), "regimes.zero.straight.n", 1);
+    let thrown: unknown;
+    try {
+      cards.showRegimes(readRegimes(json));
+    } catch (error) {
+      thrown = error;
+      cards.fail("regimes", error);
+    }
+    cards.showFrames(readLadder(raw()));
+    expect(thrown).toBeInstanceOf(AssetError);
+    expect(text('[data-card="regimes-lead"]')).toBe(measurementsFailure(thrown));
+    expect(q('[data-card="regimes"]').dataset["state"]).toBe("unavailable");
+    expect(q('[data-card="frames"]').dataset["state"]).toBe("ready");
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_VALUE, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread, steerParts } from "./format.ts";
+import { NO_VALUE, countWord, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread, steerParts } from "./format.ts";
 
 describe("fmtDeg", () => {
   it("keeps the sign with a true minus", () => expect(fmtDeg(-7.04)).toBe("−7.0°"));
@@ -280,5 +280,15 @@ describe("every formatter, across many magnitudes", () => {
         expect(text).not.toMatch(/[\u2009\u202f]/);
       }
     }
+  });
+});
+
+describe("countWord", () => {
+  it("writes a small count in words and a larger one in grouped figures", () => {
+    expect(countWord(0)).toBe("zero");
+    expect(countWord(3)).toBe("three");
+    expect(countWord(12)).toBe("twelve");
+    expect(countWord(13)).toBe("13");
+    expect(countWord(1500)).toBe("1,500");
   });
 });

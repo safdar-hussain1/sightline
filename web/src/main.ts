@@ -19,10 +19,13 @@ import { loadResults } from "./data/load.ts";
 import { driveIntervals } from "./data/timing.ts";
 import { Router } from "./router.ts";
 import { Accuracy } from "./sections/accuracy.ts";
-import { readFigures } from "./sections/figures.ts";
+import { Cards } from "./sections/cards.ts";
+import { readFigures, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, type Figures } from "./sections/figures.ts";
 import { Headline } from "./sections/headline.ts";
 import { HowItWorks } from "./sections/how.ts";
+import { LadderSection } from "./sections/ladder.ts";
 import { mountSectionsMarkup } from "./sections/markup.ts";
+import { PairedSection } from "./sections/paired.ts";
 import { mountShell } from "./shell.ts";
 import { initTheme } from "./theme.ts";
 
@@ -35,21 +38,63 @@ initTheme();
 const how = HowItWorks.mount();
 const accuracy = Accuracy.mount();
 const headline = Headline.mount();
+const paired = PairedSection.mount();
+const ladder = LadderSection.mount();
+const cards = Cards.mount();
+headline?.onCheck((look, text) => cards?.live(look, text));
 
 new Router({
   focus: { demo: "#cockpit", results: "#results-title" },
   onShow: (view) => {
     how?.viewShown(view);
     headline?.viewShown(view);
+    paired?.viewShown(view);
+    ladder?.viewShown(view);
+    cards?.viewShown(view);
   },
 }).start();
+
+/** Show one part of the Results view from the data, or say why it cannot be
+ * shown: each part reads its own keys, so a malformed one costs only that part. */
+function part(show: () => void, fail: (error: unknown) => void): void {
+  try {
+    show();
+  } catch (error) {
+    console.warn("A part of the measurements could not be read:", error);
+    fail(error);
+  }
+}
+
+/** Every part of the Results view, from the parsed results.json. */
+function showResults(raw: Readonly<Record<string, unknown>>, figures: Figures | null): void {
+  part(
+    () => paired?.show(readPaired(raw), (figures ?? readFigures(raw)).gaps),
+    (error) => paired?.fail(error),
+  );
+  part(
+    () => ladder?.show(readLadder(raw), readSplits(raw)),
+    (error) => ladder?.fail(error),
+  );
+  part(() => cards?.showFrames(readLadder(raw)), (error) => cards?.fail("frames", error));
+  part(() => cards?.showRegimes(readRegimes(raw)), (error) => cards?.fail("regimes", error));
+  part(() => cards?.showRecipe(readLegacy(raw)), (error) => cards?.fail("recipe", error));
+  part(() => cards?.showTrust(readParity(raw), readSplits(raw)), (error) => cards?.fail("trust", error));
+}
+
+/** The Results view without its data: every part says why. */
+function failResults(error: unknown): void {
+  paired?.fail(error);
+  ladder?.fail(error);
+  for (const card of ["frames", "regimes", "recipe", "trust"] as const) cards?.fail(card, error);
+}
 
 const results = loadResults(new URL("./", document.baseURI).href);
 results.then(
   (loaded) => {
     how?.setIntervals(driveIntervals(loaded.raw));
+    let figures: Figures | null = null;
     try {
-      const figures = readFigures(loaded.raw);
+      figures = readFigures(loaded.raw);
       accuracy?.show(figures);
       headline?.show(figures);
     } catch (error) {
@@ -57,11 +102,13 @@ results.then(
       accuracy?.fail(error);
       headline?.fail(error);
     }
+    showResults(loaded.raw, figures);
   },
   (error: unknown) => {
     // The cockpit reports the same failure for itself, with its detail.
     accuracy?.fail(error);
     headline?.fail(error);
+    failResults(error);
   },
 );
 

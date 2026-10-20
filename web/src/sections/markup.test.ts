@@ -4,8 +4,11 @@ import page from "../../index.html?raw";
 import { injectCockpit } from "../cockpit/markup.ts";
 import { injectShell } from "../shell.ts";
 import accuracySource from "./accuracy.ts?raw";
+import cardsSource from "./cards.ts?raw";
 import headlineSource from "./headline.ts?raw";
 import howSource from "./how.ts?raw";
+import ladderSource from "./ladder.ts?raw";
+import pairedSource from "./paired.ts?raw";
 import {
   ACCURACY_ROOT,
   HOW_ROOT,
@@ -43,6 +46,17 @@ describe("the sections' markup", () => {
     const built = injectSections(injectCockpit(injectShell(page)));
     const body = built.slice(built.indexOf("<body>"));
     expect(visibleText(body)).not.toMatch(/\d/);
+    // Nor in a drawing's own text: the charts' placeholders say nothing at all.
+    for (const [, inner] of body.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)) expect(inner).not.toMatch(/\d/);
+    for (const [, label] of body.matchAll(/aria-label="([^"]*)"/g)) expect(label).not.toMatch(/\d/);
+  });
+
+  it("serves every chart of the Results view as a quiet placeholder, never as an empty box", () => {
+    const html = resultsHtml();
+    for (const plot of ["paired", "ladder"]) {
+      expect(html).toMatch(new RegExp(`data-${plot}="plot">\\s*<svg[^>]*class="[^"]*--waiting`));
+    }
+    expect(html.match(/data-card="(?:frames|regimes|recipe)-plot"><svg[^>]*card-chart--waiting/g)).toHaveLength(3);
   });
 
   it("holds every element the sections' code looks up", () => {
@@ -50,9 +64,14 @@ describe("the sections' markup", () => {
       [howSource, "how", howHtml()],
       [accuracySource, "accuracy", accuracyHtml()],
       [headlineSource, "results", resultsHtml()],
+      [pairedSource, "paired", resultsHtml()],
+      [ladderSource, "ladder", resultsHtml()],
+      [cardsSource, "card", resultsHtml()],
     ];
     for (const [source, attribute, html] of lookups) {
       const names = [...source.matchAll(/\.part(?:<[^>]+>)?\("([\w-]+)"\)/g)].map((m) => m[1]);
+      // The cards look up some parts by a name made from the card's.
+      for (const card of ["frames", "regimes", "recipe"]) if (attribute === "card") names.push(`${card}-plot`, `${card}-lead`);
       expect(names.length, attribute).toBeGreaterThan(3);
       for (const name of names) {
         expect(html, `${attribute}: ${name}`).toContain(`data-${attribute}="${name}"`);
@@ -70,6 +89,15 @@ describe("the sections' markup", () => {
     expect(accuracyHtml()).toMatch(/<a\b[^>]*href="model-card\.md"/);
     expect(resultsHtml()).toMatch(/<a\b[^>]*href="model-card\.md"/);
     expect(resultsHtml()).toMatch(/<a\b[^>]*href="data\/results\.json"/);
+  });
+
+  it("links every report the Results view's numbers come from, where it lives in the repository", () => {
+    const links = [...resultsHtml().matchAll(/href="(https:\/\/github\.com\/safdar-hussain1\/sightline\/[^"]+)"/g)].map((m) => m[1]);
+    const base = "https://github.com/safdar-hussain1/sightline";
+    for (const file of ["reports/summary.json", "reports/leakage.json", "reports/legacy.json", "reports/export.json", "src/sightline/data/splits.py"]) {
+      expect(links).toContain(`${base}/blob/main/${file}`);
+    }
+    expect(links).toContain(`${base}/tree/main/reports/runs`);
   });
 
   it("uses headings below the page's one h1", () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import copySource from "../sections/copy.ts?raw";
 import { driveIntervals, frameTiming, lagText } from "./timing.ts";
+import timingSource from "./timing.ts?raw";
 
 describe("driveIntervals", () => {
   it("reads each drive's measured frame interval, null for a drive without timestamps", () => {
@@ -35,5 +37,15 @@ describe("lagText", () => {
     expect(lagText(1, { interval: 0.056999921798706055, reference: null })).toBe("57 ms");
     expect(lagText(2, { interval: null, reference: null })).toBe("two frames");
     expect(lagText(1, { interval: null, reference: null })).toBe("one frame");
+  });
+
+  it("counts a long lag in grouped figures, as every count on the page is written", () => {
+    expect(lagText(1500, { interval: null, reference: null })).toBe("1,500 frames");
+  });
+});
+
+describe("the number words", () => {
+  it("come from the page's one list, not a copy of it", () => {
+    for (const source of [timingSource, copySource]) expect(source).not.toMatch(/"eleven"/);
   });
 });

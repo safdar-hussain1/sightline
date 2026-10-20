@@ -7,7 +7,7 @@
  * page counts them in frames, and quotes a time only as the measured drive's.
  */
 
-import { fmtMs } from "../format.ts";
+import { countWord, fmtMs } from "../format.ts";
 
 /** Each drive's median frame interval in seconds, from results.json's
  * `drives`; null for a drive without timestamps. */
@@ -37,11 +37,9 @@ export function frameTiming(intervals: Readonly<Record<string, number | null>>, 
   return { interval: null, reference: other ? { drive: other[0], interval: other[1] as number } : null };
 }
 
-const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-
 /** How long before the frame on screen a frame `lag` frames back was taken:
  * "114 ms" when the drive's frames are timed, "two frames" when they are not. */
 export function lagText(lag: number, timing: FrameTiming): string {
   if (timing.interval !== null) return fmtMs(lag * timing.interval * 1000, 0);
-  return `${WORDS[lag] ?? String(lag)} frame${lag === 1 ? "" : "s"}`;
+  return `${countWord(lag)} frame${lag === 1 ? "" : "s"}`;
 }

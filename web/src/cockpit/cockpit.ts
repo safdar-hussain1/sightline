@@ -124,6 +124,9 @@ class View {
   readonly stripCanvas: HTMLCanvasElement;
   readonly average: HTMLElement;
   readonly note: HTMLElement;
+  /** Unseen copies of each model's note on the clip, sharing the note's slot
+   * so it is as tall as the longest of them. */
+  readonly noteSizers: HTMLElement[];
   readonly wheelBox: HTMLElement;
   readonly wheel: SVGSVGElement;
   readonly modelName: HTMLElement;
@@ -159,6 +162,7 @@ class View {
     this.stripCanvas = find("strip-canvas");
     this.average = find("average");
     this.note = find("note");
+    this.noteSizers = [...root.querySelectorAll<HTMLElement>('[data-cockpit="note-sizer"]')];
     this.wheelBox = find("wheel");
     const wheel = this.wheelBox.querySelector("svg");
     if (!wheel) throw new Error("the cockpit markup has no wheel drawing");
@@ -181,6 +185,17 @@ class View {
   say(text: string): void {
     this.status.textContent = text;
     this.status.hidden = text === "";
+  }
+
+  /** What the visitor reads about `model` on `clip`. The slot holds every
+   * model's note on that clip, unseen, so it is as tall as the longest and
+   * switching models moves nothing below it. */
+  showNote(model: ModelKey, clip: Clip | null): void {
+    this.note.textContent = modelNote(model, clip);
+    MODEL_KEYS.forEach((key, i) => {
+      const sizer = this.noteSizers[i];
+      if (sizer) sizer.textContent = modelNote(key, clip);
+    });
   }
 
   /** The standing remarks about the clip and the model; empty clears them. */
@@ -535,7 +550,7 @@ export class Cockpit implements LiveCockpit {
   private enterLoading(message: string): void {
     this.leaveRunning("loading");
     this.view.clips.disabled = !this.view.hasClipChoices();
-    this.view.note.textContent = modelNote(this.model, null);
+    this.view.showNote(this.model, null);
     this.remark("decode", "");
     this.view.say(message);
   }
@@ -549,7 +564,7 @@ export class Cockpit implements LiveCockpit {
     this.strip.setEnabled(true);
     this.view.clips.disabled = false;
     this.view.models.disabled = false;
-    this.view.note.textContent = modelNote(this.model, loaded.clip);
+    this.view.showNote(this.model, loaded.clip);
     this.remark("decode", decodeNote(loaded.check, loaded.frames.length));
     this.strip.setClip(loaded.clip.labels_deg, loaded.clip.fps, loaded.scale);
     this.refreshStrip();
@@ -763,7 +778,7 @@ export class Cockpit implements LiveCockpit {
     this.model = model;
     this.view.modelName.textContent = MODEL_NAMES[model];
     const loaded = this.state === "ready" ? this.loaded : null;
-    this.view.note.textContent = modelNote(model, loaded?.clip ?? null);
+    this.view.showNote(model, loaded?.clip ?? null);
     if (!loaded) return;
     this.refreshStrip();
     this.render(this.frame, true);
@@ -1023,7 +1038,7 @@ export class Cockpit implements LiveCockpit {
       const input = event.target as HTMLInputElement;
       if (MODEL_KEYS.includes(input.value as ModelKey)) this.selectModel(input.value as ModelKey);
     });
-    view.note.textContent = modelNote(this.model, null);
+    view.showNote(this.model, null);
 
     new IntersectionObserver(
       (entries) => {

@@ -162,6 +162,15 @@ export function fmtSpread(sd: number, digits = 1): string {
   return `±${measured(sd, digits, "")}`;
 }
 
+/** The words for the small counts the page spells out. */
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+
+/** A count as the page's sentences say it: in words while it is small
+ * ("three"), in grouped figures beyond ("1,500"). */
+export function countWord(n: number): string {
+  return NUMBER_WORDS[n] ?? fmtCount(n);
+}
+
 /** A time in milliseconds: `fmtMs(2.53)` is `2.5 ms`. */
 export function fmtMs(x: number, digits = 1): string {
   if (!Number.isFinite(x) || x < 0) {

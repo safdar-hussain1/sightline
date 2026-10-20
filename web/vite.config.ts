@@ -45,7 +45,7 @@ function preloadCockpit(): Plugin {
 // docs/ is the GitHub Pages site root, so the build lands there, and every
 // asset URL is relative: the site is served from a project subpath, where an
 // absolute "/assets/..." would 404.
-export default defineConfig({
+const config = {
   base: "./",
   plugins: [staticShell(), preloadCockpit()],
   build: {
@@ -56,4 +56,10 @@ export default defineConfig({
     // that built them, which would publish the checkout's location.
     sourcemap: false,
   },
-});
+  // For the test runner, which reads this file too: the stylesheet's tests
+  // read it as text, which the runner allows only for a stylesheet it
+  // processes. The build ignores this key.
+  test: { css: { include: [/\/src\/styles\.css/] } },
+};
+
+export default defineConfig(config);

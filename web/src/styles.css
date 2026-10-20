@@ -178,12 +178,19 @@
   --mark-wheel: #a866f5;
   --mark-marker: #fff3c4;
 
-  /* Charts on the page ground: the model's bar in its violet, the baseline it
-     is measured against in a quiet grey (an emphasis chart: one hue, the rest
-     grey). Checked against the chart surface in each theme: 3:1 or more for
-     both, 18 apart (OKLab x100) under simulated red-green colour blindness. */
-  --bar-model: #9333ea;
-  --bar-straight: #8b85a1;
+  /* Charts: one colour per network on every chart of the page, and steering
+     straight in a quiet grey. SightlineNet keeps the page's violet; PilotNet
+     is a deep teal and SightlineNet with one frame a wine red, both chosen with
+     a colour-vision validator: every pair of the four, all at once, at least
+     8.4 apart (OKLab x100) under simulated red-green colour blindness and 17
+     apart in full colour, and each 3:1 or more on the page's ground and on its
+     surface, in both themes. The grey is a de-emphasis, not a fourth hue. */
+  --model-sightlinenet: #9333ea;
+  --model-pilotnet: #0c7b60;
+  --model-oneframe: #92123b;
+  --model-straight: #8b85a1;
+  --bar-model: var(--model-sightlinenet);
+  --bar-straight: var(--model-straight);
 
   /* The nav's marker under the view on screen. */
   --nav-thumb: color-mix(in oklab, var(--accent) 13%, var(--surface));
@@ -218,8 +225,10 @@
     --mark-tile: #0e0b1d;
     --show-moon: none;
     --show-sun: block;
-    --bar-model: #a66ef4;
-    --bar-straight: #736c8c;
+    --model-sightlinenet: #a66ef4;
+    --model-pilotnet: #05ab86;
+    --model-oneframe: #c62c58;
+    --model-straight: #736c8c;
     --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
   }
 }
@@ -241,8 +250,10 @@
   --mark-tile: #0e0b1d;
   --show-moon: none;
   --show-sun: block;
-  --bar-model: #a66ef4;
-  --bar-straight: #736c8c;
+  --model-sightlinenet: #a66ef4;
+  --model-pilotnet: #05ab86;
+  --model-oneframe: #c62c58;
+  --model-straight: #736c8c;
   --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
 }
 
@@ -1065,30 +1076,29 @@ html:not(.js) .windshield__status {
   color: var(--console-ink);
 }
 
-/* -- The model's note: what the selected model is, and what this clip is to it. */
+/* -- The model's note: what the selected model is, and what this clip is to it.
+   Above the wheel on a wide screen, below the strip on a phone. The slot
+   holds, unseen, the note of every model on the clip on screen, each in the
+   same grid cell as the note itself, so it is as tall as the longest at any
+   width and switching models moves nothing: not the wheel above Play on a
+   wide screen, not the model's eye below it on a phone. Its floor of four
+   lines holds the place of a clip's notes while the clip loads. */
 
 .model-note {
   grid-area: note;
+  display: grid;
+  min-height: 6em;
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--console-ink-2);
 }
 
-@media (min-width: 60rem) {
-  /* Above the wheel, the note holds the height of the longest one, so
-     switching models does not move the wheel. */
-  .model-note {
-    min-height: 6em;
-  }
+.model-note > * {
+  grid-area: 1 / 1;
 }
 
-/* On a phone the note sits below the strip, past the first screen, in one
-   slot that holds the longest note (the twin's), so switching models moves
-   nothing: the footage, the wheel and Play stay where they were. */
-@media (width < 60rem) {
-  .model-note {
-    min-height: 6em;
-  }
+.model-note__sizer {
+  visibility: hidden;
 }
 
 /* -- Instruments: the wheel and its readouts. */
@@ -2134,8 +2144,7 @@ html:not(.js) .windshield__status {
   background: var(--line);
 }
 
-[data-results="root"][data-state="unavailable"] :is(.headline, .trust),
-.splits[hidden] {
+[data-results="root"][data-state="unavailable"] :is(.headline, .trust) {
   display: none;
 }
 
@@ -2208,49 +2217,938 @@ html:not(.js) .windshield__status {
   }
 }
 
-/* How the two splits differ, and where every number comes from. */
-.splits {
-  display: grid;
-  gap: var(--space-4);
-  max-width: 62rem;
-  margin-block-start: var(--space-7);
+/* -- The Results view's studies: the paired experiment, the ladder, the cards.
+   Words on the page ground; every chart on one raised surface, the material of
+   the accuracy figure; the frames a model sees -- the sketch of the splits --
+   on the console's own dark. One colour per network, the same on every chart:
+   violet for SightlineNet, teal for PilotNet, wine for SightlineNet with one
+   frame, grey for always steering straight. */
+
+.study {
+  margin-block-start: var(--space-9);
+  scroll-margin-top: var(--space-4);
 }
 
-.splits__title {
-  font-size: 1.5rem;
+.study__title {
+  font-size: var(--display-md);
 }
 
-.splits__list {
-  display: grid;
-  gap: var(--space-4);
-  margin: 0;
+.study__lead {
+  max-width: 34em;
+  font-size: var(--text-lg);
+  line-height: 1.5;
 }
 
-@media (min-width: 48rem) {
-  .splits__list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-6);
-  }
-}
-
-.splits__item {
-  padding-inline-start: var(--space-4);
-  border-inline-start: 2px solid var(--line-strong);
-}
-
-.splits__item dt {
-  font-weight: 600;
-}
-
-.splits__item dd {
-  margin: var(--space-1) 0 0;
+.study__meaning,
+.study__scale {
+  max-width: 36em;
   color: var(--ink-2);
 }
 
-.splits__sources {
-  max-width: 46em;
+.study__scale:empty {
+  display: none;
+}
+
+/* The paired experiment: the words and the sketch on the left, the chart on
+   the right; one column on a phone, the chart right after the words. */
+.paired {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.paired__text {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* In one column the chart follows the words at once, and the sketch that
+   explains it comes after. */
+@media (width < 64rem) {
+  .paired__text {
+    display: contents;
+  }
+
+  .paired > .chart {
+    order: 1;
+  }
+
+  .paired .sketch {
+    order: 2;
+  }
+}
+
+@media (min-width: 64rem) {
+  .paired {
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    column-gap: var(--space-8);
+  }
+}
+
+/* The sketch: one stretch of drive, frame by frame, under each split. */
+.sketch {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-4) var(--space-4) var(--space-5);
+  border-radius: var(--radius-screen);
+  background: var(--console);
+  color: var(--console-ink);
+  box-shadow: var(--console-frame);
+}
+
+.sketch__drawing {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sketch__row {
+  display: grid;
+  grid-template-columns: 6.75rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sketch__name {
   font-size: var(--text-sm);
+  line-height: 1.2;
+  color: var(--console-ink-2);
+}
+
+.sketch__frames {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sketch__frame {
+  flex: 1 1 0;
+  min-width: 2px;
+  height: 1.375rem;
+  border-radius: 3px;
+  background: var(--console-3);
+}
+
+.sketch__frame--out {
+  background: var(--console-ink-2);
+}
+
+.sketch__frame--both {
+  background: var(--console-ink);
+  box-shadow: 0 0 0.75rem rgb(236 233 246 / 45%);
+}
+
+.sketch__caption {
+  display: grid;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.sketch__splits {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.sketch__splits div {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--console-line);
+}
+
+.sketch__splits dt {
+  font-weight: 600;
+  color: var(--console-ink);
+}
+
+.sketch__splits dd {
+  margin: var(--space-1) 0 0;
+  color: var(--console-ink-2);
+}
+
+.sketch__note {
+  color: var(--console-ink-2);
+}
+
+/* A chart: a raised surface holding its title, its controls, the drawing,
+   its key, its caption and every number behind it. */
+.chart {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-5);
+  border-radius: var(--radius-screen);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+@media (width < 40rem) {
+  .chart {
+    padding: var(--space-4) var(--space-3);
+  }
+}
+
+.chart__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.chart__title {
+  font-weight: 600;
+}
+
+.chart__plot {
+  position: relative;
+  min-width: 0;
+}
+
+.chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: var(--font-text);
+}
+
+.chart__caption {
+  font-size: var(--text-sm);
+  line-height: 1.5;
   color: var(--ink-3);
+}
+
+/* The drawings' type and rules, in the page's own inks. */
+.chart__rule {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart__rule--zero {
+  stroke: var(--line-strong);
+}
+
+.chart__tick,
+.chart__note {
+  font-size: 12px;
+  fill: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__axis {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+
+.chart__value {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.chart__value tspan + tspan {
+  font-family: var(--font-text);
+  font-size: 12px;
+  font-weight: 400;
+  fill: var(--ink-3);
+}
+
+.chart__value--small {
+  font-family: var(--font-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the pointer is on, in words: in the page's ink, inverted. */
+.chart__tip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  max-width: min(19rem, 80%);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--ink);
+  color: var(--ground);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 0.75rem 1.5rem -0.75rem rgb(0 0 0 / 45%);
+}
+
+.chart__tip[hidden] {
+  display: none;
+}
+
+/* Two choices drawn as one control, on the page's own material. */
+.segmented {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--ground);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.segmented__option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.25rem;
+  padding: var(--space-1) var(--space-3);
+  border-radius: calc(var(--radius-control) - 3px);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color 0.18s, color 0.18s;
+}
+
+.segmented__option:hover {
+  color: var(--ink);
+}
+
+.segmented__option:has(.segmented__input:checked) {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgb(27 22 48 / 12%), inset 0 0 0 1px var(--line-strong);
+}
+
+.segmented__option:has(.segmented__input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.segmented__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented__swatch {
+  flex: none;
+  inline-size: 0.625rem;
+  block-size: 0.625rem;
+  border-radius: 50%;
+}
+
+.segmented__swatch--sightlinenet {
+  background: var(--model-sightlinenet);
+}
+
+.segmented__swatch--pilotnet {
+  background: var(--model-pilotnet);
+}
+
+/* The key: what each mark is, in words beside its mark. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.legend__dot {
+  inline-size: 0.625rem;
+  block-size: 0.625rem;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+.legend__dot--hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--ink-2);
+}
+
+.legend__line {
+  inline-size: 1rem;
+  block-size: 2px;
+  background: var(--model-straight);
+}
+
+.legend__swatch {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border-radius: 3px;
+}
+
+.legend__swatch--sightlinenet {
+  background: var(--model-sightlinenet);
+}
+
+.legend__swatch--pilotnet {
+  background: var(--model-pilotnet);
+}
+
+.legend__swatch--oneframe {
+  background: var(--model-oneframe);
+}
+
+/* Every number behind a chart, one click away, as a plain table. */
+.numbers {
+  font-size: var(--text-sm);
+  border-block-start: 1px solid var(--line);
+  padding-block-start: var(--space-3);
+}
+
+.numbers summary {
+  inline-size: fit-content;
+  font-weight: 600;
+  color: var(--link);
+  cursor: pointer;
+}
+
+.numbers__scroll {
+  overflow-x: auto;
+  margin-block-start: var(--space-3);
+}
+
+.numbers__table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.numbers__table caption {
+  padding-block-end: var(--space-2);
+  text-align: start;
+  color: var(--ink-3);
+}
+
+.numbers__table :is(th, td) {
+  padding: var(--space-1) var(--space-2);
+  border-block-end: 1px solid var(--line);
+  text-align: start;
+  vertical-align: top;
+}
+
+.numbers__table thead th {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.numbers__table tbody th {
+  font-weight: 600;
+}
+
+/* The slope chart: each seed's line in the colour of the network on screen,
+   hollow where it was trained on shuffled frames, solid where stretches were
+   held back. The colour cross-fades as the chart morphs between networks. */
+.slope {
+  --series: var(--model-sightlinenet);
+}
+
+.slope[data-network="pilotnet"] {
+  --series: var(--model-pilotnet);
+}
+
+.slope__line {
+  stroke: var(--series);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke 0.56s var(--ease-out), opacity 0.18s;
+}
+
+.slope__dot {
+  fill: var(--series);
+  stroke: var(--surface);
+  stroke-width: 2;
+  transition: fill 0.56s var(--ease-out), opacity 0.18s;
+}
+
+.slope__dot--shuffled {
+  fill: var(--surface);
+  stroke: var(--series);
+  transition: stroke 0.56s var(--ease-out), opacity 0.18s;
+}
+
+.slope__straight-line {
+  stroke: var(--model-straight);
+  stroke-width: 1.5;
+}
+
+.slope__ratio {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+
+.slope .chart__value {
+  font-size: 24px;
+}
+
+.slope.is-pointing :is(.slope__line, .slope__dot):not(.is-lit) {
+  opacity: 0.22;
+}
+
+/* The ladder: the stepper over the panels, the rung's sentence, the chart. */
+.ladder__head {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 46rem;
+}
+
+.chart--ladder {
+  margin-block-start: var(--space-6);
+}
+
+/* The rungs, numbered in order and joined by the road they lie along; the
+   lit one filled in the model's violet. */
+.stepper {
+  counter-reset: rung;
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  min-width: 0;
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--panels-start, 0px);
+  border: 0;
+}
+
+/* The road the rungs lie along, from the first step's mark to the last. */
+.stepper::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(var(--panels-start, 0px) + (100% - var(--panels-start, 0px)) / 8);
+  inset-inline-end: calc((100% - var(--panels-start, 0px)) / 8);
+  top: 1rem;
+  block-size: 2px;
+  background: var(--line-strong);
+}
+
+.stepper__step {
+  counter-increment: rung;
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+  text-align: center;
+  cursor: pointer;
+}
+
+.stepper__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.stepper__mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 50%;
+  background: var(--ground);
+  box-shadow: inset 0 0 0 2px var(--line-strong);
+  font: 600 var(--text-sm) / 1 var(--font-text);
+  color: var(--ink-2);
+  transition: background-color 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.stepper__mark::before {
+  content: counter(rung);
+}
+
+.stepper__name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-2);
+}
+
+.stepper__step:hover .stepper__mark {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.stepper__step:has(.stepper__input:checked) .stepper__mark {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-halo);
+  color: var(--on-accent);
+}
+
+.stepper__step:has(.stepper__input:checked) .stepper__name {
+  color: var(--ink);
+}
+
+.stepper__step:has(.stepper__input:focus-visible) .stepper__mark {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+/* The lit rung's sentence. Every rung's sentence sits unseen in the same
+   cell, so the cell is as tall as the longest and stepping moves nothing. */
+.ladder__caption {
+  display: grid;
+  max-width: 52rem;
+  padding-inline-start: var(--panels-start, 0px);
+}
+
+.ladder__caption > * {
+  grid-area: 1 / 1;
+}
+
+.ladder__sizer {
+  visibility: hidden;
+}
+
+.ladder__said {
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.ladder__rung {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ladder__rung::first-letter {
+  text-transform: uppercase;
+}
+
+.ladder-chart__spotlight {
+  fill: color-mix(in oklab, var(--accent) 7%, var(--surface));
+  stroke: color-mix(in oklab, var(--accent) 22%, transparent);
+  transition: transform 0.34s var(--ease-out);
+}
+
+.ladder-chart__title {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+
+.ladder-chart__title.is-lit {
+  fill: var(--ink);
+}
+
+.ladder-chart__baseline {
+  stroke: var(--model-straight);
+  stroke-width: 2;
+}
+
+.ladder-chart__whisker {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.ladder-chart__dot {
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+
+.ladder-chart__missing {
+  font-size: 12px;
+  fill: var(--ink-3);
+}
+
+.ladder-chart__bar {
+  transition: opacity 0.18s;
+}
+
+.chart__value--small.is-lit {
+  fill: var(--ink);
+}
+
+.ladder-chart.is-pointing .ladder-chart__bar:not(.is-hot) {
+  opacity: 0.4;
+}
+
+/* A network's colour, on whatever mark carries it. */
+.series--sightlinenet {
+  fill: var(--model-sightlinenet);
+}
+
+.series--pilotnet {
+  fill: var(--model-pilotnet);
+}
+
+.series--oneframe {
+  fill: var(--model-oneframe);
+}
+
+.series--straight {
+  fill: var(--model-straight);
+}
+
+/* The cards: two findings side by side, then the standard recipe across the
+   width, its words beside its charts; one column on a phone. */
+.cards {
+  display: grid;
+  gap: var(--space-5);
+  margin-block-start: var(--space-9);
+}
+
+@media (min-width: 48rem) {
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card--recipe {
+    grid-column: 1 / -1;
+  }
+}
+
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-5);
+  border-radius: var(--radius-screen);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.card__title {
+  font-size: 1.5rem;
+}
+
+.card__lead {
+  line-height: 1.5;
+}
+
+.card__figure {
+  margin: var(--space-2) 0;
+}
+
+.card__note {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.card__note:empty,
+.card__verdict:empty {
+  display: none;
+}
+
+.card__note--strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* A card ends on what it found, at the foot of the card, so the three
+   findings line up across the row. */
+.card__verdict {
+  margin-block-start: auto;
+  padding-block-start: var(--space-3);
+  border-block-start: 1px solid var(--line);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* The standard recipe, across the width: its words on the left, ending on
+   its finding, and its charts on the right. */
+@media (min-width: 64rem) {
+  .card.card--recipe {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    grid-template-rows: auto auto auto 1fr;
+    column-gap: var(--space-8);
+  }
+
+  .card--recipe > :is(.card__title, .card__lead, .card__note, .card__verdict) {
+    grid-column: 1;
+  }
+
+  .card--recipe > .card__verdict {
+    align-self: end;
+  }
+
+  .card--recipe > .card__figure {
+    grid-column: 2;
+    grid-row: 1 / span 4;
+    align-self: center;
+    margin: 0;
+  }
+}
+
+.card-chart__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+
+.card-chart__zero {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.card-chart__track {
+  fill: var(--line);
+}
+
+.card-chart__beyond {
+  fill: color-mix(in oklab, var(--model-straight) 30%, transparent);
+}
+
+.card-chart__wall {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+/* Where the numbers come from: the checks, the splits, the files. */
+.sources-card {
+  margin-block-start: var(--space-5);
+  padding: var(--space-6) var(--space-5);
+  border-radius: var(--radius-screen);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.sources-card__grid {
+  display: grid;
+  gap: var(--space-6);
+  margin-block-start: var(--space-5);
+}
+
+@media (min-width: 64rem) {
+  .sources-card__grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr);
+    gap: var(--space-7);
+  }
+}
+
+.sources-card__part {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.sources-card__heading {
+  margin: 0;
+  font: 600 1.125rem / 1.2 var(--font-display);
+  color: var(--ink);
+}
+
+.sources-card [data-card="live"] {
+  position: relative;
+  padding-inline-start: var(--space-4);
+}
+
+.sources-card [data-card="live"]::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0.45em;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.sources-card [data-card="live"][data-state="checked"]::before {
+  background: var(--accent);
+}
+
+.sources-card [data-card="live"][data-state="mismatch"]::before {
+  background: var(--ink);
+}
+
+.protocols {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.protocols dt {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.protocols dd {
+  margin: var(--space-1) 0 0;
+}
+
+.sources {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sources a {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sources__what {
+  display: block;
+  color: var(--ink-3);
+}
+
+.sources-card__note {
+  color: var(--ink-3);
+}
+
+/* Before the measurements load: the charts' frames in quiet grey. */
+.placeholder__grid {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.placeholder__mark {
+  fill: var(--line);
+  stroke: var(--line);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.slope--waiting .placeholder__mark {
+  fill: none;
+}
+
+/* A part that cannot be shown says why in its words, and drops its chart. */
+:is([data-paired="root"], [data-ladder="root"])[data-state="unavailable"] :is(.chart, .sketch, .study__meaning, .study__scale),
+.card[data-state="unavailable"] :is(.card__figure, .card__note, .card__verdict),
+.sources-card[data-state="unavailable"] :is([data-card="live"], .protocols) {
+  display: none;
 }
 
 /* -- Footer --------------------------------------------------------------- */
