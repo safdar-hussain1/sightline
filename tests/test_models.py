@@ -1,4 +1,5 @@
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -19,6 +20,15 @@ def test_parameter_counts():
     assert sum(p.numel() for p in build_model("sightlinenet-1f").parameters()) == 287_489
     extra = 24 * 3 * 5 * 5 * len(SHIPPED_LAGS)
     assert sum(p.numel() for p in build_model("sightlinenet").parameters()) == 287_489 + extra
+
+
+def test_sightlinenets_one_dropout_sits_after_the_first_layer_of_its_head_as_its_docstring_says():
+    m = build_model("sightlinenet", dropout=0.25)
+    assert [type(layer) for layer in m.regressor] == [
+        torch.nn.Linear, torch.nn.SiLU, torch.nn.Dropout, torch.nn.Linear, torch.nn.SiLU, torch.nn.Linear]
+    assert [layer.p for layer in m.modules() if isinstance(layer, torch.nn.Dropout)] == [0.25]  # and no other
+    doc = " ".join(sys.modules[type(m).__module__].__doc__.split())
+    assert "after the first fully connected layer of the regression head" in doc
 
 
 def test_pilotnet_cannot_steer_past_half_a_turn():

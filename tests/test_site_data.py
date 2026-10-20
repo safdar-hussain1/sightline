@@ -1671,6 +1671,13 @@ def test_the_timing_fits_the_rest_of_results_json(site):
         assert timing_problems(broken, lags), (protocol, which)
 
 
+def test_a_frame_is_timed_from_its_buckets_first_frame_to_the_next_buckets():
+    bounds = _bucket_times({"start_frame": [0, 64, 128], "start_s": [0.0, 3.07, 6.469], "duration_s": 7.5})
+    # the first frame of a bucket and its last, and the last bucket, which ends with the drive
+    assert [bounds(frame) for frame in (0, 63, 64, 127, 128, 150)] == \
+        [(0, 3070), (0, 3070), (3070, 6469), (3070, 6469), (6469, 7500), (6469, 7500)]
+
+
 def test_the_timing_measures_the_lags_the_shipped_run_records(site):
     """Never a lag typed in: the shipped run's report names them, and its twin's must agree."""
     reports = site_data.load_reports(site.reports / "summary.json", site.reports)

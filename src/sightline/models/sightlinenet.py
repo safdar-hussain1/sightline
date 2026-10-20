@@ -7,8 +7,9 @@ practice:
 * A linear output head in degrees — unbounded, so the network can express
   the full label range (drives in the benchmark reach +501.8 deg; an atan
   head caps at 180).
-* One moderate dropout before the regression head instead of dropout
-  stacked on four consecutive FC layers.
+* One moderate dropout, after the first fully connected layer of the
+  regression head and its activation, instead of dropout stacked on four
+  consecutive FC layers.
 * ~0.3M parameters (PilotNet: ~1.6M), small enough to ship to the browser
   as fp32 ONNX.
 * Optional history frames: ``in_frames`` RGB frames stacked along channels

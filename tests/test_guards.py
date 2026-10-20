@@ -465,6 +465,8 @@ def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
     # a stem: every word it begins, and a word split by hyphens or underscores
     ("marigold, Marigolds and marigolded", ["marigold", "Marigolds", "marigolded"]),
     ("mari-golds and mari__gold", ["mari-golds", "mari__gold"]),
+    # a whole stem joined to the next word is found in its own word, and once
+    ("marigold-like and marigold_ish", ["marigold", "marigold"]),
     # a stem only begins a token, and a space or a stop does not join two
     ("marigol, xmarigold, mari golds and mari.gold", []),
     # a stem as short as a stem may be, and one of six letters: each finds itself and the words it begins
