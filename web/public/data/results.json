@@ -7356,6 +7356,56 @@
       "val": 9574
     }
   },
+  "timing": {
+    "drive2017": null,
+    "drive2018": {
+      "closest_eval_s": {
+        "blocked": {
+          "test": {
+            "eval_frame": 61249,
+            "gap_s": 24.613,
+            "train_frame": 61750
+          },
+          "val": {
+            "eval_frame": 35749,
+            "gap_s": 24.286,
+            "train_frame": 36250
+          }
+        },
+        "forward": {
+          "test": {
+            "eval_frame": 54501,
+            "gap_s": 535.169,
+            "train_frame": 44426
+          },
+          "val": {
+            "eval_frame": 44927,
+            "gap_s": 26.441,
+            "train_frame": 44426
+          }
+        }
+      },
+      "frame_interval_s": {
+        "max": 0.338,
+        "mean": 0.053,
+        "median": 0.057,
+        "min": 0.025,
+        "p05": 0.029,
+        "p95": 0.091
+      },
+      "lag_gap_s": [
+        {
+          "lag": 2,
+          "max": 0.557,
+          "mean": 0.105,
+          "median": 0.1,
+          "min": 0.053,
+          "p05": 0.066,
+          "p95": 0.157
+        }
+      ]
+    }
+  },
   "train_config": {
     "batch_size": 128,
     "epochs": 20,
