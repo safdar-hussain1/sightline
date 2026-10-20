@@ -21,19 +21,30 @@ is reading the measurement from the JSON here and requiring the sentence that ca
     "always steering straight wins"), each with the condition on the reports that makes it true.
 ``ALLOWED``
     The numbers that are not measurements, each with the reason it may be printed: a year naming a
-    drive, a version, a command-line setting, a file name, a reference, a constant of the code
-    (checked against the code), and the times commands took, which no report records (the
-    training times are checked against the run folders where they are present).
+    drive, a version, a command-line setting, a file name, a reference, a name with digits in it
+    (a drive, a data type, a chip, a link), a constant of the code (checked against the code), a
+    count the code fixes (frames a model reads, its convolutions, the graph's outputs; checked),
+    and the times commands took, which no report records (the training times are checked against
+    the run folders where they are present). Each entry is anchored to the phrase it allows.
 
-Four checks run over all of them: every number-like token in either document must sit inside a
-pinned figure or an allowed phrase; every figure printed after "at least" must be its value rounded
-down, never up; moving any pinned value by one unit of its printed precision must break its pin;
-and the reports rewritten with an indent of four must leave every pin holding, so nothing here
+Four checks run over all of them: every number token and number word in either document must sit
+inside a pinned figure or an allowed phrase; every figure printed after "at least" must be its value
+rounded down, never up; moving any pinned value by one unit of its printed precision must break its
+pin; and the reports rewritten with an indent of four must leave every pin holding, so nothing here
 reads a report's layout instead of its values.
+
+A number token is read whole, as a reader sees it: digits with their thousands commas, decimals and
+exponent (``1,073.2``, ``1.8E-04``, ``.5``), with any letters glued to them (``3x``, ``57ms``,
+``20th``), and a word with digits in it (``drive2018``, ``M1``) is a token too, so a name is allowed
+by naming it, never by skipping every digit next to a letter. Number words are the cardinals, the
+large counts (``hundred``, ``a dozen``), the ordinals from ``third`` on and the multiples (``twice``,
+``single``, ``half``); ``first``, ``second``, ``once`` and ``both`` are left out, as the documents use
+them for order, a unit of time, a moment and a pair, not a count.
 """
 from __future__ import annotations
 
 import copy
+import functools
 import inspect
 import json
 import math
@@ -608,7 +619,8 @@ ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
         (RESULTS, "/split_sizes/blocked/val", "int,"),
         (RESULTS, "/split_sizes/blocked/test", "int,")]),
     ("CARD", "**Recipe**: {} epochs of AdamW on a cosine schedule from a learning rate of {}, weight decay {}, "
-     "batches of {}, a Huber loss on the angle, dropout {} after the head's first layer, and {} augmentation", [
+     "batches of {} and a Huber loss on the angle. The head applies dropout {} after its first layer. "
+     "Augmentation is {}:", [
         (SUMMARY, "/train_config/epochs", "int"),
         (SUMMARY, "/train_config/lr", "g"),
         (SUMMARY, "/train_config/weight_decay", "g"),
@@ -1205,7 +1217,7 @@ CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
     ("CARD", "so most of what this model carries to another day depends on the second frame",
      _second_frame_carries_most),
     ("CARD", "the seed with the lowest validation error ships", _shipped_chosen_on_validation),
-    ("CARD", "dropout 0.3 after the head's first layer", _sightlinenet_dropout_after_first_layer),
+    ("CARD", "after its first layer. Augmentation is", _sightlinenet_dropout_after_first_layer),
     ("CARD", "every clip frame and self-test input the page uses", _parity_on_every_page_input),
     ("CARD", "so it looks better there than the shipped model", _twin_on_the_clips),
     ("CARD", "The clips are chosen for having the most steering, so their errors describe the clip.",
@@ -1265,6 +1277,98 @@ def _middle_share(m: re.Match) -> bool:
     return int(m["pct"]) == SPREAD_PERCENTILES["p95"] - SPREAD_PERCENTILES["p05"]
 
 
+def _number_words(m: re.Match) -> list[str]:
+    return [word.lower() for word in NUMBER_WORD.findall(m[0])]
+
+
+def _frames_read(m: re.Match) -> bool:
+    """"two" frames is what SightlineNet reads, the current frame and its history frame (SHIPPED_LAGS); "one"
+    or a "single" frame is what PilotNet and the one-frame SightlineNet read."""
+    from sightline.models import MODEL_SPECS
+    reads = {name: 1 + len(spec.frame_lags) for name, spec in MODEL_SPECS.items()}
+    counted = {"one": 1, "single": 1, "two": 2}
+    return reads == {"pilotnet": 1, "sightlinenet": 2, "sightlinenet-1f": 1} \
+        and all(word in counted for word in _number_words(m))
+
+
+def _convolutions(m: re.Match) -> bool:
+    from torch import nn
+    from sightline.models import SightlineNet
+    convolutions = [layer for layer in SightlineNet().features.modules() if isinstance(layer, nn.Conv2d)]
+    return _number_words(m) == ["five"] and len(convolutions) == 5
+
+
+@functools.lru_cache(maxsize=1)
+def _shipped_graph():
+    """The graph of the ONNX file the page runs, read once."""
+    import onnx
+    return onnx.load(str(REPO / "web" / "public" / "models" / "sightline.onnx")).graph
+
+
+def _graph_outputs(m: re.Match) -> bool:
+    """One graph, two answers: the shipped ONNX file holds a single graph with the angle and the saliency
+    map as its two outputs."""
+    outputs = [output.name for output in _shipped_graph().output]
+    return _number_words(m) == ["one", "two"] and outputs == ["steering_deg", "saliency"]
+
+
+def _data_types(m: re.Match) -> bool:
+    """The data type names the documents give the graph: its input bytes and its float outputs."""
+    from onnx import TensorProto
+    graph = _shipped_graph()
+    types = {"uint8": [i.type.tensor_type.elem_type for i in graph.input] == [TensorProto.UINT8],
+             "float32": {o.type.tensor_type.elem_type for o in graph.output} == {TensorProto.FLOAT}}
+    return types[m[0]]
+
+
+def _drive_name(m: re.Match) -> bool:
+    return m[0] in READER.get(SUMMARY, "/drives")
+
+
+def _oracles(m: re.Match) -> bool:
+    """The oracles as the evaluation defines them: the human's angle one frame earlier, and the straight line
+    through the human's two previous angles, carried on to the frame scored."""
+    import numpy as np
+    from sightline.evaluate import baseline_predictions
+    angles = np.array([10.0, 20.0, 40.0, 80.0])
+    predicted = baseline_predictions(angles, np.array([3]), train_mean_deg=0.0)
+    return predicted["zoh"].tolist() == [40.0] and predicted["extrap"].tolist() == [60.0]
+
+
+def _within_one_frame(m: re.Match) -> bool:
+    """"within one frame" names the measure the reports keep: the share of frames next to a training frame."""
+    return "frac_within_1" in READER.get(LEAKAGE, "/gaps/leaky/test") \
+        and "twin_neighbour_frac" in READER.get(EXPORT, "/clips/c2018")
+
+
+def _skill_formula(m: re.Match) -> bool:
+    """The share of always-straight's error a model removes is one minus the ratio of the two errors, seed by
+    seed, as the summary records it."""
+    group = READER.get(SUMMARY, "/groups/sightlinenet~1blocked")
+    zero = group["test_zero_mae_deg"]
+    return all(math.isclose(skill, 1 - mae / zero, rel_tol=1e-9)
+               for skill, mae in zip(group["test_skill"]["values"], group["test_mae_deg"]["values"]))
+
+
+def _parallel_three(m: re.Match) -> bool:
+    """Three runs at a time is how the matrix was run, as its command in the README says."""
+    return _number_words(m) == ["three"] and "--parallel 3 " in document("README")
+
+
+def _two_drives(m: re.Match) -> bool:
+    return sorted(READER.get(SUMMARY, "/drives")) == ["drive2017", "drive2018"]
+
+
+#: the hosts the documents link to; a digit in a link's address names an account, a colour or a file
+LINK_HOSTS = {"github.com", "img.shields.io", "safdar-hussain1.github.io", "drive.google.com", "arxiv.org",
+              "localhost:4173"}
+
+
+def _link(m: re.Match) -> bool:
+    from urllib.parse import urlparse
+    return urlparse(m[0]).netloc in LINK_HOSTS
+
+
 def _python(m: re.Match) -> bool:
     pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     return f'requires-python = ">={m["v"]}"' in pyproject
@@ -1298,8 +1402,46 @@ ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None
      "the dropout repair's threshold, the default of repair_dropouts' min_neighbor_deg", _repair_threshold),
     (("README", "CARD"), r"for the middle (?P<pct>\d+)% of frame pairs", "the share of frame pairs between the "
      "5th and 95th percentiles the timing records (SPREAD_PERCENTILES)", _middle_share),
-    (("README",), r"(?<![\d.])0°", "what always steering straight answers, by definition", None),
-    (("CARD",), r"\(0°\)", "what always steering straight answers, by definition", None),
+    (("README",), r"A predictor that always answers 0°|costs more than answering 0°",
+     "what always steering straight answers, by definition", None),
+    (("CARD",), r"always steering straight \(0°\)", "what always steering straight answers, by definition", None),
+    # counts the code fixes, each checked against it
+    (("README", "CARD"), r"SightlineNet, one frame|one-frame SightlineNet|Single-frame models|a single frame shows "
+     r"only scenery|Two frames, not one|where two frames reach|The difference between two frames|\*\*Two "
+     r"frames\.\*\*|two RGB frames|The same network on one frame|with two frames",
+     "how many frames a model reads: SightlineNet two, PilotNet and the one-frame SightlineNet one (MODEL_SPECS)",
+     _frames_read),
+    (("README", "CARD"), r"\bfive convolutions", "SightlineNet's convolutions, counted in the model", _convolutions),
+    (("README",), r"\*\*One graph, two answers\.\*\*", "the exported graph's outputs: the angle and the saliency "
+     "map, read from the ONNX file", _graph_outputs),
+    (("README",), r"the human's angle one frame earlier|the human's two previous angles", "the oracles' "
+     "definitions in the evaluation code, checked on a short run of angles", _oracles),
+    (("README", "CARD"), r"within one frame", "the leakage measure's definition: a frame next to a training "
+     "frame (frac_within_1, twin_neighbour_frac)", _within_one_frame),
+    (("README",), r"one minus the ratio of the two errors", "the skill formula, checked seed by seed against "
+     "the summary", _skill_formula),
+    (("README",), r"twice the firewall plus one", "the blocked split's least separation in frames, checked "
+     "against the leakage report", lambda m: _firewall_arithmetic(READER)),
+    (("README", "CARD"), r"about three times", "the paired ratio of both networks, three to the nearest half",
+     lambda m: _about_three(READER)),
+    (("README",), r"three at a time|up to three runs sharing it", "how the matrix was run, its --parallel 3",
+     _parallel_three),
+    # words that are not counts, and counts of the setting rather than of a result
+    (("README", "CARD"), r"logs a zero for a frame", "the logged value itself, a reading of 0°, not a count", None),
+    (("README", "CARD"), r"One dataset, one area|from one dataset", "the data's provenance: both drives come "
+     "from one dataset page, which names the same places for both", _two_drives),
+    (("README", "CARD"), r"one WebAssembly thread|WebAssembly, one thread", "the page's onnxruntime-web "
+     "setting: the page's own tests hold it to a single thread", None),
+    # names with digits in them
+    (("README", "CARD"), r"\bdrive201[78]\b", "the two drives' names, as the code and the reports name them",
+     _drive_name),
+    (("README", "CARD"), r"\b(?:uint8|float32)\b", "data type names: the graph's input bytes and float outputs, "
+     "read from the ONNX file", _data_types),
+    (("README",), r"Apple M1 Pro", "the training machine's chip, a product name", None),
+    (("README",), r"\bpython3\b", "the Python 3 interpreter's command name", None),
+    (("README",), r"\b[01]\.jpg\b", "the frames' file names, as the dataset folders hold them", None),
+    (("README", "CARD"), r"https?://[^\s<>()\[\]`]*\d[^\s<>()\[\]`]*", "a link's address, where a digit names "
+     "an account, a colour or a file; only the hosts in LINK_HOSTS", _link),
     (("README",), r"Python (?P<v>\d+\.\d+)(?= or newer|\+)", "the Python versions pyproject.toml accepts", _python),
     (("README",), r"--parallel 3\b", "how many runs the matrix runner trains at once: how the matrix was run, "
      "not a result", None),
@@ -1330,9 +1472,33 @@ DEFINED_BOUNDS = (r"neighbours are both at least (\d+)° and of the same sign",)
 
 # --- matching -----------------------------------------------------------------------------------
 
-#: a number as a reader sees one: digits, with thousands commas, a decimal part or an exponent, standing
-#: on their own (not inside a word such as ``drive2018`` or ``s2``, nor a file name such as ``0.jpg``)
-NUMBER = re.compile(r"(?<![\w.])\d+(?:[.,]\d+)*(?:e[+-]?\d+)?(?![\w]|\.\w)")
+#: a number token, whole: it starts where no letter, digit, underscore or point is glued before it, holds
+#: a digit before its first character that is not part of a word, and runs on through letters, digits and
+#: underscores, a thousands comma or a decimal point that a digit follows, and an exponent's sign
+#: (``1.8E-04``); a decimal may start at its point (``.5``). ``0.jpg`` reads as ``0``, a file name the
+#: allowed list names.
+NUMBER = re.compile(r"""
+    (?<![\w.])
+    (?=\.?\w*\d)
+    \.?\w+
+    (?:(?:[.,]\d|(?<=\d[eE])[+-]\d)\w*)*
+""", re.VERBOSE)
+
+_CARDINALS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+              "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety").split()
+_COUNTS = ("hundred thousand million billion dozen quarter third fourth fifth sixth seventh eighth ninth tenth "
+           "eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth "
+           "twentieth thirtieth fortieth fiftieth sixtieth seventieth eightieth ninetieth hundredth thousandth "
+           "millionth").split()
+#: a number word: a cardinal (``threefold`` too), a large count or an ordinal from ``third`` on (plurals
+#: too), or a multiple
+NUMBER_WORD = re.compile(r"\b(?:(?:" + "|".join(_CARDINALS) + r")(?:fold)?|(?:" + "|".join(_COUNTS)
+                         + r")s?|twice|thrice|half|halves|single|double|triple)\b", re.IGNORECASE)
+
+
+def tokens(text: str) -> list[re.Match]:
+    """Every number token and number word in ``text``, in order."""
+    return sorted([*NUMBER.finditer(text), *NUMBER_WORD.finditer(text)], key=lambda m: m.start())
 
 
 def _collapse(text: str) -> str:
@@ -1417,14 +1583,17 @@ def failures(r: Reader) -> list[str]:
 
 
 def uncovered(r: Reader, texts: dict[str, str]) -> list[tuple[str, str, int]]:
-    """Every number-like token outside a pinned figure and outside an allowed match."""
+    """Every number token and number word outside a pinned figure and outside an allowed match."""
     spans: dict[str, list[tuple[int, int]]] = {key: [] for key in texts}
     for c in checks(r):
-        spans[c.doc] += [m.span(1) for m in c.pattern(r).finditer(texts[c.doc])]
-    for docs, pattern, _reason, _check in ALLOWED:
+        if c.doc in texts:
+            spans[c.doc] += [m.span(1) for m in c.pattern(r).finditer(texts[c.doc])]
+    for docs, pattern, _reason, check in ALLOWED:
         for doc in docs:
-            spans[doc] += [m.span() for m in re.finditer(pattern, texts[doc])]
-    return [(doc, m[0], m.start()) for doc, text in texts.items() for m in NUMBER.finditer(text)
+            if doc in texts:
+                # an allowed phrase covers its numbers only while its check on the code holds
+                spans[doc] += [m.span() for m in re.finditer(pattern, texts[doc]) if check is None or check(m)]
+    return [(doc, m[0], m.start()) for doc, text in texts.items() for m in tokens(text)
             if not any(start <= m.start() and m.end() <= end for start, end in spans[doc])]
 
 
@@ -1490,8 +1659,8 @@ def test_every_number_in_the_documents_is_pinned_or_allowed():
     left = uncovered(READER, texts)
     assert left == [], "numbers no pin and no allowed entry accounts for: " + ", ".join(
         f"{doc} {token!r} ({texts[doc][max(0, at - 40):at + 20]!r})" for doc, token, at in left)
-    found = {key: len(NUMBER.findall(text)) for key, text in texts.items()}
-    assert found["README"] >= 300 and found["CARD"] >= 80, f"the scan found almost nothing: {found}"
+    found = {key: len(tokens(text)) for key, text in texts.items()}
+    assert found["README"] >= 350 and found["CARD"] >= 100, f"the scan found almost nothing: {found}"
 
 
 def test_every_at_least_is_its_value_rounded_down():
@@ -1550,7 +1719,7 @@ def test_every_allowed_number_has_a_reason_is_used_and_matches_the_code(docs, pa
     for doc in docs:
         matches = list(re.finditer(pattern, document(doc)))
         assert matches, f"{pattern!r} allows nothing in {DOCUMENTS[doc]}; remove it there"
-        assert all(NUMBER.search(m[0]) for m in matches), f"{pattern!r} matches text without a number"
+        assert all(tokens(m[0]) for m in matches), f"{pattern!r} matches text without a number"
         if check is not None:
             assert all(check(m) for m in matches), f"{DOCUMENTS[doc]}: {pattern!r} disagrees with the code"
 
@@ -1631,14 +1800,94 @@ def test_the_checks_are_not_vacuous():
     assert len(CLAIMS) >= 30 and len(ALLOWED) >= 20
 
 
-@pytest.mark.parametrize("text, tokens", [
+@pytest.mark.parametrize("text, found", [
     ("3.05 ± 0.61, 1,073.2 s and 1.8e-04°", ["3.05", "0.61", "1,073.2", "1.8e-04"]),
     ("frame t−2 and (N, 66, 200, 6)", ["2", "66", "200", "6"]),
-    ("drive2018, sightlinenet-1f, s2, sha256, 0.jpg and uint8", []),
-    ("8,469, 57 ms", ["8,469", "57"]),
+    ("8,469, 57 ms and 893, 889 and 943 frames.", ["8,469", "57", "893", "889", "943"]),
+    # digits with letters glued to them, a decimal that starts at its point and a capital exponent are each
+    # one token, read whole
+    ("3x faster, 57ms apart at 60fps over 12k frames", ["3x", "57ms", "60fps", "12k"]),
+    ("the 3rd seed and the 20th epoch", ["3rd", "20th"]),
+    ("off by .5 s, or 1.8E-04° and 2.5e+3", [".5", "1.8E-04", "2.5e+3"]),
+    # a word with digits in it is a token, so a name is allowed only by naming it
+    ("drive2018, sightlinenet-1f, s2, M1, uint8 and sha256", ["drive2018", "1f", "s2", "M1", "uint8", "sha256"]),
+    ("0.jpg, data.txt, .venv and e.g. a README.md", ["0"]),
 ])
-def test_the_scan_reads_numbers_as_a_reader_does(text, tokens):
-    assert NUMBER.findall(text) == tokens
+def test_the_scan_reads_numbers_as_a_reader_does(text, found):
+    assert NUMBER.findall(text) == found
+
+
+@pytest.mark.parametrize("text, found", [
+    ("nine seeds, twelve runs and a dozen clips", ["nine", "twelve", "dozen"]),
+    ("Twice the firewall plus one, a single drive, threefold, three-fold", ["Twice", "one", "single", "threefold",
+                                                                           "three"]),
+    ("hundreds of thousands, a third of the frames, the twentieth epoch, half the runs",
+     ["hundreds", "thousands", "third", "twentieth", "half"]),
+    ("someone, alone, none, often, weight, phone, tone, zones, done", []),
+    ("the first frame, a second later, once, both seeds", []),
+])
+def test_the_scan_reads_number_words(text, found):
+    assert NUMBER_WORD.findall(text) == found
+
+
+#: phrases each planted in turn into a copy of the README's text, every one a figure or a count that no pin
+#: or allowed phrase accounts for; the scan must name each
+PLANTED = ["3x faster", "57ms apart", "at 60fps", "12k frames", "its 3rd seed", "the 20th epoch", "off by .5 s",
+           "off by 1.8E-04°", "nine seeds", "a dozen runs", "off by 0° on average", "trained on drive2019",
+           "seed s9", "an Apple M2 chip", "twice as good", "a single seed", "half the frames", "one more run",
+           "https://example.com/v=95"]
+
+
+@pytest.mark.parametrize("plant", PLANTED)
+def test_a_planted_figure_is_caught(plant):
+    readme = document("README")
+    at = readme.index("This is research software.")
+    planted = readme[:at] + f"Planted: {plant}. " + readme[at:]
+    left = [token for doc, token, _ in uncovered(READER, {"README": planted})]
+    assert left, f"{plant!r} went through the scan"
+    assert all(token in plant for token in left), f"the plant shifted another figure: {left}"
+
+
+def _prose(key: str) -> list[str]:
+    """The lines of a document a reader reads as running text: not code, not a table row, not a heading, not
+    an image or a badge line."""
+    lines, fenced = [], False
+    for line in (REPO / DOCUMENTS[key]).read_text(encoding="utf-8").splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.strip() and not line.startswith(("|", "#", "![", "[![")):
+            lines.append(line)
+    return lines
+
+
+#: the width the documents' running text is wrapped to
+WRAP = 100
+
+
+@pytest.mark.parametrize("key", DOCUMENTS)
+def test_the_running_text_keeps_to_the_wrap(key):
+    """A line of running text stays within the wrap unless a link's address alone carries it past."""
+    long = [line for line in _prose(key) if len(line) > WRAP
+            and len(re.sub(r"\]\([^)]*\)|<https?://[^>]*>", "", line)) > WRAP]
+    assert long == [], long
+
+
+@pytest.mark.parametrize("key", DOCUMENTS)
+def test_no_sentence_runs_on(key):
+    """Running text is broken into sentences a reader can hold: none longer than fifty words."""
+    text = _collapse(" ".join(_prose(key)))
+    sentences = re.split(r"(?<=[.;:!?])\s+(?=[A-Z(*`\-])", text)
+    longest = max(sentences, key=lambda s: len(s.split()))
+    assert len(longest.split()) <= 50, longest
+
+
+def test_a_rung_is_defined_before_it_is_used():
+    """The results speak of rungs; the first time the README uses the word, it says what a rung is."""
+    text = document("README")
+    first = re.search(r"\brungs?\b", text, re.IGNORECASE)
+    assert first and text.find("The four tests are the rungs of a ladder") == first.start() - len(
+        "The four tests are the "), text[first.start() - 80:first.end() + 20]
+    assert not re.search(r"\brungs?\b", document("CARD"), re.IGNORECASE), "the card uses rung without defining it"
 
 
 def test_a_figure_is_found_only_as_a_number_of_its_own():

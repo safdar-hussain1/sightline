@@ -51,10 +51,10 @@ largest saliency difference 7.5e-06 (gate 0.0001).
   at least 501 frames, and at least 24.2 s of driving, from any training frame: 39,825 training,
   6,000 validation and 6,000 test frames.
 - **Recipe**: 20 epochs of AdamW on a cosine schedule from a learning rate of 0.0003, weight decay
-  0.0001, batches of 128, a Huber loss on the angle, dropout 0.3 after the head's first layer, and
-  strong augmentation (flips with the angle negated, brightness, contrast, shadows, position,
-  colour, noise, occlusion), every draw but the per-pixel noise applied to both frames alike. The
-  checkpoint with the lowest validation error is kept.
+  0.0001, batches of 128 and a Huber loss on the angle. The head applies dropout 0.3 after its first
+  layer. Augmentation is strong: flips with the angle negated, brightness, contrast, shadows,
+  position, colour, noise and occlusion, every draw but the per-pixel noise applied to both frames
+  alike. The checkpoint with the lowest validation error is kept.
 - **Seed choice**: three seeds were trained; the seed with the lowest validation error ships
   (seed 2, 7.15°). Test and another-day scores took no part in the choice.
 
