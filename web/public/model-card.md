@@ -99,12 +99,12 @@ Means ± standard deviations over three seeds unless the line names the shipped 
 The model reads motion between frame t−2 and frame t, so its input depends on timing. Frames t−2
 and t are a median 100 ms apart (66–157 ms for the middle 90% of frame pairs) on the 2018 drive,
 whose frames carry timestamps: the spacing varies from pair to pair. drive2017 has no timestamps;
-there frame t−2 is simply the frame two back. Footage from another
-camera or frame rate, a dropped frame, or a cut changes what that motion means, and the model
-cannot tell. The first two frames of any sequence have no history: evaluation starts at frame 2,
-and the page's clips carry the two frames before their first scored frame. On the page, the model
-reads the clips' frames from image sheets made from the drive, not from the playing video, and its
-expected outputs were computed on those same decoded frames.
+there frame t−2 is simply the frame two back. Footage from another camera or frame rate, a dropped
+frame, or a cut changes what that motion means, and the model cannot tell. The first two frames of
+any sequence have no history: evaluation starts at frame 2, and the page's clips carry the two
+frames before their first scored frame. On the page, the model reads the clips' frames from image
+sheets made from the drive, not from the playing video, and its expected outputs were computed on
+those same decoded frames.
 
 ## Limitations
 

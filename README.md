@@ -260,10 +260,10 @@ whether they match. `?selftest=1` runs the full check and writes its verdict int
 **The multi-frame caveat.** The second frame makes the input depend on timing. The model learned
 the motion between frames t−2 and t on the 2018 drive, where their spacing varies from pair to
 pair, as above. drive2017 has no timestamps, so there frame t−2 is simply the frame two back, and
-how far apart in time they are is not recorded. Footage from another camera
-or at another frame rate, a dropped frame or a cut changes what that motion means, and the model
-has no way to tell. The first two frames of a sequence have no history: evaluation starts at
-frame 2, and each demo clip carries the two frames before its first scored frame.
+how far apart in time they are is not recorded. Footage from another camera or at another frame
+rate, a dropped frame or a cut changes what that motion means, and the model has no way to tell.
+The first two frames of a sequence have no history: evaluation starts at frame 2, and each demo
+clip carries the two frames before its first scored frame.
 
 Training uses a Huber loss on the angle in units of 30°, and AdamW at a learning rate of 0.0003
 on a 20-epoch cosine schedule, with weight decay 0.0001 and batches of 128. Augmentation flips
