@@ -1,18 +1,20 @@
 """Structural guards over the repository itself.
 
-These tests police the repo's public surface: what is tracked, what is
-ignored, and what words and paths may never appear in tracked text. Every
-banned word and pattern is assembled from fragments, so this file never
-matches its own guards and is scanned like every other file.
+These tests police the repo's public surface: what is tracked, what is ignored, and what words may
+never appear in tracked text, in tracked paths or in the commits of its history. Those words are held
+here as sha256 digests of their normal form and never spelled, so this file names nothing it keeps
+out of the repository and is scanned like every other file.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -32,13 +34,17 @@ BASE64_PAYLOAD = re.compile(r";base64,[A-Za-z0-9+/]+=*")
 #: the keys of a JSON tree that hold base64 payloads: a name that ends in ``_b64``, and a notebook
 #: output's binary image types
 PAYLOAD_KEY = re.compile(r".*_b64|image/(?:png|jpeg|gif|webp)")
+#: a string in a JSON file's text as it stands, from its opening quote to its closing one
+JSON_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+
+
+def _tracked_paths() -> list[str]:
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True)
+    return [path for path in out.stdout.split("\0") if path]
 
 
 def _tracked_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
-    )
-    return [REPO / line for line in out.stdout.splitlines() if line]
+    return [REPO / path for path in _tracked_paths()]
 
 
 def not_authored(rel: str) -> bool:
@@ -64,33 +70,69 @@ def is_base64(text: str) -> bool:
     return len(packed) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", packed) is not None
 
 
-def _strings(tree, where: str, payload: bool = False):
+def _strings(tree, where: str, payload: bool = False, payloads: set | None = None):
     """Every key and every string of a parsed JSON tree, with where it sits. Under a key that names a
-    base64 payload (``PAYLOAD_KEY``) a string that is base64 and nothing else is left out; any other
-    string there is read, and the walk goes into every mapping and list whatever its key."""
+    base64 payload (``PAYLOAD_KEY``) a string that is base64 and nothing else is left out, and added to
+    ``payloads``; any other string there is read, and the walk goes into every mapping and list
+    whatever its key."""
     if isinstance(tree, dict):
         for key, value in tree.items():
             yield f"{where}.{key}", key
-            yield from _strings(value, f"{where}.{key}", payload or PAYLOAD_KEY.fullmatch(key) is not None)
+            yield from _strings(value, f"{where}.{key}", payload or PAYLOAD_KEY.fullmatch(key) is not None,
+                                payloads)
     elif isinstance(tree, list):
         for i, value in enumerate(tree):
-            yield from _strings(value, f"{where}[{i}]", payload)
-    elif isinstance(tree, str) and not (payload and is_base64(tree)):
-        yield where, tree
+            yield from _strings(value, f"{where}[{i}]", payload, payloads)
+    elif isinstance(tree, str):
+        if payload and is_base64(tree):
+            if payloads is not None:
+                payloads.add(tree)
+        else:
+            yield where, tree
 
 
-def _readable_text(path: Path) -> list[tuple[str, str]]:
-    """What a reader of ``path`` can read, as ``(where, text)`` pieces: every key and string of a
-    notebook or a JSON file (a notebook's metadata, every output and every traceback included), but
-    no base64 payload; any other file whole, its inline base64 payloads blanked."""
+class DuplicateKey(ValueError):
+    """A JSON object that holds one key twice: a parsed tree keeps only the last of its values."""
+
+
+def _refuse_duplicates(pairs: list) -> dict:
+    seen = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise DuplicateKey(f"the key {key!r} appears twice in one object")
+        seen.add(key)
+    return dict(pairs)
+
+
+def read_json(text: str):
+    """``text`` parsed as JSON; an object that holds a key twice is refused (``DuplicateKey``)."""
+    return json.loads(text, object_pairs_hook=_refuse_duplicates)
+
+
+def readable_text(path: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """What a reader of ``path`` can read, as ``(where, text)`` pieces, and why any of it cannot be
+    read. The file's text as it stands comes first, its inline base64 payloads blanked. A notebook or a
+    JSON file adds every key and string as it decodes, its escapes read, its metadata, every output
+    and every traceback included, but no base64 payload; in its text as it stands, each string that
+    holds one of those payloads is blanked too. A JSON file that holds a key twice in one object is
+    read as text alone and named, as its parsed tree would keep one value only; a file with the JSON
+    suffix that is not JSON (JSON with comments, say) is read as text alone."""
     rel = path.relative_to(REPO).as_posix()
     text = path.read_text(errors="replace")
-    if path.suffix in (".ipynb", ".json"):
+    raw, pieces, problems = BASE64_PAYLOAD.sub(";base64,", text), [], []
+    if path.suffix.lower() in (".ipynb", ".json"):
         try:
-            return list(_strings(json.loads(text), rel))
-        except ValueError:  # not JSON as it stands (JSON with comments, say): read as text below
+            tree = read_json(text)
+        except DuplicateKey as exc:
+            problems.append(f"{rel}: {exc}")
+        except ValueError:  # not JSON as it stands: read as text alone
             pass
-    return [(rel, BASE64_PAYLOAD.sub(";base64,", text))]
+        else:
+            payloads: set = set()
+            pieces = list(_strings(tree, rel, payloads=payloads))
+            if payloads:
+                raw = JSON_STRING.sub(lambda m: '""' if json.loads(m.group()) in payloads else m.group(), raw)
+    return [(rel, raw), *pieces], problems
 
 
 def _line(text: str, start: int) -> int:
@@ -122,141 +164,361 @@ def test_no_tracked_file_holds_a_nul_byte_unless_its_format_is_binary():
     assert [rel for rel in holding if rel not in allowed] == [], "files the text scans cannot read"
 
 
-# --- words that tell a history, and names that never ship ----------------------------------------
+# --- words the public text never holds ------------------------------------------------------------
+#
+# Every word and phrase refused here is held as the sha256 of its normal form, never spelled, so that
+# this file does not name what it keeps out of the repository. A text's normal form is its tokens:
+# each a run of ASCII letters and digits in lower case, or a section sign on its own, with a token of
+# digits alone written ``#``; a phrase is one to three consecutive tokens joined by single spaces,
+# whatever separates them in the text. An EXACT digest names a phrase that is refused whole. A STEMS
+# digest names the beginning, four characters or more, of a token or of a two-token phrase, so that
+# one stem refuses every inflection of a word; a word whose stem would also begin innocent words is
+# held exact instead. Two tokens joined by hyphens or underscores alone are also read as one word,
+# for the stems. A word whose digest is in FLAGS may stand as a command-line flag, ``--word`` in
+# lower case and a token of its own; anywhere else it is refused like the rest. Each digest carries
+# the kind of rule it keeps, which a finding names. The scans read every tracked text file as it
+# stands and as it decodes (``readable_text``), every tracked path, and the names and message of
+# every commit. The probes further down plant made-up words whose digests they write out, so every
+# rule is shown to find what it must.
 
-#: words that tell the project's history or name the tools behind it, each its own word in any case
-HISTORY_WORDS = [
-    "re" + "build", "re" + "built", "re" + "building",
-    "col" + "lege", "course" + "work", "orig" + "inally",
-    "up" + "grade", "up" + "graded", "up" + "grades", "up" + "grading",
-    "v" + "1", "v" + "2",  # version markers
-    "cla" + "ude", "anthro" + "pic", "co-auth" + "ored",
-    "chat" + "gpt", "open" + "ai",
-]
-BANNED = re.compile(r"\b(" + "|".join(re.escape(word) for word in HISTORY_WORDS) + r")\b", re.IGNORECASE)
-#: the one use of those words that stays: pip's flag in a command line (``pip install --upgrade pip``),
-#: and only as a token of its own; a longer token that starts with it is banned like the word itself
-PIP_FLAG = re.compile(r"(?<![\w-])--(up" + r"grade)(?![\w-])")
+EXACT = {
+    "history": {
+        "3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe",
+        "43f8412030b2f413a34a85a43ddcb3d57be95e801aba1340130ccb9045aed2b3",
+        "fb04dcb6970e4c3d1873de51fd5a50d7bb46b3383113602665c350ec40b5f990",
+    },
+    "attribution": {
+        "32e83e92d45d71f69dcf9d214688f0375542108631b45d344e5df2eb91c11566",
+    },
+    "process": {
+        "05bbda5599ad82ce328ad50ec7364811ff9e41387e9e8988bed64952a5600a96",
+        "1331d54359ce62ad154cd83fcdf682916ecfea3852cc4352e167c6a0cfd4174d",
+        "2cc80c031e19249bd930b952b27967f49329d8ca25c12bf31474c4eb6c232e21",
+        "32503795554682dd08640f18b380b9e9476a96efd5cd743f8bcf728fac232d1d",
+        "5249804f2a9a1499425c32a6ffe94c43984cdcf7cd2a7165344e8bb765aa4fba",
+        "530338f42218dbd3a9cc12ed2d6a91673cf7cab5b0568325956737b2c576789c",
+        "53cfadbb46a7703e2d3606085b994cdd6a8a754a39112da968143687ad57bd00",
+        "9d6e63ad6b8e50d3b09932c2f2605cb45b125968f317361d3ecbb34dd5ba69ef",
+        "a6a226508be3fddffce96a315b70b6b91e46aae8aae7d1b273167ba61c29cfdc",
+        "d30275523e5516ce8bc110627e40622229593f53e3c2096c89fb47d71e9cd36e",
+        "ec3f4a4cd18a80ef0278399034b7262590a4c80ed67cadddb91c6e8769e387b9",
+    },
+}
+STEMS = {
+    "history": {
+        "5cdb778cb86d9a0aef849d3f9fbe121982c486e69b29abac9d10a4811da8770b",
+        "76cfec1c272a6aa7f2e559a0d72bf106db3e74ab77f8b70c32955769422edf0b",
+        "776af9401679287d8d332e26e99062919d58a135f4ef5ba85d4ec981b50f58ae",
+        "86dc882c2e0d0e59a954e96a6464186fcc6f64c69406a52787b6fb19abd5d4f7",
+    },
+    "attribution": {
+        "60965168ce762e949600281ba6d01fee136e5b6e8257b1f216f9025ed324474c",
+        "7d3194f79e645c42e4396dda38be04766810ec6a00d00aced3ffc2a0a1f1a9ef",
+        "8aa1e92a0f8c8e6100a68def958736e6dda170ce2092fa2252a93a4d860ca2b3",
+        "c70eca6b0f88f44d81a41311647e50fda1ac454ec04ffd442b0eb4743a993131",
+        "c857d09db23e6822e3600bc06ad8d58f92ed62bc8efd81c753f77048662cb97d",
+    },
+    "process": {
+        "132a0519893f35d86aafbf5cd9863a34867ef0c6595f32fb2e1d8c1e1951fdc5",
+        "94a168d2da574b00ec6c787377278465271cf2b97e68af076fc3eee87eba8664",
+        "a85785ab0c6b89ed491e8108e32545e37111a4a4c77c93a7bf9910361856b79b",
+        "b8fa9efbc8c8f043afca1b60f8f4c5245c54b5ff5bfb0603a71071f66c1ef295",
+        "c8358edd8e151c797bc6ff328aea24d86ff1379d171abd778e47ee77b76cd6bf",
+        "eef0f7354969b40c58ba6f3c27314e007446b46b8c1328b8d0df9baa32b443ca",
+        "f7024509f545785ce604950d9073a158db75237837b279cdc8a0e306b84d3353",
+    },
+}
+FLAGS = {
+    "7fef9479c8bc5a3c86891cb82969cbf2ffc73c7350366c82286345d8292eebf5",
+}
+
+#: a token of the normal form: a run of ASCII letters and digits, or a section sign
+TOKEN = re.compile(r"[A-Za-z0-9]+|§")
+#: what may stand between two tokens that are read as one word for the stems
+JOINER = re.compile(r"[-_]+")
+#: a command-line flag: two hyphens, then a lower-case token of its own
+FLAG = re.compile(r"(?<![\w-])--([a-z0-9]+)(?![\w-])")
+#: the length of the shortest beginning a stem digest is held against
+SHORTEST_STEM = 4
 
 
-def banned_words(text: str) -> list[tuple[int, str]]:
-    """Each banned word in ``text``, with its offset; pip's flag excepted."""
-    allowed = {match.span(1) for match in PIP_FLAG.finditer(text)}
-    return [(match.start(), match.group(0)) for match in BANNED.finditer(text) if match.span() not in allowed]
+def _normal(token: str) -> str:
+    return "#" if token.isdigit() else token.lower()
 
 
-@pytest.mark.parametrize("text, found", [
-    ("pip install --up" + "grade pip", []),
-    ("`--up" + "grade`", []),
-    ("an up" + "grade of the page", ["up" + "grade"]),
-    ("--up" + "grade-strategy eager", ["up" + "grade"]),
-    ("x--up" + "grade", ["up" + "grade"]),
-    ("--Up" + "grade", ["Up" + "grade"]),  # the flag is lower case
-    ("the V" + "2 model and v" + "1.2", ["V" + "2", "v" + "1"]),
-    ("drive2018, mv2, env1 and uv1x", []),
-    ("Re" + "built from scratch", ["Re" + "built"]),
-])
-def test_the_rule_for_banned_words(text, found):
-    assert [word for _, word in banned_words(text)] == found
+def normal_form(text: str) -> str:
+    """The tokens of ``text`` in normal form, joined by single spaces."""
+    return " ".join(_normal(token) for token in TOKEN.findall(text))
+
+
+def digest(phrase: str) -> str:
+    """sha256 of a phrase in normal form, in hex."""
+    return hashlib.sha256(phrase.encode()).hexdigest()
+
+
+class Banned:
+    """Digests of refused phrases (``exact``) and beginnings (``stems``), each by kind, and of the words
+    allowed as a command-line flag (``flags``). Each answer is kept, as a text repeats its phrases."""
+
+    def __init__(self, exact: dict, stems: dict, flags=()):
+        self.exact = {sha: kind for kind, digests in exact.items() for sha in digests}
+        self.stems = {sha: kind for kind, digests in stems.items() for sha in digests}
+        self.flags = frozenset(flags)
+        self._answers: dict = {}
+
+    def _stem(self, phrase: str, shortest: int) -> str | None:
+        """The kind of a stem that begins ``phrase`` and is ``shortest`` characters long at least."""
+        for k in range(max(SHORTEST_STEM, shortest), len(phrase) + 1):
+            kind = self.stems.get(digest(phrase[:k]))
+            if kind is not None:
+                return kind
+        return None
+
+    def _kept(self, key: tuple, answer):
+        if key not in self._answers:
+            self._answers[key] = answer()
+        return self._answers[key]
+
+    def token(self, a: str) -> str | None:
+        """The kind of the refused word ``a`` is, or of a stem that begins it."""
+        return self._kept(("token", a), lambda: self.exact.get(digest(a)) or self._stem(a, 0))
+
+    def pair(self, a: str, b: str) -> str | None:
+        """The kind of the refused phrase ``a b`` is, or of a stem that begins it and reaches into ``b``."""
+        phrase = f"{a} {b}"
+        return self._kept(("pair", a, b), lambda: self.exact.get(digest(phrase)) or self._stem(phrase, len(a) + 2))
+
+    def triple(self, a: str, b: str, c: str) -> str | None:
+        """The kind of the refused phrase ``a b c`` is."""
+        return self._kept(("triple", a, b, c), lambda: self.exact.get(digest(f"{a} {b} {c}")))
+
+    def joined(self, a: str, b: str) -> str | None:
+        """The kind of a stem that begins the word ``a`` and ``b`` make together and reaches into ``b``."""
+        return self._kept(("joined", a, b), lambda: self._stem(a + b, len(a) + 1))
+
+
+BANNED = Banned(EXACT, STEMS, FLAGS)
+
+
+def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str]]:
+    """Each refused word or phrase in ``text``: its offset, the text it spans and its kind. A word
+    ``banned`` allows as a flag is left out where it stands as one."""
+    tokens = [(m.start(), m.end(), _normal(m.group())) for m in TOKEN.finditer(text)]
+    flags = {m.span(1) for m in FLAG.finditer(text) if digest(_normal(m.group(1))) in banned.flags}
+    found = []
+    for i, (start, end, a) in enumerate(tokens):
+        kind = banned.token(a)
+        if kind and (start, end) not in flags:
+            found.append((start, end, kind))
+        if i + 1 < len(tokens):
+            b_start, b_end, b = tokens[i + 1]
+            kind = banned.pair(a, b) or (banned.joined(a, b) if JOINER.fullmatch(text, end, b_start) else None)
+            if kind:
+                found.append((start, b_end, kind))
+            if i + 2 < len(tokens):
+                kind = banned.triple(a, b, tokens[i + 2][2])
+                if kind:
+                    found.append((start, tokens[i + 2][1], kind))
+    return [(start, text[start:end], kind) for start, end, kind in found]
+
+
+def scan(paths: list[Path], banned: Banned = BANNED) -> list[str]:
+    """Every refused word in what a reader of each of ``paths`` can read, as ``<where>:<line>: <text>
+    (<kind>)``, and every file whose parsed text could hide one."""
+    offenders = []
+    for path in paths:
+        pieces, problems = readable_text(path)
+        offenders += problems
+        for where, text in pieces:
+            offenders += [f"{where}:{_line(text, start)}: {word!r} ({kind})"
+                          for start, word, kind in banned_words(text, banned)]
+    return offenders
+
+
+def scan_paths(paths: list[str], banned: Banned = BANNED) -> list[str]:
+    """Every refused word in each of ``paths``, read as text in any case."""
+    return [f"{path} (path): {word!r} ({kind})" for path in paths for _, word, kind in banned_words(path, banned)]
 
 
 def test_no_banned_words_in_tracked_files():
     files = _scanned_files()
     assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in files}
-    offenders = []
-    for path in files:
-        for where, text in _readable_text(path):
-            offenders += [f"{where}:{_line(text, start)}:{word}" for start, word in banned_words(text)]
+    offenders = scan(files)
     assert offenders == [], f"banned words in tracked files: {offenders}"
 
 
-def _found_in(path: Path) -> list[str]:
-    return [word for _, text in _readable_text(path) for _, word in banned_words(text)]
+def test_no_tracked_path_holds_a_banned_word():
+    """Every tracked path, binary files and the ones nobody writes by hand included: the scan that keeps
+    the private notes folder and working-notes file out of the repository."""
+    paths = _tracked_paths()
+    assert SCANNED_FOR_SURE <= set(paths)
+    offenders = scan_paths(paths)
+    assert offenders == [], f"banned words in tracked paths: {offenders}"
+
+
+# --- the probes: made-up words, with the digests written out ------------------------------------------
+
+PROBE_EXACT = {
+    "zebrafish": "d075da24a84b9f608363799992193ca14c055b24f2e41b7bbc18d8c18d1568ff",
+    "purple heron": "7491777e1f876fa84212fdf39e8c5e0ede079b67b21a695d8c3ccbf56b8d83c1",
+    "slow amber tide": "6ff0aad45023d3076e4e34ca71e862a62cb269883eda412b6cceb5ee33476afb",
+    "lantern #": "3c13cec09bdbd44f7eb77192d0e2ef44c0f94a447c29f393712a69aca05cab52",
+}
+PROBE_STEMS = {
+    "marigold": "a5055bbfef782d417823b27963363a96ccd48a9df697398805c6eaa8d30eddd7",
+    "velvet moth": "51ec23d7f3e54a326de9ebb83479e9f0c592cfb903e6511a49920af2ce7036ff",
+    "owl": "10f7127b980b0b06ef157749f8a02cca1c606d22642729dcb2d24dbbf2bf30df",  # shorter than any stem held
+}
+PROBE = Banned({"probe": set(PROBE_EXACT.values())}, {"probe": set(PROBE_STEMS.values())},
+               flags={PROBE_EXACT["zebrafish"]})
+#: an image's bytes in base64 that hold a probe word by chance, between a plus and a slash
+PAYLOAD = "AAAA+zebrafish/BBBBB"
+
+
+def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
+    probes = {**PROBE_EXACT, **PROBE_STEMS}
+    assert {word: digest(normal_form(word.replace("#", "7"))) for word in probes} == probes
+    assert normal_form("Lantern 2026!") == "lantern #"
+    assert normal_form("PURPLE\n  heron") == normal_form("purple_heron") == normal_form("purple-heron") == "purple heron"
+    assert normal_form("§12 and §§") == "§ # and § §"
+    assert normal_form("quill_x9.1, drive2018") == "quill x9 # drive2018"
+
+
+@pytest.mark.parametrize("text, found", [
+    # one word, exact: in any case, and only whole
+    ("a zebrafish swims", ["zebrafish"]),
+    ("ZebraFish, ZEBRAFISH.", ["ZebraFish", "ZEBRAFISH"]),
+    ("zebrafishes, xzebrafish, zebrafish2 and zebra fish", []),
+    # a stem: every word it begins, and a word split by hyphens or underscores
+    ("marigold, Marigolds and marigolded", ["marigold", "Marigolds", "marigolded"]),
+    ("mari-golds and mari__gold", ["mari-golds", "mari__gold"]),
+    # a stem only begins a token, and a space or a stop does not join two
+    ("marigol, xmarigold, mari golds and mari.gold", []),
+    # a stem shorter than four characters finds nothing
+    ("an owl and owls", []),
+    # two words, whatever separates them, and only whole
+    ("a purple heron, a PURPLE\n  HERON, purple-heron and purple_heron",
+     ["purple heron", "PURPLE\n  HERON", "purple-heron", "purple_heron"]),
+    ("purple herons and purpleheron", []),
+    # a two-word stem: its last word inflected
+    ("velvet moths and a Velvet Moth", ["velvet moths", "Velvet Moth"]),
+    ("velvet and moth", []),
+    # three words
+    ("slow amber tide; Slow, amber; tide", ["slow amber tide", "Slow, amber; tide"]),
+    ("slow amber", []),
+    # digits: any number of them is one sign
+    ("lantern 7, Lantern 2026 and lantern-12.5", ["lantern 7", "Lantern 2026", "lantern-12"]),
+    ("lantern7, lantern 7b and lantern seven", []),
+    # a word allowed as a flag: as a lower-case token of its own after two hyphens, and nowhere else
+    ("pip install --zebrafish pip", []),
+    ("`--zebrafish`", []),
+    ("--zebrafish-strategy eager", ["zebrafish"]),
+    ("x--zebrafish", ["zebrafish"]),
+    ("--Zebrafish", ["Zebrafish"]),
+])
+def test_the_rule_for_banned_words(text, found):
+    assert [word for _, word, _ in banned_words(text, PROBE)] == found
+
+
+def _planted(tmp_path, monkeypatch, files: dict[str, str]) -> list[str]:
+    """What the scan finds, with the probe digests, in ``files`` (name to text) planted in a stand-in
+    repository."""
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    return scan([tmp_path / name for name in files], PROBE)
+
+
+def test_the_scan_reads_a_json_files_text_and_its_decoded_strings(tmp_path, monkeypatch):
+    found = _planted(tmp_path, monkeypatch, {
+        "escaped.json": '{"note": "a \\u007aebrafish"}',  # an escape hides it in the text as it stands
+        "plain.json": '{"note": "a zebrafish"}',
+        "key.json": '{"purple heron": 1}',
+        "comments.json": '// a zebrafish\n{"a": 1}',  # not JSON: read as text alone
+        "notes.md": "the\nslow amber tide",
+    })
+    assert found == [
+        "escaped.json.note:1: 'zebrafish' (probe)",
+        "plain.json:1: 'zebrafish' (probe)", "plain.json.note:1: 'zebrafish' (probe)",
+        "key.json:1: 'purple heron' (probe)", "key.json.purple heron:1: 'purple heron' (probe)",
+        "comments.json:1: 'zebrafish' (probe)",
+        "notes.md:2: 'slow amber tide' (probe)",
+    ]
+
+
+def test_a_json_file_that_holds_a_key_twice_is_refused(tmp_path, monkeypatch):
+    text = '{"note": "a \\u007aebrafish", "note": "a calm pond"}'
+    # parsed the usual way, the first value is gone; in the text as it stands, an escape hides it
+    assert json.loads(text) == {"note": "a calm pond"} and banned_words(text, PROBE) == []
+    assert _planted(tmp_path, monkeypatch, {"twice.json": text}) == ["twice.json: the key 'note' appears twice in one object"]
+    with pytest.raises(DuplicateKey):
+        read_json('{"a": {"b": 1, "b": 2}}')
 
 
 def test_the_scan_reads_everything_a_notebook_holds_but_its_images(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
-    payload = "AAAA+v" + "2/BBBB"  # an image's bytes: a banned word by chance, between + and /
-    notebook = {"metadata": {"title": "the v" + "1 notes"}, "cells": [{
-        "cell_type": "code", "metadata": {"tags": ["re" + "build"]}, "source": ["print(1)"], "outputs": [
-            {"output_type": "display_data", "data": {"image/png": payload, "text/plain": ["the v" + "2 table"],
-                                                     "application/json": {"note": "an up" + "grade"}}},
-            {"output_type": "error", "ename": "ValueError", "evalue": "orig" + "inally",
-             "traceback": ["line one", "col" + "lege"]}]}]}
-    (tmp_path / "n.ipynb").write_text(json.dumps(notebook))
-    assert sorted(_found_in(tmp_path / "n.ipynb")) == sorted(
-        ["v" + "1", "re" + "build", "v" + "2", "up" + "grade", "orig" + "inally", "col" + "lege"])
+    notebook = {"metadata": {"title": "the purple heron notes"}, "cells": [{
+        "cell_type": "code", "metadata": {"tags": ["marigolds"]}, "source": ["print(1)\n", "# lantern 7\n"],
+        "outputs": [
+            {"output_type": "display_data", "data": {"image/png": PAYLOAD, "text/plain": ["the velvet moths"],
+                                                     "application/json": {"note": "slow amber tide"}}},
+            {"output_type": "error", "ename": "ValueError", "evalue": "ZEBRAFISH", "traceback": ["line one", "a zebrafish"]},
+        ]}]}
+    # the error's value is written with an escape, as a notebook's text may hold it
+    text = json.dumps(notebook).replace("ZEBRAFISH", "\\u005aEBRAFISH")
+    found = _planted(tmp_path, monkeypatch, {"n.ipynb": text})
+    decoded = sorted(entry.split(": ", 1)[1] for entry in found if not entry.startswith("n.ipynb:"))
+    as_it_stands = sorted(entry.split(": ", 1)[1] for entry in found if entry.startswith("n.ipynb:"))
+    assert decoded == sorted(["'purple heron' (probe)", "'marigolds' (probe)", "'lantern 7' (probe)",
+                              "'velvet moths' (probe)", "'slow amber tide' (probe)", "'ZEBRAFISH' (probe)",
+                              "'zebrafish' (probe)"])
+    # the text as it stands has all but the escaped word, and neither has the image's bytes
+    assert as_it_stands == sorted(set(decoded) - {"'ZEBRAFISH' (probe)"})
 
 
 def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
-    payload = "AAAA+v" + "2/BBBB"
     cases = {
-        "skipped.json": {"saliency_f32_b64": {"m": payload}, "frames_b64": payload},
-        "not-base64.json": {"saliency_f32_b64": "an up" + "grade, not a payload"},
-        "nested.json": {"saliency_f32_b64": {"note": ["an up" + "grade"]}},
-        "plain-key.json": {"title": payload},
+        "skipped.json": {"saliency_f32_b64": {"m": PAYLOAD}, "frames_b64": PAYLOAD},
+        "not-base64.json": {"saliency_f32_b64": "a zebrafish, not a payload"},
+        "nested.json": {"saliency_f32_b64": {"note": ["a zebrafish"]}},
+        "plain-key.json": {"title": PAYLOAD},
     }
-    for name, tree in cases.items():
-        (tmp_path / name).write_text(json.dumps(tree))
-    assert {name: _found_in(tmp_path / name) for name in cases} == {
-        "skipped.json": [], "not-base64.json": ["up" + "grade"], "nested.json": ["up" + "grade"],
-        "plain-key.json": ["v" + "2"]}
-    assert is_base64(payload) and is_base64("QUJD\nREVG") and not is_base64("up" + "grade") \
+    found = _planted(tmp_path, monkeypatch, {name: json.dumps(tree) for name, tree in cases.items()})
+    assert {name: [entry.split(":", 1)[0] for entry in found if entry.startswith(name)] for name in cases} == {
+        "skipped.json": [],
+        "not-base64.json": ["not-base64.json", "not-base64.json.saliency_f32_b64"],
+        "nested.json": ["nested.json", "nested.json.saliency_f32_b64.note[0]"],
+        "plain-key.json": ["plain-key.json", "plain-key.json.title"],
+    }
+    assert is_base64(PAYLOAD) and is_base64("QUJD\nREVG") and not is_base64("zebrafish") \
         and not is_base64("QUJDRA=") and not is_base64("QU JD")
 
 
 def test_the_scan_blanks_an_inline_payload_and_reads_what_follows_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
-    payload = "AAAA+v" + "2/BBBB"
-    (tmp_path / "p.html").write_text(f'<img src="data:image/png;base64,{payload}">an up' + "grade")
-    (tmp_path / "q.md").write_text(f"data:text/plain;base64,{payload}\nthe v" + "1 page")
-    (tmp_path / "r.css").write_text(f"a {{ background: url(data:image/png;base64,{payload}) }} /* the original */")
-    assert {p.name: _found_in(p) for p in sorted(tmp_path.iterdir())} == \
-        {"p.html": ["up" + "grade"], "q.md": ["v" + "1"], "r.css": []}
+    found = _planted(tmp_path, monkeypatch, {
+        "p.html": f'<img src="data:image/png;base64,{PAYLOAD}">a zebrafish',
+        "q.md": f"data:text/plain;base64,{PAYLOAD}\nthe purple heron page",
+        "r.css": f"a {{ background: url(data:image/png;base64,{PAYLOAD}) }} /* the zebra */",
+    })
+    assert found == ["p.html:1: 'zebrafish' (probe)", "q.md:2: 'purple heron' (probe)"]
+
+
+@pytest.mark.parametrize("path, found", [
+    ("notes/Zebrafish-Notes.md", ["Zebrafish"]),
+    ("web/MARIGOLDS/index.js", ["MARIGOLDS"]),
+    ("data/lantern-12.txt", ["lantern-12"]),
+    ("docs/purple_heron.png", ["purple_heron"]),
+    ("src/sightline/cli.py", []),
+])
+def test_a_tracked_path_is_scanned_like_text_in_any_case(path, found):
+    assert scan_paths([path], PROBE) == [f"{path} (path): {word!r} (probe)" for word in found]
 
 
 def test_no_absolute_user_paths_in_tracked_files():
     pattern = re.compile(r"/Use" + r"rs/[A-Za-z]")
     files = _scanned_files()
     assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in files}
-    offenders = [where for path in files for where, text in _readable_text(path) if pattern.search(text)]
+    offenders = [where for path in files for where, text in readable_text(path)[0] if pattern.search(text)]
     assert offenders == [], f"absolute user paths leaked into: {offenders}"
-
-
-#: the repository's hygiene sweep for build-process traces, the alternatives of its ``git grep -i -P``
-#: pattern in order, assembled from fragments so that neither this file nor the sweep finds them here
-TRACE_PARTS = (
-    r"\.super" + "powers", "super" + "powers", "sub" + "agent", r"\brul" + r"ing\b", r"\bta" + r"sk \d+\b",
-    r"\bta" + r"sk brief\b", r"\bthe br" + r"ief\b", r"\bper the pl" + r"an\b", "implementation pl" + "an",
-    "design sp" + "ec", "sp" + "ec §", "pl" + "an §", "CLAU" + r"DE\.md", r"\bthe contr" + r"oller\b",
-    r"\bthis ta" + r"sk\b",
-)
-TRACES = re.compile("|".join(TRACE_PARTS), re.IGNORECASE)
-#: sha256 of the sweep's pattern as the hygiene check types it, so the two cannot drift apart
-TRACE_SHA256 = "ee7c3653d5b4725c2984eef6e458abf0d737c08404fecc044d298fb4c228176a"
-
-
-def test_the_trace_pattern_is_the_hygiene_checks():
-    assert hashlib.sha256(TRACES.pattern.encode()).hexdigest() == TRACE_SHA256
-
-
-def test_no_build_process_traces_in_tracked_files():
-    scanned = _scanned_files()
-    # this file is scanned too, so no exclusion hides anything, and so is every file a scan must read
-    assert SCANNED_FOR_SURE <= {path.relative_to(REPO).as_posix() for path in scanned}
-    offenders = []
-    for path in scanned:
-        text = path.read_text(errors="replace")
-        offenders += [f"{path.relative_to(REPO)}:{_line(text, m.start())}:{m.group(0)}" for m in TRACES.finditer(text)]
-    assert offenders == [], f"build-process traces in tracked files: {offenders}"
-
-
-def test_no_private_notes_folder_or_working_notes_file_is_tracked():
-    private_name, private_folder = "CLAU" + "DE.md", ".super" + "powers"
-    offenders = [p.relative_to(REPO).as_posix() for p in _tracked_files()
-                 if p.name == private_name or private_folder in p.relative_to(REPO).parts]
-    assert offenders == [], f"private files tracked: {offenders}"
 
 
 def test_no_process_documents_tracked():
@@ -329,15 +591,141 @@ def test_no_dataset_or_weight_files_tracked():
     assert heavy == [], f"weight/dataset files tracked: {heavy}"
 
 
+# --- the history ----------------------------------------------------------------------------------
+
+#: who authors and commits every commit
+AUTHOR = ("Safdar Hussain", "safdar.eryx@gmail.com")
+#: who commits a merge GitHub makes, of a pull request among them; GitHub sets its author
+GITHUB = ("GitHub", "noreply@github.com")
+
+
+@dataclass(frozen=True)
+class Commit:
+    sha: str
+    parents: tuple[str, ...]
+    author: tuple[str, str]
+    committer: tuple[str, str]
+    message: str
+
+
+def history(repo: Path) -> list[Commit]:
+    """Every commit of every branch of ``repo``, as ``git log --all`` gives it."""
+    out = subprocess.run(["git", "log", "--all", "-z", "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%B"],
+                         cwd=repo, capture_output=True, text=True, check=True).stdout
+    commits = []
+    for record in out.split("\0"):
+        if record.strip():
+            sha, parents, author, author_email, committer, committer_email, message = record.split("\x1f", 6)
+            commits.append(Commit(sha.strip(), tuple(parents.split()), (author, author_email),
+                                  (committer, committer_email), message))
+    return commits
+
+
+def is_shallow(repo: Path) -> bool:
+    """Whether ``repo`` is a shallow clone: it holds part of the history, and its oldest commits show
+    no parents."""
+    out = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=repo, capture_output=True,
+                         text=True, check=True).stdout
+    return out.strip() == "true"
+
+
+def authorship_problems(commits: list[Commit], banned: Banned = BANNED) -> list[str]:
+    """What is wrong with ``commits``: a refused word in a commit's names or message, and an author or
+    committer other than ``AUTHOR``. A merge GitHub committed, with two parents and ``GITHUB`` as its
+    committer, is excused its authorship, which GitHub sets, when both its parents are among
+    ``commits`` and checked like the rest; its message is checked all the same."""
+    present = {commit.sha for commit in commits}
+    problems = []
+    for commit in commits:
+        (author, author_email), (committer, committer_email) = commit.author, commit.committer
+        names = f"{author} <{author_email}> {committer} <{committer_email}>"
+        problems += [f"{commit.sha[:7]}: {word!r} ({kind})"
+                     for _, word, kind in banned_words(f"{names}\n{commit.message}", banned)]
+        if commit.committer == GITHUB and len(commit.parents) == 2:
+            missing = [parent[:7] for parent in commit.parents if parent not in present]
+            if missing:
+                problems.append(f"{commit.sha[:7]}: a merge GitHub committed, whose parent {', '.join(missing)} "
+                                "is not in the history checked")
+            continue
+        problems += [f"{commit.sha[:7]}: {role} {name} <{email}>"
+                     for role, (name, email) in (("author", commit.author), ("committer", commit.committer))
+                     if (name, email) != AUTHOR]
+    return problems
+
+
 def test_commit_authorship_is_clean():
-    log = subprocess.run(
-        ["git", "log", "--all", "--format=%an <%ae> %cn <%ce>%n%B"],
-        cwd=REPO, capture_output=True, text=True, check=True,
-    ).stdout
-    if not log.strip():
+    commits = history(REPO)
+    if not commits:
         pytest.skip("no commits yet")
-    banned = re.compile("(cla" + "ude|anthro" + "pic|co-auth" + "ored)", re.IGNORECASE)
-    assert not banned.search(log), "attribution or banned text found in git history"
-    for line in log.splitlines():
-        if line.endswith(">") and "<" in line and "@" in line:
-            assert "safdar.eryx@gmail.com" in line, f"unexpected author line: {line}"
+    assert not is_shallow(REPO), "a shallow clone holds part of the history only; fetch all of it to check it"
+    assert authorship_problems(commits) == []
+
+
+def _commit(name: str, parents: str = "", committer=AUTHOR, author=AUTHOR, message="Add the page\n") -> Commit:
+    """A commit of a made-up history: ``name`` and each letter of ``parents`` stand for whole hashes."""
+    return Commit(name * 40, tuple(parent * 40 for parent in parents), author, committer, message)
+
+
+#: the author GitHub may record on a merge it makes
+SOMEONE = ("someone", "someone@users.noreply.github.com")
+
+
+def test_a_merge_github_committed_is_excused_its_authorship_when_both_parents_are_checked():
+    base, side = _commit("a"), _commit("b", "a")
+    merge = _commit("c", "ab", committer=GITHUB, author=SOMEONE, message="Merge b into a\n")
+    assert authorship_problems([merge, side, base]) == []
+    # its parents are checked like every other commit
+    stranger = _commit("b", "a", author=("Someone Else", "else@example.com"))
+    assert authorship_problems([merge, stranger, base]) == ["bbbbbbb: author Someone Else <else@example.com>"]
+    # and its message too
+    said = _commit("c", "ab", committer=GITHUB, author=SOMEONE, message="Merge the zebrafish branch\n")
+    assert authorship_problems([said, side, base], PROBE) == ["ccccccc: 'zebrafish' (probe)"]
+
+
+@pytest.mark.parametrize("merge, problems", [
+    # a commit with one parent: not a merge
+    (_commit("c", "a", committer=GITHUB, author=SOMEONE),
+     [f"ccccccc: author {SOMEONE[0]} <{SOMEONE[1]}>", "ccccccc: committer GitHub <noreply@github.com>"]),
+    # two parents, but someone else committed it
+    (_commit("c", "ab", committer=SOMEONE),
+     [f"ccccccc: committer {SOMEONE[0]} <{SOMEONE[1]}>"]),
+    # GitHub's name with another address
+    (_commit("c", "ab", committer=("GitHub", "someone@github.com")),
+     ["ccccccc: committer GitHub <someone@github.com>"]),
+    # a parent that is not in the history, so not checked
+    (_commit("c", "ad", committer=GITHUB, author=SOMEONE),
+     ["ccccccc: a merge GitHub committed, whose parent ddddddd is not in the history checked"]),
+])
+def test_only_a_merge_github_committed_with_both_parents_checked_is_excused(merge, problems):
+    assert authorship_problems([merge, _commit("b", "a"), _commit("a")]) == problems
+
+
+def test_the_history_of_a_real_repository_with_a_merge_by_github(tmp_path):
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_AUTHOR_NAME": AUTHOR[0], "GIT_AUTHOR_EMAIL": AUTHOR[1],
+           "GIT_COMMITTER_NAME": AUTHOR[0], "GIT_COMMITTER_EMAIL": AUTHOR[1]}
+    repo = tmp_path / "repo"
+
+    def git(*args, **extra):
+        subprocess.run(["git", *args], cwd=repo, env={**env, **extra}, check=True, capture_output=True)
+
+    repo.mkdir()
+    git("init", "-q", "-b", "main")
+    for name, branch in (("a", None), ("b", "side"), ("c", "main")):
+        if branch:
+            git("checkout", "-q", *(["-b"] if branch == "side" else []), branch)
+        (repo / name).write_text(name)
+        git("add", name)
+        git("commit", "-q", "-m", f"Add {name}")
+    git("merge", "-q", "--no-ff", "side", "-m", "Merge side into main",
+        GIT_COMMITTER_NAME=GITHUB[0], GIT_COMMITTER_EMAIL=GITHUB[1])
+    commits = history(repo)
+    (merge,) = [commit for commit in commits if len(commit.parents) == 2]
+    assert len(commits) == 4 and merge.committer == GITHUB and not is_shallow(repo)
+    assert authorship_problems(commits) == []
+    # a shallow clone holds the merge alone, and shows it with no parents: never excused
+    clone = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{repo}", str(clone)], env=env, check=True,
+                   capture_output=True)
+    assert is_shallow(clone) and [commit.parents for commit in history(clone)] == [()]
+    assert authorship_problems(history(clone)) == [f"{merge.sha[:7]}: committer GitHub <noreply@github.com>"]
