@@ -40,10 +40,15 @@ by naming it, never by skipping every digit next to a letter. Number words are t
 large counts (``hundred``, ``a dozen``), the ordinals from ``third`` on and the multiples (``twice``,
 ``single``, ``half``); ``first``, ``second``, ``once`` and ``both`` are left out, as the documents use
 them for order, a unit of time, a moment and a pair, not a count.
+
+The last tests hold the prose to a shape: lines and code blocks within the wrap, sentences of fifty words at
+most, the frame spacing of the whole drive never put to a clip, a rung defined before it is used, and every
+excerpt of the dataset that the repository ships named in the licence and the README.
 """
 from __future__ import annotations
 
 import copy
+import fnmatch
 import functools
 import inspect
 import json
@@ -73,6 +78,7 @@ TIMING = "/timing/drive2018"
 LAG_GAP = f"{TIMING}/lag_gap_s/0"
 
 MINUS = chr(0x2212)  # the minus sign the documents print
+ENDASH = chr(0x2013)  # the dash the documents print in a range
 WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
          "eleven", "twelve")
 
@@ -467,13 +473,15 @@ ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
         (EXPORT, f"/models/{key}/parity/max_saliency_diff", "e1"),
         (EXPORT, f"/models/{key}/parity/saliency_tolerance", "g")])
       for name, key in (("sightline.onnx", "sightline"), ("sightline-shuffled.onnx", "shuffled"))],
-    # how it works
+    # how it works: the spread is the whole 2018 drive's, so its sentence is pinned through its full stop and
+    # not as a prefix that more words could follow ("on the 2018 drive's demo clip")
     *[(doc, "Frames t−{} and t are a median {} ms apart ({}–{} ms for the middle 90% of frame pairs) on the 2018 "
-       "drive", [
+       "drive, whose frames carry timestamps" + end, [
         (EXPORT, "/models/sightline/frame_lags/0", "int"),
         (RESULTS, f"{LAG_GAP}/median", "ms0"),
         (RESULTS, f"{LAG_GAP}/p05", "ms0"),
-        (RESULTS, f"{LAG_GAP}/p95", "ms0")]) for doc in DOCUMENTS],
+        (RESULTS, f"{LAG_GAP}/p95", "ms0")])
+      for doc, end in (("README", "."), ("CARD", ": the spacing varies from pair to pair."))],
     *[(doc, "there frame t−{} is simply the frame {} back", [
         (EXPORT, "/models/sightline/frame_lags/0", "int"),
         (EXPORT, "/models/sightline/frame_lags/0", "word")]) for doc in DOCUMENTS],
@@ -577,9 +585,8 @@ ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
         (SUMMARY, "/paired_leakage/sightlinenet/ratio/mean", "2f"),
         (SUMMARY, "/paired_leakage/sightlinenet/ratio/sd", "2f")]),
     ("README", "trained on {}% of the 2018 clip's frames, and {}% of the clip's frames sit within one frame of a "
-     "frame it trained on. So on this clip it looks better than the shipped model ({}° against {}° on this "
-     "clip). On the 2017 clip, which neither model trained on, the twin is off by {}° and the shipped model by "
-     "{}° on this clip.", [
+     "frame it trained on. So on this clip it looks better than the shipped model ({}° against {}°). On the "
+     "2017 clip, which neither model trained on, the twin is off by {}° and the shipped model by {}°.", [
         (EXPORT, "/clips/c2018/twin_trained_frac", "pct0"),
         (EXPORT, "/clips/c2018/twin_neighbour_frac", "pct0"),
         (EXPORT, "/clips/c2018/clip_mae_deg/shuffled", "2f"),
@@ -854,9 +861,10 @@ def _one_frame_blocked_only(r: Reader) -> bool:
 
 
 def _single_frame_models_no_edge(r: Reader) -> bool:
-    """Do not beat: PilotNet and the one-frame SightlineNet both read one frame, and later in the drive and on
-    another day no mean edge of theirs over always steering straight is larger than the spread of its seeds
-    (one standard deviation); PilotNet's means are below it, and the one-frame model has no later score."""
+    """Do not reliably beat: PilotNet and the one-frame SightlineNet both read one frame, and later in the drive
+    and on another day no mean edge of theirs over always steering straight is larger than the spread of its
+    seeds (one standard deviation); PilotNet's means are below it, and the one-frame model has no later score.
+    A single seed can still be ahead of always steering straight, which is why the sentence says "reliably"."""
     from sightline.models import MODEL_SPECS
     single = all(MODEL_SPECS[name].frame_lags == () for name in ("pilotnet", "sightlinenet-1f"))
     skills = [r.get(SUMMARY, f"/groups/{group}/{stat}") for group, stat in (
@@ -1191,14 +1199,14 @@ CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
     ("README", "chosen from the human's labels alone, so it is harder than an average stretch",
      _clips_harder_than_average),
     ("README", "each demo clip carries the two frames before its first scored frame", _every_clip_has_the_lead_in),
-    ("README", "of frame pairs) on the 2018 drive", _timed_lag_is_the_shipped_lag),
+    ("README", "of frame pairs) on the 2018 drive, whose frames carry timestamps", _timed_lag_is_the_shipped_lag),
     ("README", "drive2017 has no timestamps", _drive2017_untimed),
     ("README", "every clip frame and self-test input the page uses", _parity_on_every_page_input),
     ("README", "(PyTorch's MPS backend)", _trained_on_mps),
     ("README", "paired frames of the first seed", _first_seed_is_the_leakage_seed),
     ("README", "recorded for it in `src/sightline/data/verify.py`", _verify_knows_the_reported_drives),
-    ("README", "Single-frame models do not beat always steering straight later in the drive or on another day.",
-     _single_frame_models_no_edge),
+    ("README", "Single-frame models do not reliably beat always steering straight later in the drive or on another "
+     "day.", _single_frame_models_no_edge),
     ("README", "On average PilotNet is worse than always steering straight on both",
      _pilotnet_behind_later_and_another_day),
     ("README", "The one-frame SightlineNet is level with always steering straight on another day",
@@ -1224,7 +1232,7 @@ CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
     ("CARD", "The clips are chosen for having the most steering, so their errors describe the clip.",
      _clips_harder_than_average),
     ("CARD", "the page's clips carry the two frames before their first scored frame", _every_clip_has_the_lead_in),
-    ("CARD", "of frame pairs) on the 2018 drive", _timed_lag_is_the_shipped_lag),
+    ("CARD", "of frame pairs) on the 2018 drive, whose frames carry timestamps", _timed_lag_is_the_shipped_lag),
     ("CARD", "drive2017 has no timestamps", _drive2017_untimed),
     ("CARD", "of driving, from any training frame", _closest_in_time_respects_the_firewall),
     ("CARD", "Training ran on an Apple GPU", _trained_on_mps),
@@ -1849,20 +1857,85 @@ def test_a_planted_figure_is_caught(plant):
     assert all(token in plant for token in left), f"the plant shifted another figure: {left}"
 
 
-def _prose(key: str) -> list[str]:
-    """The lines of a document a reader reads as running text: not code, not a table row, not a heading, not
-    an image or a badge line."""
-    lines, fenced = [], False
-    for line in (REPO / DOCUMENTS[key]).read_text(encoding="utf-8").splitlines():
+def _read(key: str) -> str:
+    return (REPO / DOCUMENTS[key]).read_text(encoding="utf-8")
+
+
+def prose_runs(text: str) -> list[list[str]]:
+    """The lines of a document a reader reads as running text (not code, not a table row, not a heading, not an
+    image or a badge line), in runs of lines that follow one another: a blank line, a line of any of those kinds
+    and a code block each end a run."""
+    runs: list[list[str]] = [[]]
+    fenced = False
+    for line in text.splitlines():
         if line.startswith("```"):
             fenced = not fenced
-        elif not fenced and line.strip() and not line.startswith(("|", "#", "![", "[![")):
+            runs.append([])
+        elif fenced:
+            continue
+        elif line.strip() and not line.startswith(("|", "#", "![", "[![")):
+            runs[-1].append(line)
+        else:
+            runs.append([])
+    return [run for run in runs if run]
+
+
+def _prose(key: str) -> list[str]:
+    """The lines of a document a reader reads as running text."""
+    return [line for run in prose_runs(_read(key)) for line in run]
+
+
+def _code(key: str) -> list[str]:
+    """The lines inside the code blocks of a document."""
+    lines, fenced = [], False
+    for line in _read(key).splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif fenced:
             lines.append(line)
     return lines
 
 
-#: the width the documents' running text is wrapped to
+#: the width the documents' running text and code blocks are wrapped to
 WRAP = 100
+#: the most words a sentence of the running text may hold
+MAX_SENTENCE_WORDS = 50
+#: what opens a list item: a bullet, or a number and its stop
+LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+#: abbreviations that end in a stop and are followed by a space without ending a sentence ("e.g. a floor");
+#: "etc." is not among them, as it can end one. The documents hold none of these but "et al.", which is
+#: followed by a comma
+ABBREVIATIONS = ("e.g.", "i.e.", "et al.", "vs.", "cf.")
+#: where a sentence ends: at the space after a full stop, a question mark or an exclamation mark, whatever the
+#: next sentence begins with ("... as above. drive2017 has no timestamps"). A decimal (3.05) has no space after
+#: its stop, and an abbreviation is left whole
+SENTENCE_END = re.compile(r"(?<=[.!?])" + "".join(rf"(?<!\b{re.escape(a)})" for a in ABBREVIATIONS) + r"\s+")
+
+
+def units(text: str) -> list[str]:
+    """The running text as the pieces a sentence never runs across: each paragraph and each list item, its
+    marker left off and its wrapped lines joined. A blank line, a code block, a table, a heading or the next
+    list item ends one, so a lead-in that ends in a colon before a code block, or a list item with no stop, is
+    not read on into the text after it."""
+    out: list[str] = []
+    for run in prose_runs(text):
+        item: list[str] = []
+        for line in run:
+            if item and LIST_MARKER.match(line):
+                out.append(" ".join(item))
+                item = []
+            item.append(LIST_MARKER.sub("", line, count=1))
+        out.append(" ".join(item))
+    return [_collapse(piece) for piece in out]
+
+
+def sentences(pieces: list[str]) -> list[str]:
+    """The sentences of ``pieces``, each piece cut at its sentence ends (``SENTENCE_END``)."""
+    return [sentence for piece in pieces for sentence in SENTENCE_END.split(piece) if sentence]
+
+
+def word_count(sentence: str) -> int:
+    return len(sentence.split())
 
 
 @pytest.mark.parametrize("key", DOCUMENTS)
@@ -1873,22 +1946,188 @@ def test_the_running_text_keeps_to_the_wrap(key):
     assert long == [], long
 
 
+def test_the_code_blocks_keep_to_the_wrap():
+    """The lines of a code block, the repository tree's among them, stay within the wrap as well."""
+    code = {key: _code(key) for key in DOCUMENTS}
+    assert len(code["README"]) >= 50, "the scan found almost no code"
+    assert {key: [line for line in lines if len(line) > WRAP] for key, lines in code.items()} == {
+        key: [] for key in DOCUMENTS}
+
+
 @pytest.mark.parametrize("key", DOCUMENTS)
 def test_no_sentence_runs_on(key):
     """Running text is broken into sentences a reader can hold: none longer than fifty words."""
-    text = _collapse(" ".join(_prose(key)))
-    sentences = re.split(r"(?<=[.;:!?])\s+(?=[A-Z(*`\-])", text)
-    longest = max(sentences, key=lambda s: len(s.split()))
-    assert len(longest.split()) <= 50, longest
+    longest = max(sentences(units(_read(key))), key=word_count)
+    assert word_count(longest) <= MAX_SENTENCE_WORDS, longest
+
+
+@pytest.mark.parametrize("text, count", [
+    # a sentence may begin with a lower-case name, a digit, a link or a code span: the cut is at the stop
+    ("It is as above. drive2017 has no timestamps, so there frame t−2 is the frame two back.", 2),
+    ("The split is dealt. 90.9% of the test frames sit next to a training frame.", 2),
+    ("It cannot run on file://. <http://localhost:4173/?selftest=1> runs the self-test.", 2),
+    ("Install it. `dev` brings the tests. (The extras are optional.)", 3),
+    ("Is it level? yes! It is. fine.", 4),
+    # a decimal, a version, a thousands comma, a file name and a link have no space after their stop
+    ("It is off by 3.05° against 10.09° on 1,073.2 s in Python 3.10 with data.txt, 0.jpg and "
+     "arxiv.org/abs/1604.07316.", 1),
+    # an abbreviation is not an end
+    ("A bound, e.g. a floor, holds, i.e. it claims no more, as Bojarski et al. show, cf. the table, x vs. y.", 1),
+])
+def test_a_sentence_ends_at_a_stop_and_not_at_a_decimal_or_an_abbreviation(text, count):
+    assert len(SENTENCE_END.split(text)) == count
+
+
+def test_a_sentence_never_runs_across_a_blank_line_a_code_block_or_a_list_item():
+    markdown = "\n".join([
+        "# A heading",
+        "Unzip each into its own folder, so that it holds the frames directly:",
+        "",
+        "```text",
+        "data/",
+        "```",
+        "",
+        "Then check them against the label files:",
+        "```bash",
+        "sightline data verify",
+        "```",
+        "It compares each file with its hash.",
+        "",
+        "- [Results](#results)",
+        "- [How it works](#how-it-works)",
+        "1. **Two frames.** Each frame is cut",
+        "   to its bottom rows. The model takes two.",
+        "| a | b |",
+        "Last words with no stop",
+    ])
+    assert units(markdown) == [
+        "Unzip each into its own folder, so that it holds the frames directly:",
+        "Then check them against the label files:",
+        "It compares each file with its hash.",
+        "[Results](#results)",
+        "[How it works](#how-it-works)",
+        "**Two frames.** Each frame is cut to its bottom rows. The model takes two.",
+        "Last words with no stop",
+    ]
+
+
+@pytest.mark.parametrize("key", DOCUMENTS)
+@pytest.mark.parametrize("opening", ["A", "drive2017", "90.9%", "`dev`"])
+@pytest.mark.parametrize("length, runs_on", [(MAX_SENTENCE_WORDS, False), (MAX_SENTENCE_WORDS + 1, True)])
+def test_a_planted_sentence_over_the_limit_is_caught_whatever_it_begins_with(key, opening, length, runs_on):
+    """A sentence of fifty words passes and one of fifty-one does not, however it begins (a capital, a lower-case
+    name, a digit or a code span) and after whatever sentence: it is counted on its own."""
+    planted = " ".join([opening, *["word"] * (length - 1)]) + "."
+    assert word_count(planted) == length
+    longest = max(sentences([*units(_read(key)), f"The one before it ends here. {planted}"]), key=word_count)
+    assert (word_count(longest) > MAX_SENTENCE_WORDS) is runs_on, longest
+
+
+#: words that name a piece of footage rather than the drive
+FOOTAGE = re.compile(r"\b(?:clips?|demos?|excerpts?|footage)\b", re.IGNORECASE)
+
+
+def lag_band_problems(r: Reader, written: dict[str, list[str]]) -> list[str]:
+    """What is wrong with how the documents print the spread of the time between frames t−2 and t: the median
+    and the band the middle 90% of frame pairs fall in. It is measured over the whole 2018 drive, so every
+    sentence that carries it must say it is of that drive and name no clip, demo or excerpt. ``written`` is the
+    sentences of each document."""
+    gap = r.get(RESULTS, LAG_GAP)
+    show = FORMATS["ms0"].show
+    carries = re.compile("|".join([re.escape(f"median {show(gap['median'])} ms"),
+                                   re.escape(f"{show(gap['p05'])}{ENDASH}{show(gap['p95'])} ms"),
+                                   r"middle \d+% of frame pairs"]))
+    problems = []
+    for doc, found in written.items():
+        carrying = [sentence for sentence in found if carries.search(sentence)]
+        if not carrying:
+            problems.append(f"{doc}: no sentence carries the spread, so nothing here holds it to the drive")
+        for sentence in carrying:
+            if "on the 2018 drive" not in sentence:
+                problems.append(f"{doc}: the spread is not said to be the 2018 drive's: {sentence!r}")
+            if FOOTAGE.search(sentence):
+                problems.append(f"{doc}: the spread of the whole drive is put to a clip: {sentence!r}")
+    return problems
+
+
+def test_the_drive_wide_lag_band_is_never_attached_to_a_clip():
+    written = {key: sentences(units(_read(key))) for key in DOCUMENTS}
+    assert lag_band_problems(READER, written) == []
+
+
+def _swap_words(text: str, old: str, new: str) -> str:
+    """``text`` with the one place that says ``old``, wherever the document wraps it, saying ``new``."""
+    pattern = re.compile(r"\s+".join(re.escape(word) for word in old.split()))
+    assert len(pattern.findall(text)) == 1, f"{old!r} is not said exactly once"
+    return pattern.sub(lambda _: new, text)
+
+
+#: changes to the sentence that carries the spread, each putting it to a clip: (words it says, words that
+#: replace them). "on the 2018 drive's demo clip" is the one an extended phrase alone must refuse
+LAG_BAND_PLANTS = {
+    "the drive's demo clip": ("on the 2018 drive, whose", "on the 2018 drive's demo clip, whose"),
+    "the clip alone": ("on the 2018 drive, whose", "on the 2018 clip, whose"),
+    "a clip named first": (f"Frames t{MINUS}2 and t are", f"In the demo clip, Frames t{MINUS}2 and t are"),
+}
+
+
+@pytest.mark.parametrize("key", DOCUMENTS)
+@pytest.mark.parametrize("plant", [*LAG_BAND_PLANTS, "a second sentence"])
+def test_a_lag_band_put_to_a_clip_is_caught(key, plant):
+    raw = _read(key)
+    if plant == "a second sentence":
+        gap = READER.get(RESULTS, LAG_GAP)
+        show = FORMATS["ms0"].show
+        planted = raw + f"\n\nThe demo clip has the same spread, {show(gap['p05'])}{ENDASH}{show(gap['p95'])} ms.\n"
+    else:
+        planted = _swap_words(raw, *LAG_BAND_PLANTS[plant])
+    assert planted != raw
+    assert lag_band_problems(READER, {key: sentences(units(planted))}), f"{plant!r} went through the rule"
+
+
+@pytest.mark.parametrize("key", DOCUMENTS)
+@pytest.mark.parametrize("plant", ["the drive's demo clip", "the clip alone"])
+def test_the_pins_of_the_lag_band_refuse_a_sentence_that_goes_on_about_a_clip(key, plant):
+    """The pins hold the whole sentence, so a clip put after "the 2018 drive" breaks them as well as the rule."""
+    pins = [c for c in CHECKS if c.doc == key and " ms apart (" in c.phrase]
+    assert len(pins) == 4
+    assert all(c.pattern(READER).search(document(key)) for c in pins)
+    planted = _collapse(_swap_words(_read(key), *LAG_BAND_PLANTS[plant]))
+    assert [c.pointer for c in pins if c.pattern(READER).search(planted)] == []
 
 
 def test_a_rung_is_defined_before_it_is_used():
     """The results speak of rungs; the first time the README uses the word, it says what a rung is."""
     text = document("README")
     first = re.search(r"\brungs?\b", text, re.IGNORECASE)
-    assert first and text.find("The four tests are the rungs of a ladder") == first.start() - len(
-        "The four tests are the "), text[first.start() - 80:first.end() + 20]
+    defined = re.search(r"The \w+ tests are the (rungs) of a ladder", text)
+    assert first and defined and defined.start(1) == first.start(), first and text[first.start() - 80:first.end() + 20]
     assert not re.search(r"\brungs?\b", document("CARD"), re.IGNORECASE), "the card uses rung without defining it"
+
+
+def _excerpt_names(text: str, folders: set[str]) -> set[str]:
+    """The paths under web/public/data/ that ``text`` names, relative to it and with a star for the part that
+    varies (``clips/*/sprite-*.jpg``): a folder of ``folders``, then a file name with an extension."""
+    names = re.findall(r"(?<![\w*/.-])((?:[\w*-]+/)+[\w*-]+\.[a-z0-9]+)", text)
+    return {name for name in names if name.split("/")[0] in folders}
+
+
+def test_every_excerpt_of_the_dataset_the_repository_ships_is_named_in_the_licence_and_the_readme():
+    """Everything under web/public/data/ but the JSON is an excerpt of the dataset's drives (a clip, the sheets of
+    its frames, a thumbnail, the self-test frames). The licence note and the README name them by path: each name
+    matches a shipped file, and each shipped file is matched by a name."""
+    data = REPO / "web" / "public" / "data"
+    shipped = sorted(path.relative_to(data).as_posix() for path in data.rglob("*")
+                     if path.is_file() and not path.name.startswith(".") and path.suffix != ".json")
+    folders = {name.split("/")[0] for name in shipped}
+    assert len(shipped) >= 30 and len(folders) >= 3, shipped
+    for label, text in (("LICENSE", (REPO / "LICENSE").read_text(encoding="utf-8")), ("README", _read("README"))):
+        names = _excerpt_names(text, folders)
+        assert names, f"{label} names no file under web/public/data/"
+        unnamed = [path for path in shipped if not any(fnmatch.fnmatchcase(path, name) for name in names)]
+        assert unnamed == [], f"{label} does not name {unnamed}"
+        unshipped = [name for name in names if not any(fnmatch.fnmatchcase(path, name) for path in shipped)]
+        assert unshipped == [], f"{label} names files that are not shipped: {unshipped}"
 
 
 def test_a_figure_is_found_only_as_a_number_of_its_own():

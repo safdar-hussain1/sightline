@@ -14,7 +14,7 @@ together with a VisualBackProp map of where the network looked.
 
 The page opens on the demo. The model reads a 2018 clip from stretches of road it never trained
 on, or a 2017 clip from another day. Its wheel turns with its answers, the driver's wheel is drawn
-over it as a pale outline, and its saliency heat lies over the road. A toggle swaps in its twin
+over it in pale lines, and its saliency heat lies over the road. A toggle swaps in its twin
 trained on shuffled frames. Below the demo are how it works and an accuracy figure, and the
 `#results` view holds the measurements. Everything runs in the visitor's browser.
 
@@ -471,9 +471,9 @@ src/sightline/
   cli.py            the sightline command
 scripts/            train_matrix.py, which trains the matrix a few runs at a time
 reports/            every published number, as JSON, and the figures drawn from them
-notebooks/          01-data-and-leakage.ipynb (needs the dataset) and 02-results.ipynb (reports only)
+notebooks/          01-data-and-leakage.ipynb (needs the dataset), 02-results.ipynb (reports only)
 tests/              the Python suite, including the guards over the repository and its documents
-web/                the page: index.html, src/ (TypeScript), public/ (models, clips, data, model card)
+web/                the page: index.html, src/ (TypeScript), public/ (models, data, model card)
 docs/               the published site, built by npm --prefix web run build
 ```
 
@@ -498,19 +498,19 @@ The full dependency list and its version ranges are in [`pyproject.toml`](pyproj
 - **Open loop only.** Every score compares the model's angle with what the human did, frame by
   frame. The model never steered, so its errors never compound, and nothing here says how it
   would drive.
-- **Single-frame models do not beat always steering straight later in the drive or on another
-  day.** On average PilotNet is worse than always steering straight on both: −45% ± 44% later in
-  the drive (its seeds from +5% to −79%) and −24% ± 8% on another day. The one-frame SightlineNet
-  is level with always steering straight on another day (+2% ± 4%); it was never trained on the
-  later-in-the-drive split, so it has no score there.
+- **Single-frame models do not reliably beat always steering straight later in the drive or on
+  another day.** On average PilotNet is worse than always steering straight on both: −45% ± 44%
+  later in the drive (its seeds from +5% to −79%) and −24% ± 8% on another day. The one-frame
+  SightlineNet is level with always steering straight on another day (+2% ± 4%); it was never
+  trained on the later-in-the-drive split, so it has no score there.
 - **Sharp turns stay hard.** On frames steered 30° or more, the shipped model is off by 36.05°.
 - **A small paired set.** The headline ratio rests on 893, 889 and 943 frames of drive2018 and on
   three seeds, and SightlineNet's ratio varies from seed to seed (3.05 ± 0.61).
 - **The 2018 demo clip and the twin.** The twin trained on shuffled frames trained on 71% of the
   2018 clip's frames, and 97% of the clip's frames sit within one frame of a frame it trained on.
-  So on this clip it looks better than the shipped model (5.63° against 14.26° on this clip). On
-  the 2017 clip, which neither model trained on, the twin is off by 14.17° and the shipped model
-  by 10.78° on this clip.
+  So on this clip it looks better than the shipped model (5.63° against 14.26°). On the 2017
+  clip, which neither model trained on, the twin is off by 14.17° and the shipped model by
+  10.78°.
 - **A clip's error describes the clip.** Each clip is the stretch whose steering varies most
   among those that stay within road-following angles, chosen from the human's labels alone, so
   it is harder than an average stretch.
@@ -527,11 +527,13 @@ statistics" and that nobody should ever pilot a car with software trained on it.
 **Data.** Both drives come from the
 [Sully Chen driving datasets](https://github.com/SullyChen/driving-datasets), released under the
 MIT License, Copyright (c) 2018 Sully Chen, as that repository's `LICENSE` file states; the
-downloaded dataset folders carry no licence file of their own. The demo clips and frame images
-under `web/public/data/` are excerpts of those drives, and the ONNX models under
-`web/public/models/` were trained on them. The dataset's author asks that the data be used purely
-for research and statistics. That is a request, not a term of the MIT License; this project asks
-the same of anyone who uses these files. The datasets themselves are never committed here.
+downloaded dataset folders carry no licence file of their own. Under `web/public/data/`, the demo
+clips (`clips/*/clip.mp4`), the clips' sprite sheets (`clips/*/sprite-*.jpg`), the leakage-pair
+thumbnails (`leakage/frame-*.jpg`) and the self-test frame stacks (`selftest/frames.bin`, cut from
+the 2018 clip) are excerpts of those drives. The ONNX models under `web/public/models/` were
+trained on them. The dataset's author asks that the data be used purely for research and
+statistics. That is a request, not a term of the MIT License; this project asks the same of anyone
+who uses these files. The datasets themselves are never committed here.
 
 **Code.** MIT, see [LICENSE](LICENSE); the ONNX models are released under the same licence.
 

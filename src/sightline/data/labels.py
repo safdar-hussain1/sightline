@@ -130,7 +130,7 @@ def repair_dropouts(
     sensor dropped for one frame mid-turn. A frame is repaired only when
 
     * its angle is exactly 0.0, and
-    * both neighbors exceed ``min_neighbor_deg`` in magnitude, and
+    * both neighbors are at least ``min_neighbor_deg`` in magnitude, and
     * both neighbors share the same sign.
 
     Genuine straight-driving zeros never satisfy the neighbor conditions.

@@ -22,9 +22,11 @@ SOFTWARE.
 
 Third-party data
 ----------------
-The two short demo clips and the leakage-pair thumbnails under web/public/data/ are
-excerpts of the Sully Chen driving datasets (MIT License, Copyright (c) 2018 Sully Chen,
-https://github.com/SullyChen/driving-datasets). The dataset's author asks that it be used
-for research and statistics only, never to pilot a vehicle; that is a request, not a term
-of either licence. The ONNX models under web/public/models/ were trained on that data and
-are released under this MIT licence, and this project asks the same of anyone who uses them.
+These files under web/public/data/ are excerpts of the Sully Chen driving datasets (MIT
+License, Copyright (c) 2018 Sully Chen, https://github.com/SullyChen/driving-datasets): the
+two short demo clips (clips/*/clip.mp4), the clips' sprite sheets (clips/*/sprite-*.jpg),
+the leakage-pair thumbnails (leakage/frame-*.jpg) and the self-test frame stacks, cut from
+the 2018 clip (selftest/frames.bin). The dataset's author asks that it be used for research
+and statistics only, never to pilot a vehicle; that is a request, not a term of either
+licence. The ONNX models under web/public/models/ were trained on that data and are released
+under this MIT licence, and this project asks the same of anyone who uses them.
