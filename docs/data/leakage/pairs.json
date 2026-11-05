@@ -129,5 +129,10 @@
       }
     }
   ],
+  "pixel_scale": {
+    "max": 255,
+    "min": 0,
+    "unit": "grey levels"
+  },
   "seed": 0
 }

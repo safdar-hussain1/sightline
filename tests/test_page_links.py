@@ -50,11 +50,6 @@ def test_the_page_asks_for_the_demo_code_as_early_as_its_own():
     assert html.index(preloads[0]) < html.index("</head>")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=FileNotFoundError,
-    reason="the model card is not written yet",
-)
 @pytest.mark.parametrize("base", [ROOT / "web" / "public", ROOT / "docs"], ids=["template", "published"])
 def test_the_model_card_is_published_beside_the_page(base):
     text = (base / "model-card.md").read_text(encoding="utf-8")
