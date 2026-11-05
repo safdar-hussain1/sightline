@@ -632,7 +632,7 @@ import pairsFile from "../../public/data/leakage/pairs.json?raw";
 import shippedFile from "../../public/data/results.json?raw";
 import clipFile from "../../public/data/clips/c2018/clip.json?raw";
 import { clockTime, neighbourWords as words2, pairsLead as lead2, timelineAlt as alt2, timelineNote as note2 } from "./copy.ts";
-import { timeOfFrame as timeOf } from "../charts/timeline.ts";
+import { labelWidth, timeOfFrame as timeOf } from "../charts/timeline.ts";
 import { readClipWindow as clipWindow, readPairs as pairsOf, readTimeline as timelineOf } from "./figures.ts";
 import { PairsSection } from "./pairs.ts";
 import { TimelineSection } from "./timeline.ts";
@@ -757,6 +757,35 @@ describe("the frame next door", () => {
     expect(range.value).toBe("90");
   });
 
+  it("moves the slider for a finger only on a sideways drag: a vertical swipe leaves it, a sideways one takes it", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    section.show(pairs(), URL_PAIRS, null);
+    const frame = q('[data-pairs="compare-frame"]');
+    const range = q<HTMLInputElement>('[data-pairs="compare-range"]');
+    const touch = (type: string, x: number, y: number, id = 1) =>
+      frame.dispatchEvent(Object.assign(new Event(type, { bubbles: true }), { pointerType: "touch", pointerId: id, clientX: x, clientY: y }));
+    touch("pointerdown", 500, 200);
+    touch("pointermove", 504, 260);
+    touch("pointermove", 507, 340);
+    touch("pointerup", 507, 340);
+    expect(range.value).toBe("50");
+    // A little sideways but more up and down is still a scroll.
+    touch("pointerdown", 500, 200);
+    touch("pointermove", 520, 280);
+    expect(range.value).toBe("50");
+    touch("pointerup", 520, 280);
+    touch("pointerdown", 500, 200, 2);
+    touch("pointermove", 540, 204, 2);
+    touch("pointermove", 800, 210, 2);
+    expect(range.value).toBe("80");
+    expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 80%)");
+    // A mouse press is the range's own, not this handler's.
+    frame.dispatchEvent(Object.assign(new Event("pointerdown", { bubbles: true }), { pointerType: "mouse", pointerId: 3, clientX: 100, clientY: 100 }));
+    frame.dispatchEvent(Object.assign(new Event("pointermove", { bubbles: true }), { pointerType: "mouse", pointerId: 3, clientX: 900, clientY: 100 }));
+    expect(range.value).toBe("80");
+  });
+
   it("says why there are no pairs, in its lead, when they cannot be had", () => {
     const { section } = mount(true);
     const error = new AssetError("gone", "missing", URL_PAIRS);
@@ -792,6 +821,48 @@ describe("how the drive was split", () => {
     expect(document.querySelector(".timeline-chart__clip-window")).not.toBeNull();
     expect(text('[data-timeline="clip"]')).toMatch(/sits inside one of the blocked split’s test stretches\.$/);
     expect(all('[data-timeline="table"] tbody tr')).toHaveLength(3);
+  });
+
+  it("never lets the peak's label touch the demo clip's column, at any chart width", () => {
+    const timeline = timelineOf(realRaw());
+    const clip = clipWindow(JSON.parse(clipFile));
+    for (const width of [1152, 700, 358, 290, 260]) {
+      document.body.innerHTML = "";
+      layoutAs(width, false);
+      const { section } = mount(true);
+      section.show(timeline, clip);
+      const label = q<SVGTextElement>('[data-timeline="peak"]');
+      const column = q(".timeline-chart__clip-column");
+      // The label's box: its text from the baseline up the 12 px of the face.
+      const x = Number(label.getAttribute("x"));
+      const baseline = Number(label.getAttribute("y"));
+      const box = { left: x, right: x + labelWidth(label.textContent ?? ""), top: baseline - 12, bottom: baseline + 3 };
+      const colX = Number(column.getAttribute("x"));
+      const col = { left: colX, right: colX + Number(column.getAttribute("width")), top: Number(column.getAttribute("y")), bottom: Number(column.getAttribute("y")) + Number(column.getAttribute("height")) };
+      const apart = box.right <= col.left || box.left >= col.right || box.bottom <= col.top || box.top >= col.bottom;
+      expect(apart, `at ${width}px the label ${JSON.stringify(box)} meets the column ${JSON.stringify(col)}`).toBe(true);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(width);
+      expect(box.top).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("draws at most one point per column of pixels on a narrow chart, and keeps the peak", () => {
+    const timeline = timelineOf(realRaw());
+    for (const [width, thinned] of [[290, true], [3000, false]] as const) {
+      document.body.innerHTML = "";
+      layoutAs(width, false);
+      const { section } = mount(true);
+      section.show(timeline, null);
+      const way = q(".timeline-chart__way").getAttribute("d") ?? "";
+      const points = way.split("L").length;
+      if (thinned) expect(points).toBeLessThanOrEqual(Math.ceil(width / 1.5) + 3);
+      else expect(points).toBeGreaterThan(timeline.meanAbsDeg.length - 3);
+      // The envelope reaches the top of the trace at the largest bucket, thinned or not.
+      const envelope = q(".timeline-chart__envelope").getAttribute("d") ?? "";
+      const top = Math.min(...[...envelope.matchAll(/[ML]?[\d.]+ ([\d.]+)/g)].map((m) => Number(m[1])));
+      expect(top).toBe(20);
+    }
   });
 
   it("places every stretch by the drive's own clock: the later split's test part starts where its first frame was recorded", () => {
@@ -877,7 +948,8 @@ describe("the Results view whose code did not load", () => {
       expect(q(`[data-${root}="root"]`).dataset["state"]).toBe("unavailable");
     }
     expect(text(".results__lede")).toBe(resultsCodeFailure());
-    expect(text('[data-timeline="lead"]')).toBe(resultsCodeFailure());
-    expect(text('[data-card="export"]')).toBe(resultsCodeFailure());
+    // Said once: the other parts keep their own words.
+    expect(text('[data-timeline="lead"]')).not.toBe(resultsCodeFailure());
+    expect(all("#results-view p").filter((p) => p.textContent === resultsCodeFailure())).toHaveLength(1);
   });
 });

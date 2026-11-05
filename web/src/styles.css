@@ -192,20 +192,20 @@
   --model-straight: #8b85a1;
   --bar-model: var(--model-sightlinenet);
 
-  /* What a split does with a frame, on the split timeline, kept inside the
-     page's violet: the test stretches wear the accent, validation a second
-     violet apart from it in lightness, training a quiet violet-grey and the
-     frames dropped at a firewall hatching in grey. None is a model's colour
-     (PilotNet's green stays PilotNet's). The three filled roles, checked with
-     a colour-vision validator, all pairs at once: at least 15.7 apart under
-     simulated red-green colour blindness and 18.4 in full colour (OKLab x100),
-     each 3:1 or more on the chart's surface, in both themes. Training and validation
-     sit outside the validator's lightness band and chroma floor on purpose
-     (a neutral and a pale or deep tint); the key names every one, and the
-     chart's table counts them. */
-  --role-train: #8d87a6;
-  --role-val: #4a2a9a;
-  --role-test: #9333ea;
+  /* What a split does with a frame, on the split timeline. No role wears a
+     model's colour: the test stretches an orchid magenta, the stretches the
+     story is about, validation a blue, training a slate grey, and the frames
+     dropped at a firewall a grey hatching. Each is named in the key and
+     counted in the chart's table, so colour alone never carries a role. Every
+     filled role is 3:1 or more on the chart's surface in both themes. Against
+     the four model colours and each other, the colour-vision validator gives
+     at least 7.4 (OKLab x100) under simulated red-green colour blindness and
+     12.7 in full colour on the light page, 6.3 and 11.5 on the dark one:
+     above the validator's floor for the first, below its target of 15 for the
+     second, which is why the key and the table name every role. */
+  --role-train: #4d5668;
+  --role-val: #3a5fb8;
+  --role-test: #a8249a;
   --role-dropped: #5f5a75;
   --bar-straight: var(--model-straight);
 
@@ -246,9 +246,9 @@
     --model-pilotnet: #05ab86;
     --model-oneframe: #cc345f;
     --model-straight: #736c8c;
-    --role-train: #6e688c;
-    --role-val: #dcc8fc;
-    --role-test: #a66ef4;
+    --role-train: #aab2c4;
+    --role-val: #6f9be0;
+    --role-test: #d411c4;
     --role-dropped: #9a94b4;
     --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
   }
@@ -275,9 +275,9 @@
   --model-pilotnet: #05ab86;
   --model-oneframe: #cc345f;
   --model-straight: #736c8c;
-  --role-train: #6e688c;
-  --role-val: #dcc8fc;
-  --role-test: #a66ef4;
+  --role-train: #aab2c4;
+  --role-val: #6f9be0;
+  --role-test: #d411c4;
   --role-dropped: #9a94b4;
   --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
 }
@@ -3586,6 +3586,24 @@ html:not(.js) .windshield__status {
   right: 0.625rem;
 }
 
+/* On the narrowest screens the right tag would cross the divider at the
+   slider's middle: smaller and closer to its corner, it stays clear. */
+@media (max-width: 22rem) {
+  .compare__tag {
+    top: 0.5rem;
+    padding: 0.1rem 0.375rem;
+    font-size: 11px;
+  }
+
+  .compare__tag--left {
+    left: 0.5rem;
+  }
+
+  .compare__tag--right {
+    right: 0.5rem;
+  }
+}
+
 .compare__range {
   position: absolute;
   inset: 0;
@@ -3595,6 +3613,20 @@ html:not(.js) .windshield__status {
   opacity: 0;
   cursor: ew-resize;
   /* A swipe down the page is the page's; only a sideways drag is the slider's. */
+  touch-action: pan-y;
+}
+
+/* On a touch screen the browser would move the range to the finger at the
+   first touch, scroll or not: the range steps out of hit-testing and the
+   picture's own handler takes a sideways drag. The range stays for the
+   keyboard and for assistive technology. */
+@media (pointer: coarse) {
+  .compare__range {
+    pointer-events: none;
+  }
+}
+
+.compare__frame {
   touch-action: pan-y;
 }
 

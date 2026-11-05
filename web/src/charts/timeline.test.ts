@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { blockedSegments, bucketAtTime, bucketSpan, ditherRoles, laterSegments, roleSizes, shuffledSizes, timeOfFrame, traceStats } from "./timeline.ts";
+import { blockedSegments, bucketAtTime, bucketSpan, columnPeaks, ditherRoles, labelWidth, laterSegments, peakLabelStart, roleSizes, shuffledSizes, timeOfFrame, traceStats } from "./timeline.ts";
 
 /** The roles of frames 0..n-1, frame by frame, as the splits module deals them. */
 function blockedByFrame(n: number, block: number, firewall: number, pattern: string): string[] {
@@ -110,11 +110,43 @@ describe("the steering trace's figures", () => {
 
   it("gives the shortest and the longest bucket, not counting the one that holds what is left over", () => {
     expect(bucketSpan(profile)).toEqual({ shortest: 1, longest: 8 });
+    // The first bucket counts, and the last (the one holding what is left over) does not.
+    expect(bucketSpan({ ...profile, startS: [0, 9, 10, 12], durationS: 40 })).toEqual({ shortest: 1, longest: 9 });
+    expect(bucketSpan({ ...profile, startS: [0, 1, 5, 6], durationS: 40 })).toEqual({ shortest: 1, longest: 4 });
+  });
+
+  it("counts a bucket above an edge only when it is above it, not when it is on it", () => {
+    expect(traceStats([2, 4, 5], [4]).shareAbove).toEqual([1 / 3]);
+    expect(traceStats([2, 4, 5], [1, 5]).shareAbove).toEqual([1, 0]);
   });
 
   it("gives the middle bucket, the largest and where it is, and the share above each edge", () => {
     const stats = traceStats([1, 9, 3, 5], [2, 4]);
     expect(stats).toEqual({ median: 4, largest: 9, largestAt: 1, shareAbove: [0.75, 0.5] });
     expect(traceStats([7, 1, 3], [2]).median).toBe(3);
+  });
+});
+
+describe("one point per column of the trace", () => {
+  it("keeps, of the buckets in a column, the one that turns hardest with its own direction, so a spike survives", () => {
+    const xs = [0, 0.4, 0.8, 1.6, 2.0, 3.2];
+    const abs = [1, 9, 2, 3, 3.5, 4];
+    const signed = [1, -9, 2, -3, 3.5, 4];
+    expect(columnPeaks(xs, abs, signed, 1.5)).toEqual([
+      { x: 0.4, abs: 9, signed: -9 },
+      { x: 2.0, abs: 3.5, signed: 3.5 },
+      { x: 3.2, abs: 4, signed: 4 },
+    ]);
+    // Wide columns' worth of room: every bucket stays.
+    expect(columnPeaks([0, 2, 4], [1, 2, 3], [1, 2, 3], 1.5)).toHaveLength(3);
+  });
+});
+
+describe("the peak's label", () => {
+  it("is centred on its peak, moved only as far as keeps it inside the chart", () => {
+    const w = labelWidth("208.5° peak");
+    expect(peakLabelStart(500, 1152, w)).toBe(500 - w / 2);
+    expect(peakLabelStart(10, 1152, w)).toBe(0);
+    expect(peakLabelStart(1150, 1152, w)).toBe(1152 - w);
   });
 });

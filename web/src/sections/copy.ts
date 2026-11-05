@@ -769,7 +769,7 @@ export function testFrameWords(pair: FramePair): { frame: string; steering: stri
 /** What a pixel difference is, and the scale it is read on, from the data. */
 export function pixelScaleNote(scale: FramePairs["scale"]): string {
   return (
-    `Pixel difference is how far apart two frames are in ${scale.unit}, as a root-mean-square over small grayscale copies, the way the lookup table compares them. ` +
+    `Pixel difference is how far apart two frames are in ${scale.unit}, as a root-mean-square over small greyscale copies, the way the lookup table compares them. ` +
     `It runs from ${fmtCount(scale.min)} to ${fmtCount(scale.max)} ${scale.unit}: the lower, the more alike.`
   );
 }
@@ -884,10 +884,17 @@ export function traceWords(timeline: Timeline): string {
   const span = bucketSpan(clock);
   const stats = traceStats(timeline.meanAbsDeg, timeline.turnEdges);
   const [low, high] = timeline.turnEdges;
+  const whole = clock.startS.length - 1;
+  const lastFrames = clock.frames - (clock.startFrame[whole] as number);
+  const buckets =
+    lastFrames === clock.bucketFrames
+      ? `${fmtCount(clock.startS.length)} buckets of ${fmtCount(clock.bucketFrames)} frames, ${fmtFixed(span.shortest)} to ${fmtFixed(span.longest)} seconds each`
+      : `${fmtCount(whole)} buckets of ${fmtCount(clock.bucketFrames)} frames, ${fmtFixed(span.shortest)} to ${fmtFixed(span.longest)} seconds each, and a last of ${fmtCount(lastFrames)}`;
   return (
-    `The steering above it is drawn bucket by bucket: each of ${fmtCount(clock.startS.length)} buckets holds ${fmtCount(clock.bucketFrames)} frames, ${fmtFixed(span.shortest)} to ${fmtFixed(span.longest)} seconds. ` +
-    `The shaded band is how hard the driver was turning (the mean size of the angle) and the dark shape inside it which way, on a square-root scale. ` +
-    `The middle bucket turns ${fmtDeg(stats.median, 1)} on average and the largest ${fmtDeg(stats.largest, 1)}; ` +
+    `The steering above it is drawn bucket by bucket: ${buckets}. ` +
+    "The shaded band is how hard the driver was turning (the mean size of the angle) and the solid shape inside it which way, on a square-root scale. " +
+    "Where buckets are narrower than a pixel and a half, each column of pixels draws the bucket that turns hardest. " +
+    `Half the buckets turn less than ${fmtDeg(stats.median, 1)} on average and the largest ${fmtDeg(stats.largest, 1)}; ` +
     `${fmtPct(stats.shareAbove[0] as number)} of buckets turn more than ${fmtDeg(low, 0)} and ${fmtPct(stats.shareAbove[1] as number)} more than ${fmtDeg(high, 0)}.`
   );
 }

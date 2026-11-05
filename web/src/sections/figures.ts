@@ -508,7 +508,7 @@ export interface Neighbour {
   readonly gapFrames: number;
   /** The time between the two frames' timestamps, seconds; null for a drive without them. */
   readonly gapS: number | null;
-  /** How unlike the two frames look: the root-mean-square difference of their gray levels. */
+  /** How unlike the two frames look: the root-mean-square difference of their grey levels. */
   readonly pixelRmse: number;
   /** The driver's steering on it, degrees. */
   readonly angle: number;

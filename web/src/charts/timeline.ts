@@ -166,7 +166,7 @@ export function bucketAtTime(clock: DriveClock, seconds: number): number {
 /** How long the buckets run, in seconds: the shortest and the longest, the
  * last (which holds what is left over) not counted. */
 export function bucketSpan(clock: DriveClock): { readonly shortest: number; readonly longest: number } {
-  const lengths = clock.startS.slice(1, -1).map((start, i) => (clock.startS[i + 2] as number) - start);
+  const lengths = clock.startS.slice(1).map((start, i) => start - (clock.startS[i] as number));
   const whole = lengths.length > 0 ? lengths : [clock.durationS];
   return { shortest: Math.min(...whole), longest: Math.max(...whole) };
 }
@@ -187,4 +187,38 @@ export function traceStats(
     largestAt: meanAbs.indexOf(largest),
     shareAbove: edges.map((edge) => meanAbs.filter((v) => v > edge).length / meanAbs.length),
   };
+}
+
+/** How wide a 12 px label is, for placing it clear of other marks: seven
+ * pixels a character, a little over what the page's text face takes. */
+export const labelWidth = (text: string): number => text.length * 7;
+
+/** Where the label that names the peak starts: centred on the peak, moved
+ * only as far as keeps its box inside the chart. */
+export function peakLabelStart(peakX: number, width: number, textWidth: number): number {
+  return Math.max(0, Math.min(peakX - textWidth / 2, width - textWidth));
+}
+
+/** One point per column of `step` pixels: of the buckets whose x falls in a
+ * column, the one with the largest mean size of angle, with its own signed
+ * mean, so a spike is never averaged away. Columns come in order of x. */
+export function columnPeaks(
+  xs: readonly number[],
+  meanAbs: readonly number[],
+  meanSigned: readonly number[],
+  step: number,
+): Array<{ readonly x: number; readonly abs: number; readonly signed: number }> {
+  const out: Array<{ x: number; abs: number; signed: number }> = [];
+  let column = -1;
+  xs.forEach((x, k) => {
+    const c = Math.floor(x / step);
+    const abs = meanAbs[k] as number;
+    if (c !== column) {
+      column = c;
+      out.push({ x, abs, signed: meanSigned[k] as number });
+    } else if (abs > (out[out.length - 1] as { abs: number }).abs) {
+      out[out.length - 1] = { x, abs, signed: meanSigned[k] as number };
+    }
+  });
+  return out;
 }

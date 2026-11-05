@@ -16,7 +16,7 @@
  */
 
 import { attrs, easeInOut, easeOut, local, svg, tween, watchWidth } from "../charts/draw.ts";
-import { ROLES, ditherRoles, timeOfFrame, type Role, type Segment } from "../charts/timeline.ts";
+import { ROLES, columnPeaks, ditherRoles, labelWidth, peakLabelStart, timeOfFrame, type Role, type Segment } from "../charts/timeline.ts";
 import { niceStep } from "../charts/scale.ts";
 import { fmtCount, fmtDeg } from "../format.ts";
 import type { ViewName } from "../router.ts";
@@ -44,6 +44,10 @@ const MORPH_MS = 720;
 const LEAD_PX = 80;
 /** One cell of the shuffled split's mix, px. */
 const CELL_PX = 3;
+/** The trace draws at most one point in each column of this many pixels. */
+const COLUMN_PX = 1.5;
+/** The baseline of the peak's label, in the headroom above the trace, px. */
+const PEAK_LABEL_Y = 13;
 
 interface Geometry {
   readonly width: number;
@@ -157,7 +161,7 @@ export class TimelineSection {
   private geometry(width: number): Geometry {
     const narrow = width < 560;
     const half = narrow ? 38 : 54;
-    const traceTop = 6;
+    const traceTop = 20;
     const traceZero = traceTop + half;
     const traceBottom = traceZero + half;
     // Room between the trace and the band for the clip's label and its caret.
@@ -187,7 +191,7 @@ export class TimelineSection {
     svg("line", { class: "timeline-chart__hatch-line", x1: 0, y1: 0, x2: 0, y2: 5 }, hatch);
 
     // The steering: how hard the driver was turning as a shaded band either
-    // side of the zero line, which way as the dark shape inside it, both on a
+    // side of the zero line, which way as the solid shape inside it, both on a
     // square-root scale so gentle driving still shows beside the spikes.
     const trace = svg("g", { class: "timeline-chart__trace", "clip-path": `url(#${this.id}-trace)` }, root);
     const traceClip = clipRect("trace");
@@ -195,33 +199,46 @@ export class TimelineSection {
     const vmax = Math.max(...timeline.meanAbsDeg, ...timeline.turnEdges);
     const half = g.traceZero - g.traceTop;
     const lift = (v: number) => Math.sqrt(Math.min(1, Math.abs(v) / vmax)) * half * Math.sign(v);
-    const [, sharp] = timeline.turnEdges;
-    // The rule at the sharp-turn edge, both sides, when there is room for its label.
-    if (lift(sharp) > 14) {
-      for (const dir of [-1, 1]) {
-        const yy = r2(g.traceZero - dir * lift(sharp));
-        svg("line", { class: "timeline-chart__rule", x1: 0, x2: width, y1: yy, y2: yy }, trace);
-        const label = svg("text", { class: "timeline-chart__label", x: 4, y: r2(dir > 0 ? yy - 5 : yy + 14) }, trace);
-        label.textContent = `${exactDeg(sharp)} ${dir > 0 ? "right" : "left"}`;
-      }
-    }
     svg("line", { class: "timeline-chart__rule timeline-chart__rule--zero", x1: 0, x2: width, y1: g.traceZero, y2: g.traceZero }, trace);
     const mid = (k: number) => {
       const t0 = clock.startS[k] as number;
       const t1 = k + 1 < clock.startS.length ? (clock.startS[k + 1] as number) : clock.durationS;
       return g.x((t0 + t1) / 2);
     };
-    const upper = timeline.meanAbsDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero - lift(v))}`);
-    const lower = timeline.meanAbsDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero + lift(v))}`).reverse();
+    // The rule at the sharp-turn edge, both sides, drawn first and labelled
+    // after the shapes, so the labels' halos keep them legible over the trace.
+    const [, sharp] = timeline.turnEdges;
+    const rules: Array<{ dir: number; y: number }> = [];
+    if (lift(sharp) > 14) {
+      for (const dir of [-1, 1]) {
+        const yy = r2(g.traceZero - dir * lift(sharp));
+        svg("line", { class: "timeline-chart__rule", x1: 0, x2: width, y1: yy, y2: yy }, trace);
+        rules.push({ dir, y: yy });
+      }
+    }
+    // At most one point per column of pixels: of the buckets that share a
+    // column, the one that turns hardest, with its own direction.
+    const xs = timeline.meanAbsDeg.map((_, k) => mid(k));
+    const points = columnPeaks(xs, timeline.meanAbsDeg, timeline.meanDeg, COLUMN_PX);
+    const upper = points.map((p) => `${r2(p.x)} ${r2(g.traceZero - lift(p.abs))}`);
+    const lower = points.map((p) => `${r2(p.x)} ${r2(g.traceZero + lift(p.abs))}`).reverse();
     svg("path", { class: "timeline-chart__envelope", d: `M${upper.join("L")}L${lower.join("L")}Z` }, trace);
-    const way = timeline.meanDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero - lift(v))}`);
-    svg("path", { class: "timeline-chart__way", d: `M${r2(mid(0))} ${g.traceZero}L${way.join("L")}L${r2(mid(way.length - 1))} ${g.traceZero}Z` }, trace);
-    // The largest bucket, named where it peaks.
+    const way = points.map((p) => `${r2(p.x)} ${r2(g.traceZero - lift(p.signed))}`);
+    const first = points[0] as { x: number };
+    const last = points[points.length - 1] as { x: number };
+    svg("path", { class: "timeline-chart__way", d: `M${r2(first.x)} ${g.traceZero}L${way.join("L")}L${r2(last.x)} ${g.traceZero}Z` }, trace);
+    for (const { dir, y: yy } of rules) {
+      const label = svg("text", { class: "timeline-chart__label", x: 4, y: r2(dir > 0 ? yy - 5 : yy + 14) }, trace);
+      label.textContent = `${exactDeg(sharp)} ${dir > 0 ? "right" : "left"}`;
+    }
+    // The largest bucket, named in the headroom above the trace, over its
+    // peak: the clip's column starts below it, so the label is never taken for
+    // the clip's.
     const peak = timeline.meanAbsDeg.indexOf(Math.max(...timeline.meanAbsDeg));
-    const peakX = mid(peak);
-    const peakAnchor = peakX > width - 70 ? "end" : "start";
-    const peakLabel = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", x: r2(peakAnchor === "end" ? peakX - 6 : peakX + 6), y: g.traceTop + 12, "text-anchor": peakAnchor }, trace);
-    peakLabel.textContent = `${fmtDeg(timeline.meanAbsDeg[peak] as number, 1)} peak`;
+    const peakText = `${fmtDeg(timeline.meanAbsDeg[peak] as number, 1)} peak`;
+    const start = peakLabelStart(mid(peak), width, labelWidth(peakText));
+    const peakLabel = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", "data-timeline": "peak", x: r2(start), y: PEAK_LABEL_Y, "text-anchor": "start" }, trace);
+    peakLabel.textContent = peakText;
 
     // Each split's layout, one layer apiece.
     const band = svg("g", { class: "timeline-chart__band" }, root);
@@ -257,7 +274,7 @@ export class TimelineSection {
       const mark = svg("g", { class: "timeline-chart__clip" }, root);
       svg("rect", { class: "timeline-chart__clip-column", x: r2(x1), y: g.traceTop, width: r2(x2 - x1), height: g.traceBottom - g.traceTop }, mark);
       svg("rect", { class: "timeline-chart__clip-window", x: r2(x1), y: g.bandTop - 4, width: r2(x2 - x1), height: bandHeight + 8, rx: 2 }, mark);
-      svg("line", { class: "timeline-chart__clip-stem", x1: r2(centre), x2: r2(centre), y1: g.traceBottom + 2, y2: g.bandTop - 10 }, mark);
+      svg("line", { class: "timeline-chart__clip-stem", x1: r2(centre), x2: r2(centre), y1: g.traceBottom + 27, y2: g.bandTop - 10 }, mark);
       svg("path", { class: "timeline-chart__clip-caret", d: `M${r2(centre - 5)} ${g.bandTop - 15}L${r2(centre + 5)} ${g.bandTop - 15}L${r2(centre)} ${g.bandTop - 7}Z` }, mark);
       const anchor = centre < width * 0.22 ? "start" : centre > width * 0.78 ? "end" : "middle";
       const label = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", x: r2(anchor === "start" ? Math.max(0, x1) : anchor === "end" ? Math.min(width, x2) : centre), y: g.traceBottom + 20, "text-anchor": anchor }, mark);

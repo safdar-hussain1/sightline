@@ -798,6 +798,12 @@ describe("the frame pairs' sentences", () => {
     expect(pairsLead(pairs)).toMatch(/at least 1\.9 minutes of driving\.$/);
   });
 
+  it("says one time, not a range, when every closest training frame is the same time away", () => {
+    let json = JSON.parse(pairsFile) as Record<string, unknown>;
+    for (let i = 0; i < 6; i += 1) json = patch(json, `pairs.${i}.leaky.gap_s`, 0.041);
+    expect(pairsLead(readPairs(json, realResults()))).toMatch(/that frame is one frame away, 41 ms apart\. /);
+  });
+
   it("puts a time apart in the unit that reads it best, from the timestamps, never a frame count times a typical interval", () => {
     expect(gapWords(0.041)).toBe("41 ms");
     expect(gapWords(0.999)).toBe("999 ms");
@@ -876,14 +882,15 @@ describe("the split timeline's sentences", () => {
 
   it("describes the steering trace with its own numbers, and each bucket under the pointer", () => {
     const words = traceWords(timeline());
-    expect(words).toMatch(/each of 998 buckets holds 64 frames, 2\.4 to 4\.1 seconds/);
+    expect(words).toMatch(/997 buckets of 64 frames, 2\.4 to 4\.1 seconds each, and a last of 17\./);
+    expect(words).toMatch(/Half the buckets turn less than [\d.]+° on average/);
     expect(words).toMatch(/the largest 208\.5°/);
     expect(bucketWords(timeline(), 0)).toMatch(/^At 0:00, frames 0 to 63: turning 1\.4° on average, [\d.]+° (left|right) overall$/);
   });
 
   it("describes every split's drawing in words, with the frames it deals", () => {
     expect(timelineAlt(timeline(), "blocked")).toMatch(
-      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. The steering above it is drawn bucket by bucket: each of 998 buckets holds 64 frames, 2\.4 to 4\.1 seconds\. .*square-root scale\. The middle bucket turns [\d.]+° on average and the largest 208\.5°; \d+% of buckets turn more than 5° and \d+% more than 30°\.$/,
+      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. The steering above it is drawn bucket by bucket: 997 buckets of 64 frames, 2\.4 to 4\.1 seconds each, and a last of 17\. .*solid shape.*square-root scale\. .*Half the buckets turn less than [\d.]+° on average and the largest 208\.5°; \d+% of buckets turn more than 5° and \d+% more than 30°\.$/,
     );
     expect(timelineAlt(timeline(), "shuffled")).toMatch(/dealt at random/);
   });

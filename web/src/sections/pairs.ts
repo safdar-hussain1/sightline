@@ -32,6 +32,8 @@ const SWEEP_MS = 1800;
 /** A pick this soon after a press on the thumbnails came from the pointer. */
 const POINTER_MS = 800;
 const LEAD_PX = 60;
+/** A finger must travel this far sideways, more than it travels up or down, before it moves the slider, px. */
+const TOUCH_SLOP_PX = 6;
 
 export class PairsSection {
   /** The section in the page, or null on a page without it. */
@@ -81,7 +83,27 @@ export class PairsSection {
     };
     range.addEventListener("pointerdown", take);
     range.addEventListener("keydown", take);
-    this.part("compare-frame").addEventListener("pointerdown", take);
+    const frame = this.part("compare-frame");
+    frame.addEventListener("pointerdown", take);
+    // A finger: the range is out of hit-testing on a touch screen (styles.css),
+    // so a vertical swipe scrolls the page and the value stays; a sideways drag
+    // of more than a few pixels is the slider's, handled here.
+    let finger: { id: number; x: number; y: number; dragging: boolean } | null = null;
+    frame.addEventListener("pointerdown", (event) => {
+      finger = event.pointerType === "touch" ? { id: event.pointerId, x: event.clientX, y: event.clientY, dragging: false } : null;
+    });
+    frame.addEventListener("pointermove", (event) => {
+      if (!finger || event.pointerId !== finger.id) return;
+      if (!finger.dragging) {
+        const [dx, dy] = [event.clientX - finger.x, event.clientY - finger.y];
+        if (Math.abs(dx) <= TOUCH_SLOP_PX || Math.abs(dx) <= Math.abs(dy)) return;
+        finger.dragging = true;
+        frame.setPointerCapture?.(event.pointerId);
+      }
+      const box = frame.getBoundingClientRect();
+      if (box.width > 0) this.setCompare(((event.clientX - box.left) / box.width) * 100);
+    });
+    for (const end of ["pointerup", "pointercancel"]) frame.addEventListener(end, () => (finger = null));
     range.addEventListener("input", () => {
       take();
       this.setCompare(Number(range.value));
