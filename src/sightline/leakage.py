@@ -37,6 +37,8 @@ __all__ = [
     "LOOKUP_PROTOCOLS",
     "LUMA_BT601",
     "PAIR_QUANTILES",
+    "PIXEL_MAX",
+    "PIXEL_MIN",
     "THUMB_SIZE",
     "downsample",
     "frame_gaps",
@@ -48,6 +50,13 @@ __all__ = [
 
 #: weights of the R, G and B channels in BT.601 luma
 LUMA_BT601 = (0.299, 0.587, 0.114)
+#: the dtype of the frames the pixel RMSE is computed on (the drive cache's RGB model input)
+FRAME_DTYPE = np.uint8
+#: the scale of a gray level, hence of the pixel RMSE: luma is a weighted mean of channels
+#: that run from PIXEL_MIN to PIXEL_MAX (the weights sum to 1), and the RMSE of two frames
+#: cannot exceed their span
+PIXEL_MIN = int(np.iinfo(FRAME_DTYPE).min)
+PIXEL_MAX = int(np.iinfo(FRAME_DTYPE).max)
 #: (width, height) the frames are compared at: the 200x66 model input halved
 THUMB_SIZE = (100, 33)
 #: the example frames sit at these quantiles of |angle| over the paired

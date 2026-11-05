@@ -43,6 +43,7 @@ from PIL import Image, JpegImagePlugin
 
 from conftest import REPO, make_drive
 from sightline.cli import main
+from sightline import leakage as leakage_module
 from sightline.data import splits
 from sightline.data.cache import DriveCache
 from sightline.data.labels import DriveLabels, load_labels, repair_dropouts
@@ -535,6 +536,7 @@ def test_the_self_test_expects_the_outputs_of_the_written_onnx_files(site):
 def test_the_leakage_pairs_keep_the_frames_and_round_their_gaps_to_the_millisecond(site):
     assert site.pairs["drive"] == site.leakage["drive"] == "drive2018"
     assert site.pairs["median_frame_interval_s"] == site.leakage["dt_s"]
+    assert site.pairs["pixel_scale"] == {"min": leakage_module.PIXEL_MIN, "max": leakage_module.PIXEL_MAX, "unit": "grey levels"}
     assert len(site.pairs["pairs"]) == len(site.leakage["pairs"]) > 0
     rounded = 0
     for pair, source in zip(site.pairs["pairs"], site.leakage["pairs"]):

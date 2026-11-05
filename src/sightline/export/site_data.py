@@ -95,7 +95,8 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     meet.
 ``data/leakage/``
     ``pairs.json``, the leakage report's example frame pairs with their gaps in seconds
-    rounded to the millisecond, and one camera frame (JPEG q85) per frame they name, read
+    rounded to the millisecond, the scale its pixel differences are measured on (``pixel_scale``:
+    gray levels, 0 to 255), and one camera frame (JPEG q85) per frame they name, read
     through the drive's label rows.
 
 ``export.json`` in ``reports_dir`` records each model's size, digest, checkpoint and
@@ -174,7 +175,7 @@ from sightline.export.onnx_export import (
     export_onnx,
     open_drive_cache,
 )
-from sightline.leakage import LOOKUP_PROTOCOLS, frame_gaps
+from sightline.leakage import LOOKUP_PROTOCOLS, PIXEL_MAX, PIXEL_MIN, frame_gaps
 from sightline.paths import MissingDataError, UnusableRunError, Workspace
 from sightline.reporting import PAIRED_PROTOCOLS, checkpoint_sha256, load_run_model, load_split_indices, write_report
 from sightline.train import code_version
@@ -1179,7 +1180,9 @@ def clip_times(labels: DriveLabels, first_frame: int, n: int) -> dict:
 def leakage_pairs(leakage: dict) -> dict:
     """pairs.json: the leakage report's example frame pairs as the page shows them, each frame
     named by the image file the build writes for it, the gaps in seconds rounded to the
-    millisecond (timestamps are epoch seconds, so their differences carry float noise)."""
+    millisecond (timestamps are epoch seconds, so their differences carry float noise).
+    ``pixel_scale`` says what ``pixel_rmse`` is measured on: gray levels from ``PIXEL_MIN`` to
+    ``PIXEL_MAX``, both taken from the frame dtype in leakage.py."""
     pairs = []
     for pair in leakage["pairs"]:
         entry = {"frame": pair["frame"], "image": f"frame-{pair['frame']}.jpg", "angle_deg": pair["angle_deg"]}
@@ -1195,7 +1198,7 @@ def leakage_pairs(leakage: dict) -> dict:
             }
         pairs.append(entry)
     return {"drive": leakage["drive"], "seed": leakage["seed"], "median_frame_interval_s": leakage["dt_s"],
-            "pairs": pairs}
+            "pixel_scale": {"min": PIXEL_MIN, "max": PIXEL_MAX, "unit": "grey levels"}, "pairs": pairs}
 
 
 def _rule(where: str, n: int, lead_in: int) -> str:

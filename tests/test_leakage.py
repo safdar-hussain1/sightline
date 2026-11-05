@@ -308,3 +308,16 @@ def test_a_missing_drive_is_a_clear_error(tmp_path, capsys):
     code = main(["leakage", "--drive", "drive2018", "--data-dir", str(tmp_path / "nowhere"),
                  "--runs-dir", str(tmp_path / "runs"), "--out", str(tmp_path / "leakage.json")])
     assert code == 2 and "drive 'drive2018' not found" in _error_line(capsys.readouterr().err)
+
+
+def test_the_pixel_scale_is_the_span_of_the_frames_the_rmse_is_computed_on():
+    """Black against white frames, through downsample and nearest_neighbours as the report
+    does, are as far apart as two frames can be: the RMSE is the scale's width."""
+    assert (leakage.PIXEL_MIN, leakage.PIXEL_MAX) == (0, 255)
+    frames = np.zeros((2, 66, 200, 3), dtype=leakage.FRAME_DTYPE)
+    frames[1] = np.iinfo(leakage.FRAME_DTYPE).max
+    rows = downsample(frames, np.array([0, 1]))
+    assert rows.min() == pytest.approx(leakage.PIXEL_MIN, abs=1e-3)
+    assert rows.max() == pytest.approx(leakage.PIXEL_MAX, abs=1e-3)
+    _, rmse = nearest_neighbours(rows[[1]], rows[[0]])
+    assert rmse[0] == pytest.approx(leakage.PIXEL_MAX - leakage.PIXEL_MIN, abs=1e-3)
