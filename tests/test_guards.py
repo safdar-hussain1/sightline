@@ -269,6 +269,9 @@ NUMBER = re.compile(r"[0-9]+[A-Za-z]{0,2}")
 #: comment or a quote on to that line; nothing at all where a section sign touches a token. Each run of
 #: whitespace has one way to match, so a long gap that fails does so at once.
 SPACE = re.compile(r"[^\S\n]*(?:\n[^\S\n]*(?:(?:#+|/{2,}|\*+|>+)[^\S\n]*)?)*")
+#: what may also part a token from an item number after it: a ``#`` or a ``:`` (a run of them), with
+#: blanks around each, as in ``item #12`` or ``item: 12``
+MARK = re.compile(r"(?:[^\S\n]*[#:])+[^\S\n]*")
 #: what else may part them: hyphens, underscores and slashes alone, which stand for spaces in a name
 #: or a path
 LINK = re.compile(r"[-_/]+")
@@ -349,10 +352,12 @@ class Banned:
 BANNED = Banned(EXACT, STEMS, FLAGS)
 
 
-def in_one_phrase(text: str, start: int, end: int) -> bool:
+def in_one_phrase(text: str, start: int, end: int, number: bool = False) -> bool:
     """Whether ``text[start:end]``, all that stands between two tokens, lets them be read as words of
-    one phrase: whitespace (``SPACE``), or hyphens, underscores and slashes alone (``LINK``)."""
-    return SPACE.fullmatch(text, start, end) is not None or LINK.fullmatch(text, start, end) is not None
+    one phrase: whitespace (``SPACE``), or hyphens, underscores and slashes alone (``LINK``); before an
+    item number (``number``), also a ``#`` or a ``:`` among blanks (``MARK``)."""
+    return (SPACE.fullmatch(text, start, end) is not None or LINK.fullmatch(text, start, end) is not None
+            or (number and MARK.fullmatch(text, start, end) is not None))
 
 
 def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str]]:
@@ -367,14 +372,14 @@ def banned_words(text: str, banned: Banned = BANNED) -> list[tuple[int, str, str
             found.append((start, end, kind))
         if i + 1 < len(tokens):
             b_start, b_end, b = tokens[i + 1]
-            phrase = in_one_phrase(text, end, b_start)
+            phrase = in_one_phrase(text, end, b_start, b == "#")
             kind = (banned.pair(a, b) if phrase else None) \
                 or (banned.joined(a, b) if JOINER.fullmatch(text, end, b_start) else None)
             if kind:
                 found.append((start, b_end, kind))
             if phrase and i + 2 < len(tokens):
                 c_start, c_end, c = tokens[i + 2]
-                kind = banned.triple(a, b, c) if in_one_phrase(text, b_end, c_start) else None
+                kind = banned.triple(a, b, c) if in_one_phrase(text, b_end, c_start, c == "#") else None
                 if kind:
                     found.append((start, c_end, kind))
     return [(start, text[start:end], kind) for start, end, kind in found]
@@ -393,9 +398,23 @@ def scan(paths: list[Path], banned: Banned = BANNED) -> list[str]:
     return offenders
 
 
+#: a file the web build emits: ``<name>-<hash>.<ext>``, the hash 8 characters of letters, digits, hyphens
+#: and underscores, random as far as a reader can tell
+BUILD_HASH = re.compile(r"(.*)-[A-Za-z0-9_-]{8}(\.[A-Za-z0-9.]+)")
+
+
+def read_as_path(path: str) -> str:
+    """``path`` as the path scan reads it: the same, but for a file under ``docs/assets/``, which loses
+    the build's hash (``BUILD_HASH``) and keeps its name and extension; a random hash can spell a
+    refused word by chance."""
+    built = BUILD_HASH.fullmatch(path) if path.startswith("docs/assets/") else None
+    return built.group(1) + built.group(2) if built else path
+
+
 def scan_paths(paths: list[str], banned: Banned = BANNED) -> list[str]:
-    """Every refused word in each of ``paths``, read as text in any case."""
-    return [f"{path} (path): {word!r} ({kind})" for path in paths for _, word, kind in banned_words(path, banned)]
+    """Every refused word in each of ``paths``, read as text in any case (``read_as_path``)."""
+    return [f"{path} (path): {word!r} ({kind})" for path in paths
+            for _, word, kind in banned_words(read_as_path(path), banned)]
 
 
 def test_no_banned_words_in_tracked_files():
@@ -430,6 +449,7 @@ PROBE_EXACT = {
     "purple heron": "7491777e1f876fa84212fdf39e8c5e0ede079b67b21a695d8c3ccbf56b8d83c1",
     "slow amber tide": "6ff0aad45023d3076e4e34ca71e862a62cb269883eda412b6cceb5ee33476afb",
     "lantern #": "3c13cec09bdbd44f7eb77192d0e2ef44c0f94a447c29f393712a69aca05cab52",
+    "pale reed #": "01024e40e6d37cf314fae4f84526d05c212dc4321fb7d5849f21bebe0b404589",
     "lantern §": "7007ef96f2a4e1761eb71f24216764a9dee6199a14f6a3a2e6f64c878e554392",
 }
 PROBE_STEMS = {
@@ -505,6 +525,25 @@ def test_a_probe_word_is_held_as_the_sha256_of_its_normal_form():
     ("lantern 7, Lantern 2026, lantern 11a:, LANTERN 3RD and lantern-12.5",
      ["lantern 7", "Lantern 2026", "lantern 11a", "LANTERN 3RD", "lantern-12"]),
     ("lantern7, lantern 7abc, lantern seven and lantern(12)", []),
+    # a number after a hash or a colon, with blanks around either, is the same item number; the word alone is not
+    ("lantern #12, lantern: 12, Lantern # 12, lantern : 3rd and lantern:#7",
+     ["lantern #12", "lantern: 12", "Lantern # 12", "lantern : 3rd", "lantern:#7"]),
+    ("lantern, lantern #, lantern: seven, lantern #x, lantern:\n12 and lantern.#12", []),
+    ("quiet: 4 brooks, quiet #4: brook and quiet 4 # 7", ["quiet: 4 brooks"]),
+    # an item number three words in
+    ("pale reed #12, Pale Reed: 3rd, pale-reed #7 and pale reed, pale reed #x", ["pale reed #12", "Pale Reed: 3rd", "pale-reed #7"]),
+    # the marks join a number to its word only: not two words, and not a word to a number before it
+    ("purple: heron, purple #heron and 12 #lantern", []),
+    # after a line break, a run of the marks that carry a comment or a quote on, of any length
+    ("purple\n/// heron, purple\n/ heron, purple\n## heron, purple\n#### heron, purple\n** heron, "
+     "purple\n>> heron and purple\n\n\n heron",
+     ["purple\n/// heron", "purple\n## heron", "purple\n#### heron", "purple\n** heron", "purple\n>> heron",
+      "purple\n\n\n heron"]),
+    ("purple\n# \n// heron and purple\n\n  // heron", ["purple\n# \n// heron", "purple\n\n  // heron"]),
+    # hyphens, underscores and slashes of any number stand for one space between words
+    ("purple__heron, purple--heron, purple//heron, purple-_/heron and slow--amber__tide",
+     ["purple__heron", "purple--heron", "purple//heron", "purple-_/heron", "slow--amber__tide"]),
+    ("purple-.heron and purple_ heron", []),
     # a word allowed as a flag: as a lower-case token of its own after two hyphens, and nowhere else
     ("pip install --zebrafish pip", []),
     ("`--zebrafish`", []),
@@ -598,6 +637,13 @@ def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tm
         # a list of strings, joined, under the same rule: the payload's bytes cut in two
         "cut-payload.json": {"frames_b64": ["AAAA+zebra", "fish/BBBBB"]},
         "cut-plain-key.json": {"title": ["AAAA+zebra", "fish/BBBBB"]},
+        # three parts, none of them base64 alone, whose joined text is
+        "three-parts.json": {"frames_b64": ["AAAA+ze", "bra", "fish/BBBBB"]},
+        "three-parts-plain.json": {"title": ["AAAA+ze", "bra", "fish/BBBBB"]},
+        # a list that holds text, not a payload, is read under a payload key too, its parts and joined
+        "text-parts.json": {"frames_b64": ["a purple ", "heron"]},
+        # a list of one is not joined: it is its one string
+        "one-part.json": {"title": ["a zebrafish"]},
     }
     found = _planted(tmp_path, monkeypatch, {name: json.dumps(tree) for name, tree in cases.items()})
     assert {name: [entry.split(":", 1)[0] for entry in found if entry.startswith(name)] for name in cases} == {
@@ -607,6 +653,10 @@ def test_the_scan_leaves_out_only_strings_that_are_base64_under_a_payload_key(tm
         "plain-key.json": ["plain-key.json", "plain-key.json.title"],
         "cut-payload.json": [],
         "cut-plain-key.json": ["cut-plain-key.json.title"],
+        "three-parts.json": [],
+        "three-parts-plain.json": ["three-parts-plain.json.title"],
+        "text-parts.json": ["text-parts.json.frames_b64"],
+        "one-part.json": ["one-part.json", "one-part.json.title[0]"],
     }
     assert is_base64(PAYLOAD) and is_base64("QUJD\nREVG") and not is_base64("zebrafish") \
         and not is_base64("QUJDRA=") and not is_base64("QU JD")
@@ -630,6 +680,16 @@ def test_the_scan_blanks_an_inline_payload_and_reads_what_follows_it(tmp_path, m
     ("docs/purple_heron.png", ["purple_heron"]),
     ("docs/purple/heron.png", ["purple/heron"]),
     ("docs/purple.heron.png", []),
+    # a file the web build emits loses its hash, 8 characters, before the scan; its name is still read
+    ("docs/assets/index-marigold.js", []),
+    ("docs/assets/index-ze_bra-x.js", []),
+    ("docs/assets/marigold-AAAAAAAA.js", ["marigold"]),
+    ("docs/assets/purple-heron-AAAAAAAA.js.map", ["purple-heron"]),
+    ("docs/assets/sub/zebrafish-fern_-12.css", ["zebrafish"]),
+    ("docs/assets/index-marigolds.js", ["marigolds"]),
+    ("web/index-marigold.js", ["marigold"]),
+    ("docs/assetsx/index-marigold.js", ["marigold"]),
+    ("docs/index-marigold.js", ["marigold"]),
     ("src/sightline/cli.py", []),
 ])
 def test_a_tracked_path_is_scanned_like_text_in_any_case(path, found):

@@ -57,7 +57,9 @@ relative to ``out_dir``; paths inside the other JSON files are relative to their
     (``eval_frame``), that training frame (``train_frame``) and the time between them
     (``gap_s``). ``gap_s`` is measured between the scored frames, rounded to the nearest
     millisecond; with lag 2 the model's inputs reach two frames nearer, so any text that states
-    it as a lower bound must round down. The shuffled split has none: its evaluation frames sit
+    it as a lower bound must round down. A bound on the model's inputs must also subtract the
+    lag's reach, since the nearest training frame's two-frame history is nearer than the frame
+    itself. The shuffled split has none: its evaluation frames sit
     next to training frames by design, and ``leakage.gaps`` gives that distance in frames. A
     spread is the least value, the 5th percentile, the median, the mean, the 95th percentile and
     the largest (``min``, ``p05``, ``median``, ``mean``, ``p95``, ``max``). A drive without

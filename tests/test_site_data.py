@@ -1676,6 +1676,21 @@ def test_a_frame_is_timed_from_its_buckets_first_frame_to_the_next_buckets():
     # the first frame of a bucket and its last, and the last bucket, which ends with the drive
     assert [bounds(frame) for frame in (0, 63, 64, 127, 128, 150)] == \
         [(0, 3070), (0, 3070), (3070, 6469), (3070, 6469), (6469, 7500), (6469, 7500)]
+    # a time that float arithmetic leaves just under its millisecond (1.005 s * 1000 is 1004.99...) rounds
+    # to it, and is never cut short
+    edge = _bucket_times({"start_frame": [0, 64, 128], "start_s": [0.0, 1.005, 2.005], "duration_s": 4.135})
+    assert [edge(frame) for frame in (0, 64, 128)] == [(0, 1005), (1005, 2005), (2005, 4135)]
+
+
+def test_generated_from_takes_the_folder_of_the_reports_from_their_own_files(site, tmp_path):
+    """The summary may sit outside the reports' folder: the export record goes beside the reports."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    shutil.copy(site.reports / "summary.json", elsewhere / "summary.json")
+    reports = site_data.load_reports(elsewhere / "summary.json", site.reports)
+    assert reports.files[0] == "elsewhere/summary.json"
+    assert site_data.generated_from(reports) == [*reports.files, "reports/export.json"]
+    assert site_data.generated_from(reports)[-1] == "reports/export.json"
 
 
 def test_the_timing_measures_the_lags_the_shipped_run_records(site):
