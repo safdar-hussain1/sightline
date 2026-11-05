@@ -759,3 +759,106 @@ describe("the frames card's chart in words", () => {
     });
   });
 });
+
+// -- The frame pairs and the split timeline -------------------------------------------
+
+import pairsFile from "../../public/data/leakage/pairs.json?raw";
+import shippedFile from "../../public/data/results.json?raw";
+import clipJson from "../../public/data/clips/c2018/clip.json?raw";
+import {
+  clockTime,
+  gapWords,
+  neighbourWords,
+  pairAlt,
+  pairsLead,
+  timelineAlt,
+  timelineClipNote,
+  timelineLead,
+  timelineNote,
+} from "./copy.ts";
+import { readClipWindow, readPairs, readTimeline } from "./figures.ts";
+
+const realResults = () => JSON.parse(shippedFile) as Record<string, unknown>;
+const thePairs = () => readPairs(JSON.parse(pairsFile) as Record<string, unknown>, realResults());
+
+describe("the frame pairs' sentences", () => {
+  it("says how far each split's closest training frame is, with a lower bound rounded down", () => {
+    expect(pairsLead(thePairs())).toBe(
+      "Six test frames, each beside the training frame that looks most like it. Under the shuffled split that frame is the next one along, " +
+        "30 to 57 ms away. Under the blocked split it is 1,887 frames away or more, at least 1.7 minutes of driving.",
+    );
+  });
+
+  it("rounds the blocked neighbours' lower bound down, never up", () => {
+    const json = JSON.parse(pairsFile) as Record<string, unknown>;
+    // The nearest blocked neighbour 119 s away: 1.98 minutes, so at least 1.9, not 2.0.
+    const pairs = readPairs(patch(patch(json, "pairs.2.blocked.gap_s", 119), "pairs.3.blocked.gap_s", 119), realResults());
+    expect(pairsLead(pairs)).toMatch(/at least 1\.9 minutes of driving\.$/);
+  });
+
+  it("puts a time apart in the unit that reads it best, from the timestamps, never a frame count times a typical interval", () => {
+    expect(gapWords(0.041)).toBe("41 ms");
+    expect(gapWords(0.999)).toBe("999 ms");
+    expect(gapWords(12.34)).toBe("12.3 s");
+    expect(gapWords(107.129)).toBe("1 min 47 s");
+    expect(gapWords(1073.237)).toBe("17 min 53 s");
+    // Whole seconds are rounded down: 1 min 59.9 s is never "2 min 0 s".
+    expect(gapWords(119.9)).toBe("1 min 59 s");
+    expect(gapWords(null)).toBe("");
+  });
+
+  it("names each neighbour by where it is, how alike it looks and what the driver steered", () => {
+    const pair = thePairs().pairs[0];
+    if (!pair) throw new Error("no pair");
+    expect(neighbourWords(pair, "shuffled")).toEqual({
+      where: "1 frame before it, 41 ms",
+      likeness: "Pixel difference 8.8",
+      steering: "Steering 0.5° right",
+    });
+    expect(neighbourWords(pair, "blocked")).toEqual({
+      where: "20,302 frames after it, 17 min 53 s",
+      likeness: "Pixel difference 28.5",
+      steering: "Steering 1.4° right",
+    });
+    expect(pairAlt(pair)).toBe(
+      "Test frame 7,917, the driver steering 0.4° right. Under the shuffled split its closest training frame is 1 frame before it, 41 ms, " +
+        "pixel difference 8.8, steering 0.5° right. Under the blocked split it is 20,302 frames after it, 17 min 53 s, pixel difference 28.5, steering 1.4° right.",
+    );
+  });
+});
+
+describe("the split timeline's sentences", () => {
+  const timeline = () => readTimeline(realResults());
+
+  it("words the drive's length from its measured duration", () => {
+    expect(timelineLead(timeline())).toBe(
+      "The 55.9 minutes of the 2018 drive, from its first frame to its last, and how each split deals its 63,825 frames to training, validation and testing.",
+    );
+    expect(clockTime(1519.063)).toBe("25:19");
+    expect(clockTime(3351.698)).toBe("55:51");
+  });
+
+  it("says what each split's drawing shows, and that the shuffled one is an illustration", () => {
+    expect(timelineNote(timeline(), "shuffled")).toBe(
+      "Every frame is dealt at random: 70% to train, 15% to validate and 15% to test. The band shows an even mix at those shares, an illustration: it does not say which frame went where.",
+    );
+    expect(timelineNote(timeline(), "blocked")).toMatch(/^Blocks of 1,500 frames, dealt train, train, validate, train, train, test, train, over and over, with 250 frames dropped on each side of every boundary between a training block and a held-out one\.$/);
+    expect(timelineNote(timeline(), "later")).toBe(
+      "The first 70% of the drive trains, the next 15% validates and the last 15% tests, with 250 frames dropped on each side of both boundaries.",
+    );
+  });
+
+  it("places the demo's clip from its own timestamps, and says which stretch it sits in", () => {
+    const clip = readClipWindow(JSON.parse(clipJson));
+    expect(timelineClipNote(timeline(), clip)).toBe("The demo’s 2018 clip, from 25:19 to 25:41, sits inside one of the blocked split’s test stretches.");
+    expect(timelineClipNote(timeline(), clip, "later")).toBe("The demo’s 2018 clip, from 25:19 to 25:41, sits inside one of the later-in-the-drive split’s training stretches.");
+    expect(timelineClipNote(timeline(), clip, "shuffled")).toMatch(/dealt frame by frame/);
+  });
+
+  it("describes every split's drawing in words, with the frames it deals", () => {
+    expect(timelineAlt(timeline(), "blocked")).toMatch(
+      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. Above it, how hard the driver was turning, on a square-root scale\.$/,
+    );
+    expect(timelineAlt(timeline(), "shuffled")).toMatch(/dealt at random/);
+  });
+});

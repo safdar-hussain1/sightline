@@ -16,6 +16,7 @@
  * reads it.
  */
 
+import { blockedSegments, laterSegments, roleSizes, shuffledSizes, type DriveClock, type Role, type Segment } from "../charts/timeline.ts";
 import { timedLags } from "../data/timing.ts";
 import { Reader, type Json, type Network, type Spread, type Seeded } from "./reader.ts";
 import { framesInKey } from "./names.ts";
@@ -495,4 +496,189 @@ export function readSplits(raw: Json, url = "data/results.json"): Splits {
     later: { ...later, shares: laterShares, firewall, nearest: r.count("leakage.gaps.forward.test.min_frames") },
     anotherDay: { drive: r.string("baselines.cross_drive.drive"), frames: r.count("baselines.cross_drive.n") },
   };
+}
+
+// -- The frame pairs ------------------------------------------------------------------
+
+/** A test frame's closest training frame under one split. */
+export interface Neighbour {
+  readonly frame: number;
+  /** Its image's file name, in the pairs file's folder. */
+  readonly image: string;
+  readonly gapFrames: number;
+  /** The time between the two frames' timestamps, seconds; null for a drive without them. */
+  readonly gapS: number | null;
+  /** How unlike the two frames look: the root-mean-square difference of their gray levels. */
+  readonly pixelRmse: number;
+  /** The driver's steering on it, degrees. */
+  readonly angle: number;
+}
+
+export interface FramePair {
+  readonly frame: number;
+  readonly image: string;
+  readonly angle: number;
+  readonly shuffled: Neighbour;
+  readonly blocked: Neighbour;
+}
+
+export interface FramePairs {
+  readonly drive: string;
+  readonly pairs: readonly FramePair[];
+  /** The nearest any blocked test frame comes to a training frame, frames. */
+  readonly nearestBlocked: number;
+}
+
+/** A file name the page may load from the pairs file's own folder: no path. */
+const IMAGE_NAME = /^[\w-]+\.jpg$/;
+
+/** The leakage report's example pairs (pairs.json, `json`), checked against
+ * results.json (`raw`): the same drive and seed as its leakage report, each
+ * gap the distance between its two frames, and every blocked neighbour at
+ * least as far as the split keeps any test frame from training. */
+export function readPairs(json: Json, raw: Json, url = "data/leakage/pairs.json"): FramePairs {
+  // Annotated, so a failed check narrows what follows it.
+  const r: Reader = new Reader(json, url);
+  const results: Reader = new Reader(raw, "data/results.json");
+  const drive = r.string("drive");
+  if (drive !== results.at("leakage.drive")) r.fail("drive", `${String(results.at("leakage.drive"))}, the leakage report's drive`);
+  if (r.at("seed") !== results.at("leakage.seed")) r.fail("seed", `${String(results.at("leakage.seed"))}, the leakage report's seed`);
+  const nearestBlocked = results.count("leakage.gaps.blocked.test.min_frames");
+  const image = (path: string) => {
+    const name = r.string(path);
+    if (!IMAGE_NAME.test(name)) r.fail(path, "an image file name in the pairs' folder");
+    return name;
+  };
+  const pairs = r.list("pairs").map((_, i): FramePair => {
+    const at = `pairs.${i}`;
+    const frame = r.index(`${at}.frame`);
+    const side = (key: "leaky" | "blocked"): Neighbour => {
+      const base = `${at}.${key}`;
+      const nn = r.index(`${base}.nn_frame`);
+      const gapFrames = r.count(`${base}.gap_frames`);
+      if (gapFrames !== Math.abs(nn - frame)) r.fail(`${base}.gap_frames`, `${Math.abs(nn - frame)}, the frames between the pair`);
+      const gap = r.at(`${base}.gap_s`);
+      const gapS = gap === null ? null : r.number(`${base}.gap_s`, (v) => v >= 0, "a time of at least 0 seconds");
+      return { frame: nn, image: image(`${base}.image`), gapFrames, gapS, pixelRmse: r.number(`${base}.pixel_rmse`, (v) => v >= 0, "a difference of at least 0"), angle: r.number(`${base}.nn_angle_deg`) };
+    };
+    const blocked = side("blocked");
+    if (blocked.gapFrames < nearestBlocked) r.fail(`${at}.blocked`, `a neighbour at least ${nearestBlocked} frames away, as the blocked split keeps every test frame`);
+    return { frame, image: image(`${at}.image`), angle: r.number(`${at}.angle_deg`), shuffled: side("leaky"), blocked };
+  });
+  return { drive, pairs, nearestBlocked };
+}
+
+// -- The split timeline ------------------------------------------------------------
+
+export interface Timeline {
+  readonly drive: string;
+  readonly frames: number;
+  readonly clock: DriveClock;
+  /** How hard the driver was turning: the mean of |angle| over each bucket, degrees. */
+  readonly meanAbsDeg: readonly number[];
+  /** The edges between straight road, gentle curves and sharp ones, degrees. */
+  readonly turnEdges: readonly [number, number];
+  readonly protocols: {
+    readonly shuffled: { readonly sizes: Readonly<Record<Role, number>>; readonly shares: readonly [number, number, number] };
+    readonly blocked: {
+      readonly sizes: Readonly<Record<Role, number>>;
+      readonly segments: readonly Segment[];
+      readonly block: number;
+      readonly firewall: number;
+      readonly pattern: string;
+    };
+    readonly later: {
+      readonly sizes: Readonly<Record<Role, number>>;
+      readonly segments: readonly Segment[];
+      readonly shares: readonly [number, number, number];
+      readonly firewall: number;
+    };
+  };
+}
+
+/** The drive the runs trained on, laid out in time from its own timestamps
+ * (`drive_profile`), with each split's layout made from `split_rules` and
+ * checked to reproduce the sizes every run recorded (`split_sizes`). */
+export function readTimeline(raw: Json, url = "data/results.json"): Timeline {
+  // Annotated, so a failed check narrows what follows it.
+  const r: Reader = new Reader(raw, url);
+  const drive = r.string("split_sizes.blocked.drive");
+  const base = `drive_profile.drives.${drive}`;
+  const frames = r.count(`${base}.frames`);
+  r.same("split_sizes.blocked.frames", frames, "the frames of the drive's profile");
+  const bucketFrames = r.count("drive_profile.bucket_frames");
+  const buckets = Math.ceil(frames / bucketFrames);
+  const listOf = (key: string) => {
+    const list = r.list(`${base}.${key}`);
+    if (list.length !== buckets) r.fail(`${base}.${key}`, `one entry per bucket of ${bucketFrames} frames (${buckets})`);
+    return list;
+  };
+  const startFrame = listOf("start_frame").map((_, k) => {
+    const value = r.index(`${base}.start_frame.${k}`);
+    if (value !== k * bucketFrames) r.fail(`${base}.start_frame.${k}`, `${k * bucketFrames}, the bucket's first frame`);
+    return value;
+  });
+  let previous = -Infinity;
+  const startS = listOf("start_s").map((_, k) => {
+    const value = r.number(`${base}.start_s.${k}`, (v) => v >= 0, "seconds since the drive's first frame");
+    if (k === 0 && value !== 0) r.fail(`${base}.start_s.0`, "0, the drive's first frame");
+    if (value <= previous) r.fail(`${base}.start_s.${k}`, "later than the bucket before it");
+    previous = value;
+    return value;
+  });
+  const durationS = r.number(`${base}.duration_s`, (v) => v > previous, `a duration past the last bucket's start (${previous} s)`);
+  const meanAbsDeg = listOf("mean_abs_deg").map((_, k) => r.error(`${base}.mean_abs_deg.${k}`));
+
+  const matches = (protocol: string, sizes: Readonly<Record<Role, number>>, made: string) => {
+    for (const [role, key] of [["train", "train"], ["val", "val"], ["test", "test"], ["dropped", "dropped"]] as const) {
+      r.same(`split_sizes.${protocol}.${key}`, sizes[role], made);
+    }
+  };
+  const pattern = r.string("split_rules.blocked.pattern");
+  if (!/^[TVE]+$/.test(pattern)) r.fail("split_rules.blocked.pattern", "a pattern of T, V and E blocks");
+  const block = r.count("split_rules.blocked.block");
+  const firewall = r.index("split_rules.blocked.firewall");
+  const blockedLayout = blockedSegments(frames, block, firewall, pattern);
+  const blocked = { segments: blockedLayout, sizes: roleSizes(blockedLayout), block, firewall, pattern };
+  matches("blocked", blocked.sizes, "the frames the blocked split's rules give");
+  const laterShares = [r.share("split_rules.forward.train_frac"), r.share("split_rules.forward.val_frac"), r.share("split_rules.forward.test_frac")] as const;
+  const laterFirewall = r.index("split_rules.forward.firewall");
+  const later = laterSegments(frames, laterShares[0], laterShares[1], laterFirewall);
+  matches("forward", roleSizes(later), "the frames the later-in-the-drive split's rules give");
+  const shares = [r.share("split_rules.leaky.train_frac"), r.share("split_rules.leaky.val_frac"), r.share("split_rules.leaky.test_frac")] as const;
+  const shuffled = shuffledSizes(frames, shares[0], shares[1]);
+  matches("leaky", shuffled, "the frames the shuffled split's shares give");
+  return {
+    drive,
+    frames,
+    clock: { bucketFrames, frames, startFrame, startS, durationS },
+    meanAbsDeg,
+    turnEdges: [r.number("cutoffs.regime_bins_deg.0", (v) => v > 0, "an angle above 0 degrees"), r.number("cutoffs.regime_bins_deg.1", (v) => v > 0, "an angle above 0 degrees")],
+    protocols: { shuffled: { sizes: shuffled, shares }, blocked, later: { segments: later, sizes: roleSizes(later), shares: laterShares, firewall: laterFirewall } },
+  };
+}
+
+/** Where a demo clip sits in its drive. */
+export interface ClipWindow {
+  readonly drive: string;
+  readonly title: string;
+  readonly firstFrame: number;
+  readonly frames: number;
+  /** Seconds since the drive's first frame, of the clip's first and last frames; null for a drive without timestamps. */
+  readonly firstS: number | null;
+  readonly lastS: number | null;
+  /** The camera frame's width over its height. */
+  readonly aspect: number;
+}
+
+/** A clip.json's place in its drive. */
+export function readClipWindow(json: Json, url = "data/clips/c2018/clip.json"): ClipWindow {
+  // Annotated, so a failed check narrows what follows it.
+  const r: Reader = new Reader(json, url);
+  const time = (key: string) => (r.at(key) === null ? null : r.number(key, (v) => v >= 0, "seconds since the drive's first frame"));
+  const firstS = time("first_s");
+  const lastS = time("last_s");
+  if (firstS !== null && lastS !== null && lastS <= firstS) r.fail("last_s", "later than first_s");
+  const aspect = r.count("camera_size.0") / r.count("camera_size.1");
+  return { drive: r.string("drive"), title: r.string("title"), firstFrame: r.index("first_frame"), frames: r.count("n"), firstS, lastS, aspect };
 }

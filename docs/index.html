@@ -123,9 +123,9 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-NwbDTeQS.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DfoDTgmx.css">
-    <link rel="modulepreload" crossorigin href="./assets/cockpit-QYp4c_6i.js">
+    <script type="module" crossorigin src="./assets/index-BYgqJSXZ.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CiPcQFrE.css">
+    <link rel="modulepreload" crossorigin href="./assets/cockpit-efcBkrUm.js">
   </head>
   <body>
     <header class="masthead" id="masthead">
@@ -406,6 +406,90 @@
               <details class="numbers" data-paired="numbers">
                 <summary>All the numbers in this chart</summary>
                 <div class="numbers__scroll"><table class="numbers__table" data-paired="table"><caption>Each seed’s pair, on the frames both of its splits held out</caption></table></div>
+              </details>
+            </figure>
+          </div>
+          <div class="study study--pairs pairs" data-pairs="root" data-state="loading">
+            <div class="pairs__head">
+              <h3 class="study__title" id="pairs-title">The frame next door</h3>
+              <p class="study__lead" data-pairs="lead">Test frames, each beside the training frame that looks most like it under each split.</p>
+            </div>
+            <figure class="pairs__figure" data-pairs="figure">
+              <fieldset class="pairs__picker" data-pairs="picker">
+                <legend class="pairs__legend">Pick a test frame</legend>
+              </fieldset>
+              <div class="pairs__panels" data-pairs="panels">
+              <p class="visually-hidden" data-pairs="alt"></p>
+              <div class="pair-panel pair-panel--test" data-pairs="panel-test">
+                <p class="pair-panel__title">The test frame</p>
+                <div class="pair-photo" data-pairs="photo-test"><svg class="pair-photo__waiting" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="placeholder__mark" d="M0 52h160v38H0z"/><path class="placeholder__grid" d="M80 52 58 90M80 52l22 38"/></svg></div>
+                <ul class="pair-panel__facts" data-pairs="facts-test" role="list"></ul>
+              </div>
+              <div class="pair-panel pair-panel--shuffled" data-pairs="panel-shuffled">
+                <p class="pair-panel__title">Shuffled split: its closest training frame</p>
+                <div class="pair-photo" data-pairs="photo-shuffled"><svg class="pair-photo__waiting" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="placeholder__mark" d="M0 52h160v38H0z"/><path class="placeholder__grid" d="M80 52 58 90M80 52l22 38"/></svg></div>
+                <ul class="pair-panel__facts" data-pairs="facts-shuffled" role="list"></ul>
+              </div>
+              <div class="pair-panel pair-panel--blocked" data-pairs="panel-blocked">
+                <p class="pair-panel__title">Blocked split: its closest training frame</p>
+                <div class="pair-photo" data-pairs="photo-blocked"><svg class="pair-photo__waiting" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="placeholder__mark" d="M0 52h160v38H0z"/><path class="placeholder__grid" d="M80 52 58 90M80 52l22 38"/></svg></div>
+                <ul class="pair-panel__facts" data-pairs="facts-blocked" role="list"></ul>
+              </div>
+              </div>
+              <div class="compare" data-pairs="compare">
+                <div class="compare__frame" data-pairs="compare-frame">
+                  <div class="compare__under" data-pairs="compare-under"><svg class="pair-photo__waiting" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="placeholder__mark" d="M0 52h160v38H0z"/><path class="placeholder__grid" d="M80 52 58 90M80 52l22 38"/></svg></div>
+                  <div class="compare__over" data-pairs="compare-over"></div>
+                  <span class="compare__handle" data-pairs="compare-handle" aria-hidden="true"></span>
+                  <span class="compare__tag compare__tag--left" aria-hidden="true">Test frame</span>
+                  <span class="compare__tag compare__tag--right" aria-hidden="true">Shuffled neighbour</span>
+                  <input class="compare__range" type="range" min="0" max="100" value="50" step="1" data-pairs="compare-range" aria-label="Slide between the test frame and its closest training frame under the shuffled split" />
+                </div>
+                <div class="compare__words">
+                  <p class="compare__title">Slide between them</p>
+                  <p class="compare__text" data-pairs="compare-text">The test frame and the shuffled split’s closest training frame, one over the other.</p>
+                  <p class="compare__note">Pixel difference is the root-mean-square difference between the gray levels of a test frame and its neighbour, compared as small grayscale copies, the way the lookup table compares them: the lower, the more alike.</p>
+                </div>
+              </div>
+              <details class="numbers" data-pairs="numbers">
+                <summary>All the numbers in these pairs</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-pairs="table"><caption>Each test frame and its closest training frame under each split</caption></table></div>
+              </details>
+            </figure>
+          </div>
+          <div class="study study--timeline timeline" data-timeline="root" data-state="loading">
+            <div class="timeline__head">
+              <h3 class="study__title" id="timeline-title">How the drive was split</h3>
+              <p class="study__lead" data-timeline="lead">The whole drive, from its first frame to its last, and how each split deals its frames to training, validation and testing.</p>
+            </div>
+            <figure class="chart chart--timeline" data-timeline="figure">
+              <div class="chart__head">
+                <p class="chart__title">The drive in time, and what each split does with it</p>
+                <fieldset class="segmented" data-timeline="protocols">
+                  <legend class="visually-hidden">Split</legend>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="shuffled" />Shuffled</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="blocked" checked />Blocked</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="later" />Later in the drive</label>
+                </fieldset>
+              </div>
+              <div class="chart__plot chart__plot--timeline" data-timeline="plot">
+                <svg class="chart__svg timeline-chart timeline-chart--waiting" viewBox="0 0 1000 150" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <path class="placeholder__grid" d="M0 58H1000M0 124H1000"/>
+                  <path class="placeholder__mark" d="M0 70h1000v36H0z"/>
+                </svg>
+                <div class="chart__tip" data-timeline="tip" aria-hidden="true" hidden></div>
+              </div>
+              <ul class="legend timeline__key" role="list">
+                <li class="timeline__role"><span class="legend__swatch role--train" aria-hidden="true"></span>Train <span class="timeline__count" data-timeline="count-train"></span></li>
+                <li class="timeline__role"><span class="legend__swatch role--val" aria-hidden="true"></span>Validate <span class="timeline__count" data-timeline="count-val"></span></li>
+                <li class="timeline__role"><span class="legend__swatch role--test" aria-hidden="true"></span>Test <span class="timeline__count" data-timeline="count-test"></span></li>
+                <li class="timeline__role"><span class="legend__swatch role--dropped" aria-hidden="true"></span>Dropped <span class="timeline__count" data-timeline="count-dropped"></span></li>
+              </ul>
+              <figcaption class="chart__caption" data-timeline="note">Each split deals the drive’s frames to training, validation and testing; the blocked and later-in-the-drive splits drop the frames either side of a boundary between training and held-out road.</figcaption>
+              <p class="timeline__clip" data-timeline="clip"></p>
+              <details class="numbers" data-timeline="numbers">
+                <summary>All the numbers in this chart</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-timeline="table"><caption>The frames each split deals to each part</caption></table></div>
               </details>
             </figure>
           </div>

@@ -179,6 +179,13 @@ export function ordinalWord(n: number): string {
   return ORDINAL_WORDS[n] ?? `number ${fmtCount(n)}`;
 }
 
+/** A measured value with no unit of its own -- a pixel difference, a time
+ * in seconds or minutes the caller names -- with `digits` decimals, never
+ * printed as zero unless it is zero. */
+export function fmtFixed(x: number, digits = 1): string {
+  return measured(x, digits, "");
+}
+
 /** A time in milliseconds: `fmtMs(2.53)` is `2.5 ms`, its number and unit
  * joined by a no-break space (U+00A0, which the page's fonts carry), so a
  * line never ends between them. */

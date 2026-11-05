@@ -625,3 +625,206 @@ describe("the cards", () => {
     expect(q('[data-card="frames"]').dataset["state"]).toBe("ready");
   });
 });
+
+// -- The frame next door, and how the drive was split ---------------------------------------
+
+import pairsFile from "../../public/data/leakage/pairs.json?raw";
+import shippedFile from "../../public/data/results.json?raw";
+import clipFile from "../../public/data/clips/c2018/clip.json?raw";
+import { clockTime, neighbourWords as words2, pairsLead as lead2, timelineAlt as alt2, timelineNote as note2 } from "./copy.ts";
+import { timeOfFrame as timeOf } from "../charts/timeline.ts";
+import { readClipWindow as clipWindow, readPairs as pairsOf, readTimeline as timelineOf } from "./figures.ts";
+import { PairsSection } from "./pairs.ts";
+import { TimelineSection } from "./timeline.ts";
+
+const realRaw = () => JSON.parse(shippedFile) as Record<string, unknown>;
+const URL_PAIRS = "http://localhost/data/leakage/pairs.json";
+
+describe("the frame next door", () => {
+  const mount = (reduced: boolean, frames = clock()) => {
+    mountResults();
+    return { section: new PairsSection(q('[data-pairs="root"]'), () => reduced, frames), frames };
+  };
+  const pairs = () => pairsOf(JSON.parse(pairsFile) as Record<string, unknown>, realRaw());
+  const photo = (split: string) => q<HTMLImageElement>(`[data-pairs="photo-${split}"] img`);
+
+  it("shows the first pair the moment the data is in, every number and picture, with no click", () => {
+    layoutAs(1000, false);
+    const { section } = mount(true);
+    const data = pairs();
+    section.show(data, URL_PAIRS, 455 / 256);
+    expect(text('[data-pairs="lead"]')).toBe(lead2(data));
+    expect(all(".pairs__thumb")).toHaveLength(6);
+    // The data's pairs run from the gentlest steering to the hardest, and the picker says so.
+    expect(text(".pairs__legend")).toBe("Pick a test frame, from the gentlest steering to the hardest");
+    expect(q<HTMLInputElement>('input[name="pairs-frame"]:checked').value).toBe("0");
+    expect(photo("test").src).toBe("http://localhost/data/leakage/frame-7917.jpg");
+    expect(photo("shuffled").src).toBe("http://localhost/data/leakage/frame-7916.jpg");
+    expect(photo("blocked").src).toBe("http://localhost/data/leakage/frame-28219.jpg");
+    expect(all('[data-pairs="facts-shuffled"] li').map((li) => li.textContent)).toEqual(["1 frame before it, 41 ms", "Pixel difference 8.8", "", "Steering 0.5° right"]);
+    expect(all('[data-pairs="table"] tbody tr')).toHaveLength(12);
+    expect(q('[data-pairs="root"]').dataset["state"]).toBe("ready");
+    expect(q('[data-pairs="root"]').style.getPropertyValue("--photo-aspect")).toBe(String(455 / 256));
+  });
+
+  it("shows another pair when its thumbnail is picked, its pictures settling in from the pointer, at once from the keyboard", () => {
+    layoutAs(1000, true);
+    const { section } = mount(false);
+    const data = pairs();
+    section.show(data, URL_PAIRS, null);
+    const animate = vi.fn();
+    for (const split of ["test", "shuffled", "blocked"]) q(`[data-pairs="photo-${split}"]`).animate = animate as unknown as HTMLElement["animate"];
+    const pick = (i: number, pointer: boolean) => {
+      const input = q<HTMLInputElement>(`input[name="pairs-frame"][value="${i}"]`);
+      if (pointer) q('[data-pairs="picker"]').dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      input.checked = true;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    pick(3, false);
+    expect(animate).not.toHaveBeenCalled();
+    expect(photo("test").src).toMatch(/frame-29273\.jpg$/);
+    pick(5, true);
+    expect(animate).toHaveBeenCalledTimes(3);
+    expect(photo("blocked").src).toMatch(/frame-21414\.jpg$|frame-\d+\.jpg$/);
+    const pair = data.pairs[5];
+    expect(text('[data-pairs="facts-blocked"] .pair-panel__where')).toBe(pair ? words2(pair, "blocked").where : "");
+  });
+
+  it("lays the test frame over its shuffled neighbour, the slider choosing how much of each shows", () => {
+    layoutAs(1000, false);
+    const { section } = mount(true);
+    section.show(pairs(), URL_PAIRS, null);
+    const range = q<HTMLInputElement>('[data-pairs="compare-range"]');
+    expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 50%)");
+    range.value = "20";
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 20%)");
+    expect(q('[data-pairs="compare-handle"]').style.left).toBe("20%");
+    expect(range.getAttribute("aria-valuetext")).toBe("80% of the picture shows the shuffled neighbour");
+    expect(q<HTMLImageElement>('[data-pairs="compare-over"] img').src).toMatch(/frame-7916\.jpg$/);
+  });
+
+  it("sweeps the slider across once by itself the first time it nears the screen, and never under reduced motion", () => {
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    section.show(pairs(), URL_PAIRS, null);
+    const over = () => q('[data-pairs="compare-over"]').style.clipPath;
+    frames.tick(400);
+    expect(over()).not.toBe("inset(0 0 0 50%)");
+    frames.tick(4000);
+    expect(over()).toBe("inset(0 0 0 50%)");
+    document.body.innerHTML = "";
+    const still = mount(true);
+    still.section.show(pairs(), URL_PAIRS, null);
+    still.frames.tick(400);
+    expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 50%)");
+  });
+
+  it("says why there are no pairs, in its lead, when they cannot be had", () => {
+    const { section } = mount(true);
+    const error = new AssetError("gone", "missing", URL_PAIRS);
+    section.fail(error);
+    expect(text('[data-pairs="lead"]')).toBe(measurementsFailure(error));
+    expect(q('[data-pairs="root"]').dataset["state"]).toBe("unavailable");
+  });
+});
+
+describe("how the drive was split", () => {
+  const mount = (reduced: boolean, frames = clock()) => {
+    mountResults();
+    return { section: new TimelineSection(q('[data-timeline="root"]'), () => reduced, frames), frames };
+  };
+  const layer = (i: number) => q(`.timeline-chart__layer[data-split="${["shuffled", "blocked", "later"][i] ?? ""}"]`);
+  const clipWidth = (name: string) => Number(document.querySelector(`clipPath[id$="-${name}"] rect`)?.getAttribute("width"));
+
+  it("draws the drive at once on the blocked split, every stretch where the splits module puts it, with the clip marked", () => {
+    layoutAs(1000, false);
+    const { section } = mount(true);
+    const timeline = timelineOf(realRaw());
+    section.show(timeline, clipWindow(JSON.parse(clipFile)));
+    expect(text('[data-timeline="lead"]')).toMatch(/^The 55\.9 minutes of the 2018 drive/);
+    expect(all(".timeline-chart__layer")).toHaveLength(3);
+    // Shuffled, blocked, later: only the blocked layer is shown.
+    expect([layer(0).style.display, layer(1).style.display, layer(2).style.display]).toEqual(["none", "", "none"]);
+    expect(layer(1).querySelectorAll(".timeline-chart__segment")).toHaveLength(timeline.protocols.blocked.segments.length);
+    expect(layer(2).querySelectorAll(".timeline-chart__segment")).toHaveLength(5);
+    expect(text('[data-timeline="note"]')).toBe(note2(timeline, "blocked"));
+    expect(text('[data-timeline="count-dropped"]')).toBe("12,000 frames");
+    expect(q(".timeline-chart desc").textContent).toBe(alt2(timeline, "blocked"));
+    expect(q(".timeline-chart").getAttribute("role")).toBe("img");
+    expect(document.querySelector(".timeline-chart__clip-window")).not.toBeNull();
+    expect(text('[data-timeline="clip"]')).toMatch(/sits inside one of the blocked split’s test stretches\.$/);
+    expect(all('[data-timeline="table"] tbody tr')).toHaveLength(3);
+  });
+
+  it("places every stretch by the drive's own clock: the later split's test part starts where its first frame was recorded", () => {
+    layoutAs(1000, false);
+    const { section } = mount(true);
+    const timeline = timelineOf(realRaw());
+    section.show(timeline, null);
+    const test = layer(2).querySelectorAll(".timeline-chart__segment")[4] as SVGRectElement;
+    // Frame 54,501 is 37 frames into bucket 851.
+    const k = Math.floor(54501 / 64);
+    const t0 = timeline.clock.startS[k] ?? 0;
+    const t1 = timeline.clock.startS[k + 1] ?? 0;
+    const seconds = t0 + ((54501 - k * 64) / 64) * (t1 - t0);
+    expect(Number(test.getAttribute("x"))).toBeCloseTo((seconds / timeline.clock.durationS) * 1000, 1);
+  });
+
+  it("sweeps a new split across the old one from the drive's start, the counts moving in step", () => {
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    const timeline = timelineOf(realRaw());
+    section.show(timeline, null);
+    frames.tick(5000);
+    const radio = q<HTMLInputElement>('input[name="timeline-split"][value="later"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    frames.tick(360);
+    expect(clipWidth("later")).toBeGreaterThan(0);
+    expect(clipWidth("later")).toBeLessThan(1000);
+    expect(layer(1).style.display).toBe("");
+    expect(text('[data-timeline="count-dropped"]')).not.toBe("1,000 frames");
+    frames.tick(2000);
+    expect(clipWidth("later")).toBe(1000);
+    expect(layer(1).style.display).toBe("none");
+    expect(text('[data-timeline="count-dropped"]')).toBe("1,000 frames");
+    expect(text('[data-timeline="note"]')).toBe(note2(timeline, "later"));
+  });
+
+  it("switches at once under reduced motion, and draws the shuffled split as an illustration", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    const timeline = timelineOf(realRaw());
+    section.show(timeline, null);
+    const radio = q<HTMLInputElement>('input[name="timeline-split"][value="shuffled"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    expect([layer(0).style.display, layer(1).style.display]).toEqual(["", "none"]);
+    expect(layer(0).querySelectorAll(".timeline-chart__cell").length).toBeGreaterThan(100);
+    expect(text('[data-timeline="note"]')).toMatch(/an illustration: it does not say which frame went where\.$/);
+  });
+
+  it("names the stretch under the pointer: its part, its times on the drive's clock and its frames", () => {
+    layoutAs(1000, true);
+    const { section } = mount(true);
+    const timeline = timelineOf(realRaw());
+    section.show(timeline, null);
+    const band = q(".timeline-chart__segment");
+    const top = Number(band.getAttribute("y")) + 100;
+    q('[data-timeline="plot"]').dispatchEvent(new PointerEvent("pointermove", { clientX: 5, clientY: top + 4, bubbles: true }));
+    expect(q('[data-timeline="tip"]').hidden).toBe(false);
+    const first = timeline.protocols.blocked.segments[0];
+    expect(text('[data-timeline="tip"]')).toBe(`Train: 0:00 to ${clockTime(timeOf(timeline.clock, first?.to ?? 0))}, frames 0 to ${((first?.to ?? 1) - 1).toLocaleString("en-GB")}`);
+    q('[data-timeline="plot"]').dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }));
+    expect(q('[data-timeline="tip"]').hidden).toBe(true);
+  });
+
+  it("says why there is no timeline, in its lead, when the measurements cannot be had", () => {
+    const { section } = mount(true);
+    const error = new AssetError("gone", "unreachable", "data/results.json");
+    section.fail(error);
+    expect(text('[data-timeline="lead"]')).toBe(measurementsFailure(error));
+    expect(q('[data-timeline="root"]').dataset["state"]).toBe("unavailable");
+  });
+});

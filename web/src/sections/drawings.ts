@@ -50,8 +50,8 @@ function title(parent: SVGElement, x: number, y: number, words: string, extra = 
   const text = svg("text", { class: "card-chart__title", x, y }, parent);
   text.textContent = words;
   if (!extra) return 14;
-  if (textWidth(`${words} · ${extra}`) <= room) {
-    svg("tspan", { class: "card-chart__extra" }, text).textContent = ` · ${extra}`;
+  if (textWidth(`${words} (${extra})`) <= room) {
+    svg("tspan", { class: "card-chart__extra" }, text).textContent = ` (${extra})`;
     return 14;
   }
   svg("tspan", { class: "card-chart__extra", x, dy: 15 }, text).textContent = extra;

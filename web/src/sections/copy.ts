@@ -15,7 +15,7 @@ import type { Agreement, CockpitState } from "../cockpit/live.ts";
 import { splitTitle } from "../cockpit/copy.ts";
 import { driveName } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
-import { countWord, fmtCount, fmtDeg, fmtPct, fmtRatio, fmtSpread, ordinalWord } from "../format.ts";
+import { countWord, fmtCount, fmtDeg, fmtFixed, fmtPct, fmtRatio, fmtSpread, ordinalWord, steerParts } from "../format.ts";
 import {
   LADDER_MODELS,
   ORACLES,
@@ -33,7 +33,12 @@ import {
   type Rung,
   type Splits,
   type YardstickSet,
+  type ClipWindow,
+  type FramePair,
+  type FramePairs,
+  type Timeline,
 } from "./figures.ts";
+import type { Role } from "../charts/timeline.ts";
 import { framesInKey, networkName } from "./names.ts";
 
 export {
@@ -695,4 +700,165 @@ export function protocolTexts(splits: Splits): { shuffled: string; blocked: stri
       `with ${fmtCount(later.firewall)} frames dropped on each side of both boundaries (${fmtCount(later.dropped)} in all): ${counts(later)}.`,
     anotherDay: `${capitalised(driveTitle(splits.anotherDay.drive))}, recorded on another day: ${fmtCount(splits.anotherDay.frames)} of its frames, scored by the networks trained with stretches held back.`,
   };
+}
+
+// -- The frame pairs ------------------------------------------------------------------
+
+/** How far apart two frames were taken, from their timestamps, in the unit
+ * that reads best: milliseconds under a second, seconds under a minute, then
+ * minutes and whole seconds (rounded down). Empty without timestamps. */
+export function gapWords(seconds: number | null): string {
+  if (seconds === null) return "";
+  if (seconds < 1) return `${fmtCount(Math.round(seconds * 1000))} ms`;
+  if (seconds < 60) return `${fmtFixed(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${fmtCount(minutes)} min ${fmtCount(Math.floor(seconds - minutes * 60))} s`;
+}
+
+/** A lower bound, rounded down to one decimal: never above what it bounds. */
+function atLeast(value: number): string {
+  return fmtFixed(Math.floor(value * 10) / 10);
+}
+
+/** What the pairs show, from all of them: the shuffled split's closest
+ * training frame is next door, the blocked split's far away. */
+export function pairsLead(pairs: FramePairs): string {
+  const list = pairs.pairs;
+  const near = list.map((pair) => pair.shuffled);
+  const far = list.map((pair) => pair.blocked);
+  const nearFrames = near.map((side) => side.gapFrames);
+  const where = nearFrames.every((gap) => gap === 1) ? "the next one along" : `${fmtCount(Math.min(...nearFrames))} to ${fmtCount(Math.max(...nearFrames))} frames away`;
+  const nearTimes = near.flatMap((side) => (side.gapS === null ? [] : [side.gapS]));
+  let nearTime = "";
+  if (nearTimes.length === near.length) {
+    const [low, high] = [Math.min(...nearTimes), Math.max(...nearTimes)];
+    nearTime = high < 1 ? `, ${fmtCount(Math.round(low * 1000))} to ${gapWords(high)} away` : `, ${gapWords(low)} to ${gapWords(high)} away`;
+  }
+  const farTimes = far.flatMap((side) => (side.gapS === null ? [] : [side.gapS]));
+  const farTime = farTimes.length === far.length ? `, at least ${atLeast(Math.min(...farTimes) / 60)} minutes of driving` : "";
+  return (
+    `${capitalised(countWord(list.length))} test frames, each beside the training frame that looks most like it. ` +
+    `Under the shuffled split that frame is ${where}${nearTime}. ` +
+    `Under the blocked split it is ${fmtCount(Math.min(...far.map((side) => side.gapFrames)))} frames away or more${farTime}.`
+  );
+}
+
+const steering = (angle: number) => {
+  const { size, side } = steerParts(angle);
+  return side ? `${size} ${side}` : size;
+};
+
+/** One neighbour, in the words of its panel: where it is, how alike it
+ * looks, and what the driver steered. */
+export function neighbourWords(pair: FramePair, split: "shuffled" | "blocked"): { where: string; likeness: string; steering: string } {
+  const side = pair[split];
+  const direction = side.frame < pair.frame ? "before" : "after";
+  const time = gapWords(side.gapS);
+  return {
+    where: `${fmtCount(side.gapFrames)} frame${side.gapFrames === 1 ? "" : "s"} ${direction} it${time ? `, ${time}` : ""}`,
+    likeness: `Pixel difference ${fmtFixed(side.pixelRmse)}`,
+    steering: `Steering ${steering(side.angle)}`,
+  };
+}
+
+/** A test frame's own label, as its panel says it. */
+export function testFrameWords(pair: FramePair): { frame: string; steering: string } {
+  return { frame: `Frame ${fmtCount(pair.frame)}`, steering: `Steering ${steering(pair.angle)}` };
+}
+
+/** The picker's legend: the order of the pairs, when they come in one. */
+export function pickerLegend(pairs: FramePairs): string {
+  const sizes = pairs.pairs.map((pair) => Math.abs(pair.angle));
+  const rising = sizes.every((size, i) => i === 0 || size >= (sizes[i - 1] as number));
+  return rising && sizes.length > 1 ? "Pick a test frame, from the gentlest steering to the hardest" : "Pick a test frame";
+}
+
+/** A pair, in one passage: the text alternative of its three pictures. */
+export function pairAlt(pair: FramePair): string {
+  const [near, far] = [neighbourWords(pair, "shuffled"), neighbourWords(pair, "blocked")];
+  const lower = (words: string) => words.charAt(0).toLowerCase() + words.slice(1);
+  return (
+    `Test frame ${fmtCount(pair.frame)}, the driver steering ${steering(pair.angle)}. ` +
+    `Under the shuffled split its closest training frame is ${near.where}, ${lower(near.likeness)}, ${lower(near.steering)}. ` +
+    `Under the blocked split it is ${far.where}, ${lower(far.likeness)}, ${lower(far.steering)}.`
+  );
+}
+
+// -- The split timeline ------------------------------------------------------------
+
+/** Seconds as minutes and seconds on the drive's clock, "25:19" (rounded down). */
+export function clockTime(seconds: number): string {
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+const minutesOf = (seconds: number) => fmtFixed(seconds / 60);
+
+export type TimelineProtocol = "shuffled" | "blocked" | "later";
+
+export function timelineLead(timeline: Timeline): string {
+  return (
+    `The ${minutesOf(timeline.clock.durationS)} minutes of ${driveTitle(timeline.drive)}, from its first frame to its last, ` +
+    `and how each split deals its ${fmtCount(timeline.frames)} frames to training, validation and testing.`
+  );
+}
+
+/** What the band shows for one split, with the rules results.json states. */
+export function timelineNote(timeline: Timeline, protocol: TimelineProtocol): string {
+  const { shuffled, blocked, later } = timeline.protocols;
+  if (protocol === "shuffled") {
+    const shares = shuffled.shares;
+    return (
+      `Every frame is dealt at random: ${fmtPct(shares[0])} to train, ${fmtPct(shares[1])} to validate and ${fmtPct(shares[2])} to test. ` +
+      "The band shows an even mix at those shares, an illustration: it does not say which frame went where."
+    );
+  }
+  if (protocol === "blocked") {
+    return (
+      `Blocks of ${fmtCount(blocked.block)} frames, dealt ${patternWords(blocked.pattern)}, over and over, ` +
+      `with ${fmtCount(blocked.firewall)} frames dropped on each side of every boundary between a training block and a held-out one.`
+    );
+  }
+  return (
+    `The first ${fmtPct(later.shares[0])} of the drive trains, the next ${fmtPct(later.shares[1])} validates and the last ${fmtPct(later.shares[2])} tests, ` +
+    `with ${fmtCount(later.firewall)} frames dropped on each side of both boundaries.`
+  );
+}
+
+/** What each split does with a frame, as the band's key names it. */
+export const ROLE_NAMES: Readonly<Record<Role, string>> = { train: "Train", val: "Validate", test: "Test", dropped: "Dropped" };
+
+const ROLE_STRETCH: Readonly<Record<Role, string>> = { train: "training", val: "validation", test: "test", dropped: "dropped" };
+
+/** Where the demo's clip sits: its times on the drive's clock, and the
+ * stretch of the picked split it falls in, when it falls in one. */
+export function timelineClipNote(timeline: Timeline, clip: ClipWindow, protocol: TimelineProtocol = "blocked"): string {
+  const [year] = splitTitle(clip.title);
+  const name = year ? `the demo’s ${year} clip` : "the demo clip";
+  const when = clip.firstS !== null && clip.lastS !== null ? `, from ${clockTime(clip.firstS)} to ${clockTime(clip.lastS)},` : "";
+  if (protocol === "shuffled") return `${capitalised(name)}${when} is dealt frame by frame like the rest of the drive: any of its frames may train.`;
+  const way = protocol === "blocked" ? "blocked" : "later-in-the-drive";
+  const end = clip.firstFrame + clip.frames;
+  const inside = timeline.protocols[protocol].segments.find((s) => s.from <= clip.firstFrame && end <= s.to);
+  return inside
+    ? `${capitalised(name)}${when} sits inside one of the ${way} split’s ${ROLE_STRETCH[inside.role]} stretches.`
+    : `${capitalised(name)}${when} spans more than one of the ${way} split’s stretches.`;
+}
+
+/** The band's text alternative for one split. */
+export function timelineAlt(timeline: Timeline, protocol: TimelineProtocol): string {
+  const head = `${capitalised(driveTitle(timeline.drive))}, ${minutesOf(timeline.clock.durationS)} minutes, `;
+  const trace = " Above it, how hard the driver was turning, on a square-root scale.";
+  if (protocol === "shuffled") {
+    const s = timeline.protocols.shuffled.sizes;
+    return `${head}split the shuffled way: ${fmtCount(s.train)} frames to train, ${fmtCount(s.val)} to validate and ${fmtCount(s.test)} to test, every frame dealt at random.${trace}`;
+  }
+  const layout = protocol === "blocked" ? timeline.protocols.blocked : timeline.protocols.later;
+  const s = layout.sizes;
+  const stretches = layout.segments.filter((segment) => segment.role !== "dropped").length;
+  const name = protocol === "blocked" ? "the blocked way" : "later in the drive";
+  return (
+    `${head}split ${name}: ${fmtCount(s.train)} frames to train, ${fmtCount(s.val)} to validate, ${fmtCount(s.test)} to test ` +
+    `and ${fmtCount(s.dropped)} dropped, in ${fmtCount(stretches)} stretches.${trace}`
+  );
 }

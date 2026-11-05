@@ -191,6 +191,16 @@
   --model-oneframe: #92123b;
   --model-straight: #8b85a1;
   --bar-model: var(--model-sightlinenet);
+
+  /* What a split does with a frame, on the split timeline: three hues from a
+     colour-vision validator (all pairs at least 9.2 apart, OKLab x100, under
+     simulated red-green colour blindness, and 20 in full colour), every one
+     named beside its swatch and counted in the chart's table, and the frames
+     dropped at a firewall in grey. */
+  --role-train: #2a78d6;
+  --role-val: #1baf7a;
+  --role-test: #eb6834;
+  --role-dropped: #8b85a1;
   --bar-straight: var(--model-straight);
 
   /* The nav's marker under the view on screen. */
@@ -230,6 +240,10 @@
     --model-pilotnet: #05ab86;
     --model-oneframe: #cc345f;
     --model-straight: #736c8c;
+    --role-train: #3987e5;
+    --role-val: #199e70;
+    --role-test: #d95926;
+    --role-dropped: #736c8c;
     --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
   }
 }
@@ -255,6 +269,10 @@
   --model-pilotnet: #05ab86;
   --model-oneframe: #cc345f;
   --model-straight: #736c8c;
+  --role-train: #3987e5;
+  --role-val: #199e70;
+  --role-test: #d95926;
+  --role-dropped: #736c8c;
   --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
 }
 
@@ -2635,6 +2653,8 @@ html:not(.js) .windshield__status {
 
 /* Every number behind a chart, one click away, as a plain table. */
 .numbers {
+  /* A grid item may shrink below its table, so the table scrolls in its box. */
+  min-inline-size: 0;
   font-size: var(--text-sm);
   border-block-start: 1px solid var(--line);
   padding-block-start: var(--space-3);
@@ -3284,8 +3304,353 @@ html:not(.js) .windshield__status {
   fill: none;
 }
 
+/* The frame next door: a strip of test frames to pick from, the picked one
+   beside its closest training frame under each split, and the test frame
+   over its shuffled neighbour with a slider between them. */
+.pairs__head,
+.timeline__head {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 46rem;
+}
+
+.pairs__figure {
+  display: grid;
+  gap: var(--space-6);
+  margin: var(--space-6) 0 0;
+  padding: var(--space-5);
+  border-radius: var(--radius-screen);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.pairs__picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pairs__legend {
+  inline-size: 100%;
+  margin-block-end: var(--space-2);
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.pairs__thumb {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+  inline-size: clamp(5.5rem, 14vw, 8rem);
+  padding: 0.3rem;
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: pointer;
+  transition: box-shadow 160ms ease-out, transform 160ms ease-out, background-color 160ms ease-out;
+}
+
+.pairs__thumb:active {
+  transform: scale(0.97);
+}
+
+.pairs__thumb:has(:checked) {
+  background: color-mix(in oklab, var(--accent) 9%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.pairs__thumb:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.pairs__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pairs__thumb-image {
+  display: block;
+  inline-size: 100%;
+  aspect-ratio: var(--photo-aspect, 16 / 9);
+  object-fit: cover;
+  border-radius: 0.375rem;
+  background: var(--console);
+}
+
+.pairs__thumb-label {
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pairs__panels {
+  display: grid;
+  gap: var(--space-5);
+}
+
+@media (min-width: 48rem) {
+  .pairs__panels {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.pair-panel {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+.pair-panel__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pair-photo {
+  aspect-ratio: var(--photo-aspect, 16 / 9);
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: var(--console);
+}
+
+.pair-photo :is(img, svg) {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.pair-panel__facts {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-panel__where {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* How unlike a neighbour looks, on the pairs' one scale: a quiet meter. */
+.pair-meter {
+  block-size: 0.375rem;
+  margin-block: 0.15rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.pair-meter__bar {
+  display: block;
+  block-size: 100%;
+  inline-size: calc(var(--likeness) / var(--likeness-scale) * 100%);
+  border-radius: 999px;
+  background: var(--ink-3);
+}
+
+.compare {
+  display: grid;
+  gap: var(--space-5);
+  align-items: center;
+}
+
+@media (min-width: 48rem) {
+  .compare {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+}
+
+.compare__frame {
+  position: relative;
+  aspect-ratio: var(--photo-aspect, 16 / 9);
+  overflow: hidden;
+  border-radius: var(--radius-screen);
+  background: var(--console);
+}
+
+.compare__frame:has(.compare__range:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.compare__under,
+.compare__over {
+  position: absolute;
+  inset: 0;
+}
+
+.compare__under :is(img, svg),
+.compare__over img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.compare__over {
+  clip-path: inset(0 0 0 50%);
+}
+
+.compare__handle {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  inline-size: 2px;
+  margin-inline-start: -1px;
+  background: var(--console-ink);
+  box-shadow: 0 0 0 1px rgb(14 11 29 / 35%);
+  pointer-events: none;
+}
+
+.compare__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  border-radius: 50%;
+  background: var(--console-ink);
+  box-shadow: 0 2px 10px rgb(14 11 29 / 45%);
+  transform: translate(-50%, -50%);
+}
+
+.compare__tag {
+  position: absolute;
+  top: 0.625rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-chip);
+  background: rgb(14 11 29 / 74%);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--console-ink);
+  pointer-events: none;
+}
+
+.compare__tag--left {
+  left: 0.625rem;
+}
+
+.compare__tag--right {
+  right: 0.625rem;
+}
+
+.compare__range {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+.compare__words {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.compare__title {
+  font: 600 1.25rem / 1.2 var(--font-display);
+  color: var(--ink);
+}
+
+.compare__text {
+  line-height: 1.5;
+}
+
+.compare__note {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* How the drive was split: how hard the driver was turning, over the drive
+   in time, and each split's stretches as a band beneath it. */
+.chart--timeline {
+  margin-block-start: var(--space-6);
+}
+
+.timeline-chart__area {
+  fill: color-mix(in oklab, var(--ink-3) 24%, transparent);
+  stroke: var(--ink-3);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+}
+
+.timeline-chart__rule {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.timeline-chart__rule--zero {
+  stroke: var(--line-strong);
+}
+
+.timeline-chart__tick {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.timeline-chart__clip-window {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.role--train {
+  fill: var(--role-train);
+  background-color: var(--role-train);
+}
+
+.role--val {
+  fill: var(--role-val);
+  background-color: var(--role-val);
+}
+
+.role--test {
+  fill: var(--role-test);
+  background-color: var(--role-test);
+}
+
+.role--dropped {
+  fill: var(--role-dropped);
+  background-color: var(--role-dropped);
+}
+
+.timeline__count {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline__clip {
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.timeline__clip:empty {
+  display: none;
+}
+
 /* A part that cannot be shown says why in its words, and drops its chart. */
-:is([data-paired="root"], [data-ladder="root"])[data-state="unavailable"] :is(.chart, .sketch, .study__meaning, .study__scale),
+:is([data-paired="root"], [data-ladder="root"], [data-timeline="root"])[data-state="unavailable"] :is(.chart, .sketch, .study__meaning, .study__scale),
+[data-pairs="root"][data-state="unavailable"] .pairs__figure,
 .card[data-state="unavailable"] :is(.card__figure, .card__note, .card__verdict),
 .sources-card[data-state="unavailable"] :is([data-card="live"], .sources-card__part--splits) {
   display: none;

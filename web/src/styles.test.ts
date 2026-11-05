@@ -107,3 +107,9 @@ describe("the sources card without its data", () => {
     expect(block).toMatch(/\.sources-card\[data-state="unavailable"\] \.sources-card__grid \{\s*grid-template-columns: minmax\(0, 0\.9fr\) minmax\(0, 1fr\);/);
   });
 });
+
+describe("the tables behind the charts", () => {
+  it("scroll inside their own box on a phone, never widening the page: a grid item may shrink below its table", () => {
+    expect(css).toMatch(/\n\.numbers \{[^}]*min-inline-size:\s*0;/);
+  });
+});

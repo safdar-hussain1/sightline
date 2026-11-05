@@ -67,6 +67,8 @@ export function resultsHtml(): string {
           </ul>
           <p class="trust" data-results="trust"><svg class="trust__icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="8.25"/><path class="trust__tick" d="m6.2 10.3 2.5 2.5 5.1-5.4"/><path class="trust__alert" d="M10 5.6v5.6M10 14.1v.3"/></svg><span class="trust__text"><span class="trust__verdict" data-results="trust-verdict" role="status"></span><span class="trust__progress" data-results="trust-text">Checking this browser against the same model run in Python…</span></span></p>
           ${pairedHtml()}
+          ${pairsHtml()}
+          ${timelineHtml()}
           ${ladderHtml()}
           ${cardsHtml()}
         </div>
@@ -146,6 +148,103 @@ const SLOPE_PLACEHOLDER = `<svg class="chart__svg slope slope--waiting" viewBox=
                   <path class="placeholder__grid" d="M38 30H596M38 96H596M38 162H596M38 228H596M38 294H596"/>
                   <path class="placeholder__mark" d="M114 254 520 150M114 250 520 176M114 246 520 160"/>
                 </svg>`;
+
+// -- The frame next door ---------------------------------------------------------------
+
+/** A photo's frame before the data has loaded: the road drawn in quiet grey. */
+const PHOTO_PLACEHOLDER = `<svg class="pair-photo__waiting" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="placeholder__mark" d="M0 52h160v38H0z"/><path class="placeholder__grid" d="M80 52 58 90M80 52l22 38"/></svg>`;
+
+function pairPanel(split: "test" | "shuffled" | "blocked", title: string): string {
+  return `<div class="pair-panel pair-panel--${split}" data-pairs="panel-${split}">
+                <p class="pair-panel__title">${title}</p>
+                <div class="pair-photo" data-pairs="photo-${split}">${PHOTO_PLACEHOLDER}</div>
+                <ul class="pair-panel__facts" data-pairs="facts-${split}" role="list"></ul>
+              </div>`;
+}
+
+export function pairsHtml(): string {
+  return `<div class="study study--pairs pairs" data-pairs="root" data-state="loading">
+            <div class="pairs__head">
+              <h3 class="study__title" id="pairs-title">The frame next door</h3>
+              <p class="study__lead" data-pairs="lead">Test frames, each beside the training frame that looks most like it under each split.</p>
+            </div>
+            <figure class="pairs__figure" data-pairs="figure">
+              <fieldset class="pairs__picker" data-pairs="picker">
+                <legend class="pairs__legend">Pick a test frame</legend>
+              </fieldset>
+              <div class="pairs__panels" data-pairs="panels">
+              <p class="visually-hidden" data-pairs="alt"></p>
+              ${pairPanel("test", "The test frame")}
+              ${pairPanel("shuffled", "Shuffled split: its closest training frame")}
+              ${pairPanel("blocked", "Blocked split: its closest training frame")}
+              </div>
+              <div class="compare" data-pairs="compare">
+                <div class="compare__frame" data-pairs="compare-frame">
+                  <div class="compare__under" data-pairs="compare-under">${PHOTO_PLACEHOLDER}</div>
+                  <div class="compare__over" data-pairs="compare-over"></div>
+                  <span class="compare__handle" data-pairs="compare-handle" aria-hidden="true"></span>
+                  <span class="compare__tag compare__tag--left" aria-hidden="true">Test frame</span>
+                  <span class="compare__tag compare__tag--right" aria-hidden="true">Shuffled neighbour</span>
+                  <input class="compare__range" type="range" min="0" max="100" value="50" step="1" data-pairs="compare-range" aria-label="Slide between the test frame and its closest training frame under the shuffled split" />
+                </div>
+                <div class="compare__words">
+                  <p class="compare__title">Slide between them</p>
+                  <p class="compare__text" data-pairs="compare-text">The test frame and the shuffled split’s closest training frame, one over the other.</p>
+                  <p class="compare__note">Pixel difference is the root-mean-square difference between the gray levels of a test frame and its neighbour, compared as small grayscale copies, the way the lookup table compares them: the lower, the more alike.</p>
+                </div>
+              </div>
+              <details class="numbers" data-pairs="numbers">
+                <summary>All the numbers in these pairs</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-pairs="table"><caption>Each test frame and its closest training frame under each split</caption></table></div>
+              </details>
+            </figure>
+          </div>`;
+}
+
+// -- How the drive was split ------------------------------------------------------------
+
+const TIMELINE_PLACEHOLDER = `<svg class="chart__svg timeline-chart timeline-chart--waiting" viewBox="0 0 1000 150" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <path class="placeholder__grid" d="M0 58H1000M0 124H1000"/>
+                  <path class="placeholder__mark" d="M0 70h1000v36H0z"/>
+                </svg>`;
+
+export function timelineHtml(): string {
+  const role = (key: string, name: string) =>
+    `<li class="timeline__role"><span class="legend__swatch role--${key}" aria-hidden="true"></span>${name} <span class="timeline__count" data-timeline="count-${key}"></span></li>`;
+  return `<div class="study study--timeline timeline" data-timeline="root" data-state="loading">
+            <div class="timeline__head">
+              <h3 class="study__title" id="timeline-title">How the drive was split</h3>
+              <p class="study__lead" data-timeline="lead">The whole drive, from its first frame to its last, and how each split deals its frames to training, validation and testing.</p>
+            </div>
+            <figure class="chart chart--timeline" data-timeline="figure">
+              <div class="chart__head">
+                <p class="chart__title">The drive in time, and what each split does with it</p>
+                <fieldset class="segmented" data-timeline="protocols">
+                  <legend class="visually-hidden">Split</legend>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="shuffled" />Shuffled</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="blocked" checked />Blocked</label>
+                  <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="later" />Later in the drive</label>
+                </fieldset>
+              </div>
+              <div class="chart__plot chart__plot--timeline" data-timeline="plot">
+                ${TIMELINE_PLACEHOLDER}
+                <div class="chart__tip" data-timeline="tip" aria-hidden="true" hidden></div>
+              </div>
+              <ul class="legend timeline__key" role="list">
+                ${role("train", "Train")}
+                ${role("val", "Validate")}
+                ${role("test", "Test")}
+                ${role("dropped", "Dropped")}
+              </ul>
+              <figcaption class="chart__caption" data-timeline="note">Each split deals the drive’s frames to training, validation and testing; the blocked and later-in-the-drive splits drop the frames either side of a boundary between training and held-out road.</figcaption>
+              <p class="timeline__clip" data-timeline="clip"></p>
+              <details class="numbers" data-timeline="numbers">
+                <summary>All the numbers in this chart</summary>
+                <div class="numbers__scroll"><table class="numbers__table" data-timeline="table"><caption>The frames each split deals to each part</caption></table></div>
+              </details>
+            </figure>
+          </div>`;
+}
 
 // -- The ladder -------------------------------------------------------------------------
 

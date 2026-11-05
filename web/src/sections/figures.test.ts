@@ -363,3 +363,69 @@ describe("readFrames", () => {
     expect(readFrames(patch(resultsFixture(), "timing.drive2018", null))).toBeNull();
   });
 });
+
+// -- The frame pairs and the split timeline -----------------------------------------
+
+import pairsFile from "../../public/data/leakage/pairs.json?raw";
+import clipFile from "../../public/data/clips/c2018/clip.json?raw";
+import { readClipWindow, readPairs, readTimeline } from "./figures.ts";
+
+const real = () => JSON.parse(shipped) as Record<string, unknown>;
+const pairsJson = () => JSON.parse(pairsFile) as Record<string, unknown>;
+
+describe("readPairs", () => {
+  it("reads every pair: the test frame, and its closest training frame under each split, with their gaps, likeness and labels", () => {
+    const pairs = readPairs(pairsJson(), real());
+    expect(pairs.drive).toBe("drive2018");
+    expect(pairs.pairs).toHaveLength(6);
+    expect(pairs.pairs[0]).toEqual({
+      frame: 7917,
+      image: "frame-7917.jpg",
+      angle: 0.4000000059604645,
+      shuffled: { frame: 7916, image: "frame-7916.jpg", gapFrames: 1, gapS: 0.041, pixelRmse: 8.786114474962163, angle: 0.5 },
+      blocked: { frame: 28219, image: "frame-28219.jpg", gapFrames: 20302, gapS: 1073.237, pixelRmse: 28.473862043437446, angle: 1.409999966621399 },
+    });
+    expect(pairs.nearestBlocked).toBe(501);
+  });
+
+  it("refuses a pair whose gap is not its frames' distance, a blocked neighbour nearer than the split allows, or an image outside its folder", () => {
+    const bad = (path: string, value: unknown) => refusal((json) => readPairs(patch(json, path, value), real()), pairsJson());
+    expect(bad("pairs.0.leaky.gap_frames", 2)?.message).toMatch(/pairs\.0\.leaky\.gap_frames/);
+    expect(bad("pairs.0.blocked.nn_frame", 7917 + 400)?.message).toMatch(/pairs\.0\.blocked/);
+    expect(bad("pairs.0.image", "../secret.jpg")?.message).toMatch(/pairs\.0\.image/);
+    // A blocked neighbour nearer than any test frame comes to training under the blocked split.
+    const near = patch(patch(pairsJson(), "pairs.0.blocked.nn_frame", 7917 + 400), "pairs.0.blocked.gap_frames", 400);
+    expect(refusal((json) => readPairs(json, real()), near)?.message).toMatch(/pairs\.0\.blocked must be a neighbour at least 501 frames away/);
+    expect(bad("pairs.1.blocked.gap_s", -1)?.message).toMatch(/pairs\.1\.blocked\.gap_s/);
+    expect(bad("drive", "drive2017")?.message).toMatch(/drive/);
+    expect(bad("seed", 4)?.message).toMatch(/seed/);
+  });
+});
+
+describe("readTimeline", () => {
+  it("lays the drive out in time from its own clock, with each split drawn exactly as the runs recorded it", () => {
+    const t = readTimeline(real());
+    expect(t.drive).toBe("drive2018");
+    expect(t.frames).toBe(63825);
+    expect(t.clock.durationS).toBe(3351.698);
+    expect(t.clock.startS).toHaveLength(998);
+    expect(t.protocols.blocked.sizes).toEqual({ train: 39825, val: 6000, test: 6000, dropped: 12000 });
+    expect(t.protocols.later.sizes).toEqual({ train: 44427, val: 9074, test: 9324, dropped: 1000 });
+    expect(t.protocols.shuffled.sizes).toEqual({ train: 44677, val: 9574, test: 9574, dropped: 0 });
+    expect(t.protocols.later.segments.map((s) => [s.from, s.to])).toEqual([[0, 44427], [44427, 44927], [44927, 54001], [54001, 54501], [54501, 63825]]);
+  });
+
+  it("refuses rules that do not reproduce the recorded sizes, or a clock that runs backwards", () => {
+    expect(refusal(readTimeline, patch(real(), "split_rules.blocked.firewall", 200))?.message).toMatch(/split_sizes\.blocked|firewall/);
+    expect(refusal(readTimeline, patch(real(), "split_sizes.forward.val", 9075))?.message).toMatch(/split_sizes\.forward/);
+    expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.start_s.5", 1))?.message).toMatch(/start_s\.5/);
+    expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.start_frame.3", 190))?.message).toMatch(/start_frame\.3/);
+    expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.duration_s", 3000))?.message).toMatch(/duration_s/);
+  });
+});
+
+describe("readClipWindow", () => {
+  it("reads where the demo's clip sits in its drive, in frames and in seconds", () => {
+    expect(readClipWindow(JSON.parse(clipFile))).toEqual({ drive: "drive2018", title: "2018: minutes it never trained on", firstFrame: 28752, frames: 420, firstS: 1519.063, lastS: 1541.774, aspect: 455 / 256 });
+  });
+});

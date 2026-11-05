@@ -11,6 +11,7 @@
  */
 
 import type { LiveCockpit } from "./cockpit/live.ts";
+import { fetchJson } from "./data/load.ts";
 import type { Results } from "./data/types.ts";
 import type { ViewName } from "./router.ts";
 import { Cards } from "./sections/cards.ts";
@@ -20,12 +21,18 @@ import {
   readLadder,
   readLegacy,
   readPaired,
+  readClipWindow,
+  readPairs,
   readParity,
   readRegimes,
   readSplits,
+  readTimeline,
   readYardsticks,
+  Reader,
   type Figures,
 } from "./sections/figures.ts";
+import { PairsSection } from "./sections/pairs.ts";
+import { TimelineSection } from "./sections/timeline.ts";
 import { Headline } from "./sections/headline.ts";
 import { LadderSection } from "./sections/ladder.ts";
 import { PairedSection } from "./sections/paired.ts";
@@ -53,16 +60,18 @@ export function startResults(results: Promise<Results>, cockpit: Promise<LiveCoc
   mountResultsMarkup();
   const headline = Headline.mount();
   const paired = PairedSection.mount();
+  const pairs = PairsSection.mount();
+  const timeline = TimelineSection.mount();
   const ladder = LadderSection.mount();
   const cards = Cards.mount();
   headline?.onCheck((look, text) => cards?.live(look, text));
-  const sections = [headline, paired, ladder, cards];
+  const sections = [headline, paired, pairs, timeline, ladder, cards];
   const shown = (name: ViewName) => {
     for (const section of sections) section?.viewShown(name);
   };
 
   results.then(
-    ({ raw }) => {
+    ({ raw, assets }) => {
       let figures: Figures | null = null;
       part(
         () => {
@@ -73,6 +82,45 @@ export function startResults(results: Promise<Results>, cockpit: Promise<LiveCoc
       );
       part(() => paired?.show(readPaired(raw), (figures ?? readFigures(raw)).gaps), (error) => paired?.fail(error));
       part(() => ladder?.show(readLadder(raw), readSplits(raw)), (error) => ladder?.fail(error));
+      // The pairs, and where the demo's clips were recorded, come in files of their own.
+      const base = new URL("./", document.baseURI);
+      const clips = Promise.all(
+        Object.values(assets.clips).map((path) => {
+          const url = new URL(path, base).href;
+          return fetchJson(url).then(
+            (json) => readClipWindow(json as Readonly<Record<string, unknown>>, url),
+            () => null,
+          );
+        }),
+      );
+      void clips.then((windows) => {
+        part(
+          () => {
+            const layout = readTimeline(raw);
+            timeline?.show(layout, windows.find((window) => window?.drive === layout.drive) ?? null);
+          },
+          (error) => timeline?.fail(error),
+        );
+        // The pairs' frames are camera frames of their drive, as its clip's are.
+        const aspectOf = (drive: string) => windows.find((window) => window?.drive === drive)?.aspect ?? null;
+        part(
+          () => {
+            const pairsUrl = new URL(new Reader(raw, "data/results.json").string("assets.leakage_pairs"), base).href;
+            void fetchJson(pairsUrl).then(
+              (json) =>
+                part(
+                  () => {
+                    const read = readPairs(json as Readonly<Record<string, unknown>>, raw, pairsUrl);
+                    pairs?.show(read, pairsUrl, aspectOf(read.drive));
+                  },
+                  (error) => pairs?.fail(error),
+                ),
+              (error: unknown) => pairs?.fail(error),
+            );
+          },
+          (error) => pairs?.fail(error),
+        );
+      });
       part(() => cards?.showBaselines(readYardsticks(raw)), (error) => cards?.fail("baselines", error));
       part(() => cards?.showFrames(readLadder(raw), readFrames(raw)), (error) => cards?.fail("frames", error));
       part(() => cards?.showRegimes(readRegimes(raw)), (error) => cards?.fail("regimes", error));
@@ -83,6 +131,8 @@ export function startResults(results: Promise<Results>, cockpit: Promise<LiveCoc
       // The cockpit reports the same failure for itself, with its detail.
       headline?.fail(error);
       paired?.fail(error);
+      pairs?.fail(error);
+      timeline?.fail(error);
       ladder?.fail(error);
       for (const card of ["baselines", "frames", "regimes", "recipe", "trust"] as const) cards?.fail(card, error);
     },
