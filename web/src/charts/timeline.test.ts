@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { blockedSegments, ditherRoles, laterSegments, roleSizes, shuffledSizes, timeOfFrame } from "./timeline.ts";
+import { blockedSegments, bucketAtTime, bucketSpan, ditherRoles, laterSegments, roleSizes, shuffledSizes, timeOfFrame, traceStats } from "./timeline.ts";
 
 /** The roles of frames 0..n-1, frame by frame, as the splits module deals them. */
 function blockedByFrame(n: number, block: number, firewall: number, pattern: string): string[] {
@@ -93,5 +93,28 @@ describe("the drive's clock", () => {
     // The last bucket holds the two frames left over and runs to the drive's end.
     expect(timeOfFrame(profile, 9)).toBe(10.5);
     expect(timeOfFrame(profile, 10)).toBe(11);
+  });
+});
+
+describe("the steering trace's figures", () => {
+  const profile = { bucketFrames: 4, frames: 14, startFrame: [0, 4, 8, 12], startS: [0, 2, 10, 11], durationS: 12 };
+
+  it("finds the bucket holding a moment, from the buckets' own start times", () => {
+    expect(bucketAtTime(profile, 0)).toBe(0);
+    expect(bucketAtTime(profile, 1.99)).toBe(0);
+    expect(bucketAtTime(profile, 2)).toBe(1);
+    expect(bucketAtTime(profile, 9.9)).toBe(1);
+    expect(bucketAtTime(profile, 10.5)).toBe(2);
+    expect(bucketAtTime(profile, 12)).toBe(3);
+  });
+
+  it("gives the shortest and the longest bucket, not counting the one that holds what is left over", () => {
+    expect(bucketSpan(profile)).toEqual({ shortest: 1, longest: 8 });
+  });
+
+  it("gives the middle bucket, the largest and where it is, and the share above each edge", () => {
+    const stats = traceStats([1, 9, 3, 5], [2, 4]);
+    expect(stats).toEqual({ median: 4, largest: 9, largestAt: 1, shareAbove: [0.75, 0.5] });
+    expect(traceStats([7, 1, 3], [2]).median).toBe(3);
   });
 });

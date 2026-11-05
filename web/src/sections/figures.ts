@@ -527,6 +527,8 @@ export interface FramePairs {
   readonly pairs: readonly FramePair[];
   /** The nearest any blocked test frame comes to a training frame, frames. */
   readonly nearestBlocked: number;
+  /** The scale a pixel difference is measured on: its least and greatest possible values, and what they count. */
+  readonly scale: { readonly min: number; readonly max: number; readonly unit: string };
 }
 
 /** A file name the page may load from the pairs file's own folder: no path. */
@@ -565,7 +567,15 @@ export function readPairs(json: Json, raw: Json, url = "data/leakage/pairs.json"
     if (blocked.gapFrames < nearestBlocked) r.fail(`${at}.blocked`, `a neighbour at least ${nearestBlocked} frames away, as the blocked split keeps every test frame`);
     return { frame, image: image(`${at}.image`), angle: r.number(`${at}.angle_deg`), shuffled: side("leaky"), blocked };
   });
-  return { drive, pairs, nearestBlocked };
+  const min = r.number("pixel_scale.min", (v) => v >= 0, "the least a pixel difference can be");
+  const max = r.number("pixel_scale.max", (v) => v > min, "a greatest difference above the least");
+  const scale = { min, max, unit: r.string("pixel_scale.unit") };
+  for (const pair of pairs) {
+    for (const side of [pair.shuffled, pair.blocked]) {
+      if (side.pixelRmse > max) r.fail("pixel_scale.max", `at least the largest pixel difference listed (${side.pixelRmse})`);
+    }
+  }
+  return { drive, pairs, nearestBlocked, scale };
 }
 
 // -- The split timeline ------------------------------------------------------------
@@ -576,6 +586,8 @@ export interface Timeline {
   readonly clock: DriveClock;
   /** How hard the driver was turning: the mean of |angle| over each bucket, degrees. */
   readonly meanAbsDeg: readonly number[];
+  /** Which way: the mean of the signed angle over each bucket, degrees (right positive). */
+  readonly meanDeg: readonly number[];
   /** The edges between straight road, gentle curves and sharp ones, degrees. */
   readonly turnEdges: readonly [number, number];
   readonly protocols: {
@@ -605,7 +617,10 @@ export function readTimeline(raw: Json, url = "data/results.json"): Timeline {
   const drive = r.string("split_sizes.blocked.drive");
   const base = `drive_profile.drives.${drive}`;
   const frames = r.count(`${base}.frames`);
-  r.same("split_sizes.blocked.frames", frames, "the frames of the drive's profile");
+  for (const split of ["blocked", "forward", "leaky"]) {
+    r.same(`split_sizes.${split}.drive`, drive, "the drive of the blocked split");
+    r.same(`split_sizes.${split}.frames`, frames, "the frames of the drive's profile");
+  }
   const bucketFrames = r.count("drive_profile.bucket_frames");
   const buckets = Math.ceil(frames / bucketFrames);
   const listOf = (key: string) => {
@@ -628,6 +643,12 @@ export function readTimeline(raw: Json, url = "data/results.json"): Timeline {
   });
   const durationS = r.number(`${base}.duration_s`, (v) => v > previous, `a duration past the last bucket's start (${previous} s)`);
   const meanAbsDeg = listOf("mean_abs_deg").map((_, k) => r.error(`${base}.mean_abs_deg.${k}`));
+  // The mean of the signed angle can never be larger than the mean of its size (both rounded to 0.01).
+  const meanDeg = listOf("mean_deg").map((_, k) => {
+    const value = r.number(`${base}.mean_deg.${k}`);
+    if (Math.abs(value) > (meanAbsDeg[k] as number) + 0.011) r.fail(`${base}.mean_deg.${k}`, `no larger in size than the bucket's mean size (${meanAbsDeg[k]})`);
+    return value;
+  });
 
   const matches = (protocol: string, sizes: Readonly<Record<Role, number>>, made: string) => {
     for (const [role, key] of [["train", "train"], ["val", "val"], ["test", "test"], ["dropped", "dropped"]] as const) {
@@ -653,6 +674,7 @@ export function readTimeline(raw: Json, url = "data/results.json"): Timeline {
     frames,
     clock: { bucketFrames, frames, startFrame, startS, durationS },
     meanAbsDeg,
+    meanDeg,
     turnEdges: [r.number("cutoffs.regime_bins_deg.0", (v) => v > 0, "an angle above 0 degrees"), r.number("cutoffs.regime_bins_deg.1", (v) => v > 0, "an angle above 0 degrees")],
     protocols: { shuffled: { sizes: shuffled, shares }, blocked, later: { segments: later, sizes: roleSizes(later), shares: laterShares, firewall: laterFirewall } },
   };
@@ -669,6 +691,9 @@ export interface ClipWindow {
   readonly lastS: number | null;
   /** The camera frame's width over its height. */
   readonly aspect: number;
+  /** The share of the clip's frames the shuffled-split twin trained on, and of those within a frame of one it did; null when the clip has none. */
+  readonly twinTrained: number | null;
+  readonly twinNeighbour: number | null;
 }
 
 /** A clip.json's place in its drive. */
@@ -680,5 +705,16 @@ export function readClipWindow(json: Json, url = "data/clips/c2018/clip.json"): 
   const lastS = time("last_s");
   if (firstS !== null && lastS !== null && lastS <= firstS) r.fail("last_s", "later than first_s");
   const aspect = r.count("camera_size.0") / r.count("camera_size.1");
-  return { drive: r.string("drive"), title: r.string("title"), firstFrame: r.index("first_frame"), frames: r.count("n"), firstS, lastS, aspect };
+  const share = (key: string) => (r.at(key) === null || r.at(key) === undefined ? null : r.share(key));
+  return {
+    drive: r.string("drive"),
+    title: r.string("title"),
+    firstFrame: r.index("first_frame"),
+    frames: r.count("n"),
+    firstS,
+    lastS,
+    aspect,
+    twinTrained: share("twin_trained_frac"),
+    twinNeighbour: share("twin_neighbour_frac"),
+  };
 }

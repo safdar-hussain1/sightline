@@ -773,6 +773,8 @@ import {
   pairsLead,
   timelineAlt,
   timelineClipNote,
+  traceWords,
+  bucketWords,
   timelineLead,
   timelineNote,
 } from "./copy.ts";
@@ -784,8 +786,8 @@ const thePairs = () => readPairs(JSON.parse(pairsFile) as Record<string, unknown
 describe("the frame pairs' sentences", () => {
   it("says how far each split's closest training frame is, with a lower bound rounded down", () => {
     expect(pairsLead(thePairs())).toBe(
-      "Six test frames, each beside the training frame that looks most like it. Under the shuffled split that frame is the next one along, " +
-        "30 to 57 ms away. Under the blocked split it is 1,887 frames away or more, at least 1.7 minutes of driving.",
+      "Six test frames, each beside the training frame that looks most like it. Under the shuffled split that frame is one frame away, " +
+        "30 to 57 ms apart. Under the blocked split it is 1,887 frames away or more, at least 1.7 minutes of driving.",
     );
   });
 
@@ -815,6 +817,7 @@ describe("the frame pairs' sentences", () => {
       likeness: "Pixel difference 8.8",
       steering: "Steering 0.5° right",
     });
+    expect(neighbourWords(pair, "shuffled", "grey levels").likeness).toBe("Pixel difference 8.8 grey levels");
     expect(neighbourWords(pair, "blocked")).toEqual({
       where: "20,302 frames after it, 17 min 53 s",
       likeness: "Pixel difference 28.5",
@@ -832,7 +835,7 @@ describe("the split timeline's sentences", () => {
 
   it("words the drive's length from its measured duration", () => {
     expect(timelineLead(timeline())).toBe(
-      "The 55.9 minutes of the 2018 drive, from its first frame to its last, and how each split deals its 63,825 frames to training, validation and testing.",
+      "The 2018 drive runs 55.9 minutes, from its first frame to its last. Each split deals its 63,825 frames to training, validation and testing in its own way.",
     );
     expect(clockTime(1519.063)).toBe("25:19");
     expect(clockTime(3351.698)).toBe("55:51");
@@ -851,13 +854,36 @@ describe("the split timeline's sentences", () => {
   it("places the demo's clip from its own timestamps, and says which stretch it sits in", () => {
     const clip = readClipWindow(JSON.parse(clipJson));
     expect(timelineClipNote(timeline(), clip)).toBe("The demo’s 2018 clip, from 25:19 to 25:41, sits inside one of the blocked split’s test stretches.");
-    expect(timelineClipNote(timeline(), clip, "later")).toBe("The demo’s 2018 clip, from 25:19 to 25:41, sits inside one of the later-in-the-drive split’s training stretches.");
-    expect(timelineClipNote(timeline(), clip, "shuffled")).toMatch(/dealt frame by frame/);
+    expect(timelineClipNote(timeline(), clip, "later")).toBe("The demo’s 2018 clip, from 25:19 to 25:41, sits inside the later-in-the-drive split’s training stretch.");
+    expect(timelineClipNote(timeline(), clip, "shuffled")).toBe(
+      "The demo’s 2018 clip, from 25:19 to 25:41, is dealt frame by frame like the rest of the drive: the shuffled model trained on 71% of these very frames, and 97% sit within one frame of one it trained on.",
+    );
+  });
+
+  it("says a clip spans stretches when it runs past the end of one, and falls back when the twin's shares are absent", () => {
+    const clip = readClipWindow(JSON.parse(clipJson));
+    const segment = timeline().protocols.blocked.segments.find((s) => s.from <= clip.firstFrame && clip.firstFrame < s.to);
+    if (!segment) throw new Error("the clip is in no stretch");
+    // The same clip, begun so that it runs one frame past the end of its stretch.
+    const straddling = { ...clip, firstFrame: segment.to - clip.frames + 1 };
+    expect(timelineClipNote(timeline(), straddling, "blocked")).toMatch(/spans more than one of the blocked split’s stretches\.$/);
+    // Ending exactly on the stretch's last frame still sits inside it.
+    const flush = { ...clip, firstFrame: segment.to - clip.frames };
+    expect(timelineClipNote(timeline(), flush, "blocked")).toMatch(/sits inside one of the blocked split’s test stretches\.$/);
+    const bare = { ...clip, twinTrained: null, twinNeighbour: null };
+    expect(timelineClipNote(timeline(), bare, "shuffled")).toMatch(/any of its frames may train\.$/);
+  });
+
+  it("describes the steering trace with its own numbers, and each bucket under the pointer", () => {
+    const words = traceWords(timeline());
+    expect(words).toMatch(/each of 998 buckets holds 64 frames, 2\.4 to 4\.1 seconds/);
+    expect(words).toMatch(/the largest 208\.5°/);
+    expect(bucketWords(timeline(), 0)).toMatch(/^At 0:00, frames 0 to 63: turning 1\.4° on average, [\d.]+° (left|right) overall$/);
   });
 
   it("describes every split's drawing in words, with the frames it deals", () => {
     expect(timelineAlt(timeline(), "blocked")).toMatch(
-      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. Above it, how hard the driver was turning, on a square-root scale\.$/,
+      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. The steering above it is drawn bucket by bucket: each of 998 buckets holds 64 frames, 2\.4 to 4\.1 seconds\. .*square-root scale\. The middle bucket turns [\d.]+° on average and the largest 208\.5°; \d+% of buckets turn more than 5° and \d+% more than 30°\.$/,
     );
     expect(timelineAlt(timeline(), "shuffled")).toMatch(/dealt at random/);
   });

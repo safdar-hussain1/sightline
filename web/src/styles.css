@@ -192,15 +192,21 @@
   --model-straight: #8b85a1;
   --bar-model: var(--model-sightlinenet);
 
-  /* What a split does with a frame, on the split timeline: three hues from a
-     colour-vision validator (all pairs at least 9.2 apart, OKLab x100, under
-     simulated red-green colour blindness, and 20 in full colour), every one
-     named beside its swatch and counted in the chart's table, and the frames
-     dropped at a firewall in grey. */
-  --role-train: #2a78d6;
-  --role-val: #1baf7a;
-  --role-test: #eb6834;
-  --role-dropped: #8b85a1;
+  /* What a split does with a frame, on the split timeline, kept inside the
+     page's violet: the test stretches wear the accent, validation a second
+     violet apart from it in lightness, training a quiet violet-grey and the
+     frames dropped at a firewall hatching in grey. None is a model's colour
+     (PilotNet's green stays PilotNet's). The three filled roles, checked with
+     a colour-vision validator, all pairs at once: at least 15.7 apart under
+     simulated red-green colour blindness and 18.4 in full colour (OKLab x100),
+     each 3:1 or more on the chart's surface, in both themes. Training and validation
+     sit outside the validator's lightness band and chroma floor on purpose
+     (a neutral and a pale or deep tint); the key names every one, and the
+     chart's table counts them. */
+  --role-train: #8d87a6;
+  --role-val: #4a2a9a;
+  --role-test: #9333ea;
+  --role-dropped: #5f5a75;
   --bar-straight: var(--model-straight);
 
   /* The nav's marker under the view on screen. */
@@ -240,10 +246,10 @@
     --model-pilotnet: #05ab86;
     --model-oneframe: #cc345f;
     --model-straight: #736c8c;
-    --role-train: #3987e5;
-    --role-val: #199e70;
-    --role-test: #d95926;
-    --role-dropped: #736c8c;
+    --role-train: #6e688c;
+    --role-val: #dcc8fc;
+    --role-test: #a66ef4;
+    --role-dropped: #9a94b4;
     --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
   }
 }
@@ -269,10 +275,10 @@
   --model-pilotnet: #05ab86;
   --model-oneframe: #cc345f;
   --model-straight: #736c8c;
-  --role-train: #3987e5;
-  --role-val: #199e70;
-  --role-test: #d95926;
-  --role-dropped: #736c8c;
+  --role-train: #6e688c;
+  --role-val: #dcc8fc;
+  --role-test: #a66ef4;
+  --role-dropped: #9a94b4;
   --nav-thumb: color-mix(in oklab, var(--accent) 24%, var(--surface));
 }
 
@@ -3472,7 +3478,36 @@ html:not(.js) .windshield__status {
 
 @media (min-width: 48rem) {
   .compare {
-    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    /* The picture takes the width the camera's frame really has (read from the
+       image once it loads) and no more; the words take the rest. */
+    grid-template-columns: minmax(0, var(--compare-max, 28rem)) minmax(0, 1fr);
+  }
+}
+
+/* On a phone the test frame and its shuffled neighbour are one picture, the
+   slider's: their panels keep their words and give up their photos, and the
+   slider comes first. */
+@media (max-width: 47.99rem) {
+  .pairs__figure {
+    gap: var(--space-5);
+  }
+
+  .compare {
+    order: 1;
+  }
+
+  .pairs__panels {
+    order: 2;
+    gap: var(--space-4);
+  }
+
+  .pair-panel--test .pair-photo,
+  .pair-panel--shuffled .pair-photo {
+    display: none;
+  }
+
+  .pairs__details {
+    order: 3;
   }
 }
 
@@ -3559,6 +3594,8 @@ html:not(.js) .windshield__status {
   margin: 0;
   opacity: 0;
   cursor: ew-resize;
+  /* A swipe down the page is the page's; only a sideways drag is the slider's. */
+  touch-action: pan-y;
 }
 
 .compare__words {
@@ -3587,20 +3624,78 @@ html:not(.js) .windshield__status {
   margin-block-start: var(--space-6);
 }
 
-.timeline-chart__area {
+.timeline__trace-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.timeline__trace-key li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.timeline__trace-swatch {
+  inline-size: 1.25rem;
+  block-size: 0.625rem;
+  border-radius: 2px;
+}
+
+.timeline__trace-swatch--turn {
+  background: color-mix(in oklab, var(--ink-3) 30%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+
+.timeline__trace-swatch--way {
+  background: var(--ink-2);
+}
+
+.timeline-chart__envelope {
   fill: color-mix(in oklab, var(--ink-3) 24%, transparent);
   stroke: var(--ink-3);
-  stroke-width: 1.25;
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+.timeline-chart__way {
+  fill: color-mix(in oklab, var(--ink-2) 78%, transparent);
+  stroke: var(--ink);
+  stroke-width: 1;
   stroke-linejoin: round;
 }
 
 .timeline-chart__rule {
   stroke: var(--line);
   stroke-width: 1;
+  stroke-dasharray: 2 4;
 }
 
 .timeline-chart__rule--zero {
   stroke: var(--line-strong);
+  stroke-dasharray: none;
+}
+
+.timeline-chart__label {
+  font-family: var(--font-text);
+  font-size: 12px;
+  font-weight: 500;
+  fill: var(--ink-2);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-chart__label--strong {
+  font-weight: 600;
+  fill: var(--ink);
 }
 
 .timeline-chart__tick {
@@ -3608,10 +3703,43 @@ html:not(.js) .windshield__status {
   stroke-width: 1;
 }
 
+.timeline-chart__segment,
+.timeline-chart__cell {
+  stroke: var(--surface);
+  stroke-width: 1;
+  paint-order: stroke;
+}
+
 .timeline-chart__clip-window {
   fill: none;
   stroke: var(--ink);
   stroke-width: 2;
+}
+
+.timeline-chart__clip-column {
+  fill: color-mix(in oklab, var(--accent) 16%, transparent);
+}
+
+.timeline-chart__clip-caret {
+  fill: var(--ink);
+}
+
+.timeline-chart__clip-stem {
+  stroke: var(--ink);
+  stroke-width: 1;
+}
+
+.timeline-chart__hover {
+  stroke: var(--ink);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.timeline-chart__hair {
+  stroke: var(--ink);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
 }
 
 .role--train {
@@ -3629,9 +3757,21 @@ html:not(.js) .windshield__status {
   background-color: var(--role-test);
 }
 
+/* Dropped frames hatch: the drawing paints its own pattern; the key's swatch
+   draws the same stripes. */
 .role--dropped {
   fill: var(--role-dropped);
-  background-color: var(--role-dropped);
+  background-color: var(--surface);
+  background-image: repeating-linear-gradient(135deg, var(--role-dropped) 0 1.5px, transparent 1.5px 4px);
+}
+
+.timeline-chart__hatch-line {
+  stroke: var(--role-dropped);
+  stroke-width: 1.5;
+}
+
+.timeline-chart__hatch-ground {
+  fill: var(--surface);
 }
 
 .timeline__count {

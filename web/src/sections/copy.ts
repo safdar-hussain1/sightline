@@ -38,7 +38,7 @@ import {
   type FramePairs,
   type Timeline,
 } from "./figures.ts";
-import type { Role } from "../charts/timeline.ts";
+import { bucketAtTime, bucketSpan, traceStats, type Role } from "../charts/timeline.ts";
 import { framesInKey, networkName } from "./names.ts";
 
 export {
@@ -727,12 +727,12 @@ export function pairsLead(pairs: FramePairs): string {
   const near = list.map((pair) => pair.shuffled);
   const far = list.map((pair) => pair.blocked);
   const nearFrames = near.map((side) => side.gapFrames);
-  const where = nearFrames.every((gap) => gap === 1) ? "the next one along" : `${fmtCount(Math.min(...nearFrames))} to ${fmtCount(Math.max(...nearFrames))} frames away`;
+  const where = nearFrames.every((gap) => gap === 1) ? "one frame away" : `${fmtCount(Math.min(...nearFrames))} to ${fmtCount(Math.max(...nearFrames))} frames away`;
   const nearTimes = near.flatMap((side) => (side.gapS === null ? [] : [side.gapS]));
   let nearTime = "";
   if (nearTimes.length === near.length) {
     const [low, high] = [Math.min(...nearTimes), Math.max(...nearTimes)];
-    nearTime = high < 1 ? `, ${fmtCount(Math.round(low * 1000))} to ${gapWords(high)} away` : `, ${gapWords(low)} to ${gapWords(high)} away`;
+    nearTime = gapWords(low) === gapWords(high) ? `, ${gapWords(high)} apart` : high < 1 ? `, ${fmtCount(Math.round(low * 1000))} to ${gapWords(high)} apart` : `, ${gapWords(low)} to ${gapWords(high)} apart`;
   }
   const farTimes = far.flatMap((side) => (side.gapS === null ? [] : [side.gapS]));
   const farTime = farTimes.length === far.length ? `, at least ${atLeast(Math.min(...farTimes) / 60)} minutes of driving` : "";
@@ -750,13 +750,13 @@ const steering = (angle: number) => {
 
 /** One neighbour, in the words of its panel: where it is, how alike it
  * looks, and what the driver steered. */
-export function neighbourWords(pair: FramePair, split: "shuffled" | "blocked"): { where: string; likeness: string; steering: string } {
+export function neighbourWords(pair: FramePair, split: "shuffled" | "blocked", unit = ""): { where: string; likeness: string; steering: string } {
   const side = pair[split];
   const direction = side.frame < pair.frame ? "before" : "after";
   const time = gapWords(side.gapS);
   return {
     where: `${fmtCount(side.gapFrames)} frame${side.gapFrames === 1 ? "" : "s"} ${direction} it${time ? `, ${time}` : ""}`,
-    likeness: `Pixel difference ${fmtFixed(side.pixelRmse)}`,
+    likeness: `Pixel difference ${fmtFixed(side.pixelRmse)}${unit ? ` ${unit}` : ""}`,
     steering: `Steering ${steering(side.angle)}`,
   };
 }
@@ -764,6 +764,14 @@ export function neighbourWords(pair: FramePair, split: "shuffled" | "blocked"): 
 /** A test frame's own label, as its panel says it. */
 export function testFrameWords(pair: FramePair): { frame: string; steering: string } {
   return { frame: `Frame ${fmtCount(pair.frame)}`, steering: `Steering ${steering(pair.angle)}` };
+}
+
+/** What a pixel difference is, and the scale it is read on, from the data. */
+export function pixelScaleNote(scale: FramePairs["scale"]): string {
+  return (
+    `Pixel difference is how far apart two frames are in ${scale.unit}, as a root-mean-square over small grayscale copies, the way the lookup table compares them. ` +
+    `It runs from ${fmtCount(scale.min)} to ${fmtCount(scale.max)} ${scale.unit}: the lower, the more alike.`
+  );
 }
 
 /** The picker's legend: the order of the pairs, when they come in one. */
@@ -774,8 +782,8 @@ export function pickerLegend(pairs: FramePairs): string {
 }
 
 /** A pair, in one passage: the text alternative of its three pictures. */
-export function pairAlt(pair: FramePair): string {
-  const [near, far] = [neighbourWords(pair, "shuffled"), neighbourWords(pair, "blocked")];
+export function pairAlt(pair: FramePair, unit = ""): string {
+  const [near, far] = [neighbourWords(pair, "shuffled", unit), neighbourWords(pair, "blocked", unit)];
   const lower = (words: string) => words.charAt(0).toLowerCase() + words.slice(1);
   return (
     `Test frame ${fmtCount(pair.frame)}, the driver steering ${steering(pair.angle)}. ` +
@@ -798,8 +806,8 @@ export type TimelineProtocol = "shuffled" | "blocked" | "later";
 
 export function timelineLead(timeline: Timeline): string {
   return (
-    `The ${minutesOf(timeline.clock.durationS)} minutes of ${driveTitle(timeline.drive)}, from its first frame to its last, ` +
-    `and how each split deals its ${fmtCount(timeline.frames)} frames to training, validation and testing.`
+    `${capitalised(driveTitle(timeline.drive))} runs ${minutesOf(timeline.clock.durationS)} minutes, from its first frame to its last. ` +
+    `Each split deals its ${fmtCount(timeline.frames)} frames to training, validation and testing in its own way.`
   );
 }
 
@@ -834,21 +842,60 @@ const ROLE_STRETCH: Readonly<Record<Role, string>> = { train: "training", val: "
  * stretch of the picked split it falls in, when it falls in one. */
 export function timelineClipNote(timeline: Timeline, clip: ClipWindow, protocol: TimelineProtocol = "blocked"): string {
   const [year] = splitTitle(clip.title);
-  const name = year ? `the demo’s ${year} clip` : "the demo clip";
+  const name = capitalised(year ? `the demo’s ${year} clip` : "the demo clip");
   const when = clip.firstS !== null && clip.lastS !== null ? `, from ${clockTime(clip.firstS)} to ${clockTime(clip.lastS)},` : "";
-  if (protocol === "shuffled") return `${capitalised(name)}${when} is dealt frame by frame like the rest of the drive: any of its frames may train.`;
+  if (protocol === "shuffled") {
+    if (clip.twinTrained === null || clip.twinTrained === undefined) return `${name}${when} is dealt frame by frame like the rest of the drive: any of its frames may train.`;
+    const near = clip.twinNeighbour === null || clip.twinNeighbour === undefined ? "" : `, and ${fmtPct(clip.twinNeighbour)} sit within one frame of one it trained on`;
+    return `${name}${when} is dealt frame by frame like the rest of the drive: the shuffled model trained on ${fmtPct(clip.twinTrained)} of these very frames${near}.`;
+  }
   const way = protocol === "blocked" ? "blocked" : "later-in-the-drive";
   const end = clip.firstFrame + clip.frames;
-  const inside = timeline.protocols[protocol].segments.find((s) => s.from <= clip.firstFrame && end <= s.to);
-  return inside
-    ? `${capitalised(name)}${when} sits inside one of the ${way} split’s ${ROLE_STRETCH[inside.role]} stretches.`
-    : `${capitalised(name)}${when} spans more than one of the ${way} split’s stretches.`;
+  const segments = timeline.protocols[protocol].segments;
+  const inside = segments.find((s) => s.from <= clip.firstFrame && end <= s.to);
+  if (!inside) return `${name}${when} spans more than one of the ${way} split’s stretches.`;
+  const sameRole = segments.filter((s) => s.role === inside.role).length;
+  const stretch = ROLE_STRETCH[inside.role];
+  return sameRole === 1
+    ? `${name}${when} sits inside the ${way} split’s ${stretch} stretch.`
+    : `${name}${when} sits inside one of the ${way} split’s ${stretch} stretches.`;
+}
+
+/** One bucket of the steering trace, in words: when, and how the driver steered. */
+export function bucketWords(timeline: Timeline, k: number): string {
+  const { clock } = timeline;
+  const first = clock.startFrame[k] as number;
+  const last = Math.min(clock.frames, first + clock.bucketFrames) - 1;
+  const way = steerParts(timeline.meanDeg[k] as number);
+  return (
+    `At ${clockTime(clock.startS[k] as number)}, frames ${fmtCount(first)} to ${fmtCount(last)}: ` +
+    `turning ${fmtDeg(timeline.meanAbsDeg[k] as number, 1)} on average, ${way.side ? `${way.size} ${way.side}` : way.size} overall`
+  );
+}
+
+/** The bucket under a moment of the drive, in words. */
+export function momentWords(timeline: Timeline, seconds: number): string {
+  return bucketWords(timeline, bucketAtTime(timeline.clock, seconds));
+}
+
+/** The steering trace in figures, for its text alternative. */
+export function traceWords(timeline: Timeline): string {
+  const { clock } = timeline;
+  const span = bucketSpan(clock);
+  const stats = traceStats(timeline.meanAbsDeg, timeline.turnEdges);
+  const [low, high] = timeline.turnEdges;
+  return (
+    `The steering above it is drawn bucket by bucket: each of ${fmtCount(clock.startS.length)} buckets holds ${fmtCount(clock.bucketFrames)} frames, ${fmtFixed(span.shortest)} to ${fmtFixed(span.longest)} seconds. ` +
+    `The shaded band is how hard the driver was turning (the mean size of the angle) and the dark shape inside it which way, on a square-root scale. ` +
+    `The middle bucket turns ${fmtDeg(stats.median, 1)} on average and the largest ${fmtDeg(stats.largest, 1)}; ` +
+    `${fmtPct(stats.shareAbove[0] as number)} of buckets turn more than ${fmtDeg(low, 0)} and ${fmtPct(stats.shareAbove[1] as number)} more than ${fmtDeg(high, 0)}.`
+  );
 }
 
 /** The band's text alternative for one split. */
 export function timelineAlt(timeline: Timeline, protocol: TimelineProtocol): string {
   const head = `${capitalised(driveTitle(timeline.drive))}, ${minutesOf(timeline.clock.durationS)} minutes, `;
-  const trace = " Above it, how hard the driver was turning, on a square-root scale.";
+  const trace = ` ${traceWords(timeline)}`;
   if (protocol === "shuffled") {
     const s = timeline.protocols.shuffled.sizes;
     return `${head}split the shuffled way: ${fmtCount(s.train)} frames to train, ${fmtCount(s.val)} to validate and ${fmtCount(s.test)} to test, every frame dealt at random.${trace}`;

@@ -15,7 +15,7 @@
 
 import { easeInOut, local, tween } from "../charts/draw.ts";
 import type { ViewName } from "../router.ts";
-import { gapWords, measurementsFailure, neighbourWords, pairAlt, pairsLead, pickerLegend, testFrameWords } from "./copy.ts";
+import { gapWords, measurementsFailure, neighbourWords, pairAlt, pairsLead, pickerLegend, pixelScaleNote, testFrameWords } from "./copy.ts";
 import type { Frames } from "./countup.ts";
 import type { FramePair, FramePairs } from "./figures.ts";
 import { fmtCount, fmtFixed } from "../format.ts";
@@ -43,9 +43,15 @@ export class PairsSection {
   private data: FramePairs | null = null;
   private folder: URL | null = null;
   private picked = 0;
+  /** What a pixel difference counts, from the pairs' own scale. */
+  private unit = "";
   private pressed = -Infinity;
   private swept: boolean;
   private onView: boolean;
+  /** Ends the slider's sweep, when one is running. */
+  private stopSweep: () => void = () => undefined;
+  /** The visitor has the slider: the sweep draws nothing more. */
+  private taken = false;
   private readonly photos = new Map<Panel, HTMLImageElement>();
   private readonly under: HTMLImageElement;
   private readonly over: HTMLImageElement;
@@ -66,8 +72,18 @@ export class PairsSection {
       if (Number.isInteger(value)) this.select(value, performance.now() - this.pressed < POINTER_MS);
     });
     const range = this.part<HTMLInputElement>("compare-range");
-    range.addEventListener("input", () => {
+    // The slider is the visitor's the moment they reach for it: the sweep ends
+    // where it is, so it never pulls the handle out of their hand.
+    const take = () => {
       this.swept = true;
+      this.taken = true;
+      this.stopSweep();
+    };
+    range.addEventListener("pointerdown", take);
+    range.addEventListener("keydown", take);
+    this.part("compare-frame").addEventListener("pointerdown", take);
+    range.addEventListener("input", () => {
+      take();
       this.setCompare(Number(range.value));
     });
     this.under = document.createElement("img");
@@ -76,6 +92,11 @@ export class PairsSection {
       img.decoding = "async";
       img.alt = "";
     }
+    // The compare picture never shows larger than the frames really are: the
+    // frame's width is capped at its image's own, and the words take the rest.
+    this.under.addEventListener("load", () => {
+      if (this.under.naturalWidth > 0) this.root.style.setProperty("--compare-max", `${this.under.naturalWidth}px`);
+    });
     if (typeof IntersectionObserver === "function") {
       new IntersectionObserver((entries) => {
         if (entries.some((entry) => entry.isIntersecting)) this.maybeSweep();
@@ -95,6 +116,8 @@ export class PairsSection {
   show(pairs: FramePairs, url: string, aspect: number | null): void {
     this.data = pairs;
     this.folder = new URL("./", url);
+    this.unit = pairs.scale.unit;
+    this.part("compare-note").textContent = pixelScaleNote(pairs.scale);
     if (aspect !== null) this.root.style.setProperty("--photo-aspect", String(aspect));
     this.part("lead").textContent = pairsLead(pairs);
     this.buildPicker(pairs);
@@ -109,8 +132,7 @@ export class PairsSection {
     // The scale every pixel difference is drawn on: the most unlike pair.
     const largest = Math.max(...pairs.pairs.flatMap((pair) => [pair.shuffled.pixelRmse, pair.blocked.pixelRmse]));
     this.root.style.setProperty("--likeness-scale", String(largest));
-    const restored = Number(this.root.querySelector<HTMLInputElement>('input[name="pairs-frame"]:checked')?.value ?? 0);
-    this.select(Number.isInteger(restored) && restored >= 0 && restored < pairs.pairs.length ? restored : 0, false);
+    this.select(0, false);
     this.setCompare(Number(this.part<HTMLInputElement>("compare-range").value));
     this.fillTable(pairs);
     this.root.dataset["state"] = "ready";
@@ -174,8 +196,8 @@ export class PairsSection {
     const images: Record<Panel, string> = { test: pair.image, shuffled: pair.shuffled.image, blocked: pair.blocked.image };
     const alts: Record<Panel, string> = {
       test: `Test frame ${fmtCount(pair.frame)}: the road ahead`,
-      shuffled: `The shuffled split’s closest training frame, ${neighbourWords(pair, "shuffled").where}`,
-      blocked: `The blocked split’s closest training frame, ${neighbourWords(pair, "blocked").where}`,
+      shuffled: `The shuffled split’s closest training frame, ${neighbourWords(pair, "shuffled", this.unit).where}`,
+      blocked: `The blocked split’s closest training frame, ${neighbourWords(pair, "blocked", this.unit).where}`,
     };
     for (const split of SPLITS) {
       const img = this.photos.get(split);
@@ -193,12 +215,12 @@ export class PairsSection {
         );
       }
     }
-    this.part("alt").textContent = pairAlt(pair);
+    this.part("alt").textContent = pairAlt(pair, this.unit);
     this.under.src = this.image(pair.image);
     this.over.src = this.image(pair.shuffled.image);
     this.part("compare-text").textContent =
-      `Test frame ${fmtCount(pair.frame)} and the shuffled split’s closest training frame, ${neighbourWords(pair, "shuffled").where}: ` +
-      `pixel difference ${fmtFixed(pair.shuffled.pixelRmse)}.`;
+      `Test frame ${fmtCount(pair.frame)} and the shuffled split’s closest training frame, ${neighbourWords(pair, "shuffled", this.unit).where}: ` +
+      `pixel difference ${fmtFixed(pair.shuffled.pixelRmse)} ${this.unit}.`;
   }
 
   /** A panel's facts: where its frame is, how alike it looks, what the
@@ -216,7 +238,7 @@ export class PairsSection {
       list.replaceChildren(item(words.frame), item(words.steering));
       return;
     }
-    const words = neighbourWords(pair, split);
+    const words = neighbourWords(pair, split, this.unit);
     const meter = document.createElement("li");
     meter.className = "pair-meter";
     meter.setAttribute("aria-hidden", "true");
@@ -245,9 +267,10 @@ export class PairsSection {
     this.swept = true;
     const start = Number(this.part<HTMLInputElement>("compare-range").value);
     const reach = 28;
-    tween(
+    this.stopSweep = tween(
       SWEEP_MS,
       (p) => {
+        if (this.taken) return;
         // Three legs, each eased: to start - reach, to start + reach, home.
         const leg = (from: number, to: number, at: number, length: number) => from + (to - from) * easeInOut(local(p, at, length));
         const v = p < 0.3 ? leg(start, start - reach, 0, 0.3) : p < 0.75 ? leg(start - reach, start + reach, 0.3, 0.45) : leg(start + reach, start, 0.75, 0.25);
@@ -262,7 +285,7 @@ export class PairsSection {
     const caption = table.querySelector("caption");
     table.replaceChildren(...(caption ? [caption] : []));
     const head = table.createTHead().insertRow();
-    for (const heading of ["Test frame", "Steering", "Split", "Closest training frame", "Frames apart", "Time apart", "Pixel difference", "Its steering"]) {
+    for (const heading of ["Test frame", "Steering", "Split", "Closest training frame", "Frames apart", "Time apart", `Pixel difference (${this.unit})`, "Its steering"]) {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = heading;
@@ -283,7 +306,7 @@ export class PairsSection {
         row.insertCell().textContent = fmtCount(side.gapFrames);
         row.insertCell().textContent = gapWords(side.gapS);
         row.insertCell().textContent = fmtFixed(side.pixelRmse);
-        row.insertCell().textContent = neighbourWords(pair, split).steering.replace("Steering ", "");
+        row.insertCell().textContent = neighbourWords(pair, split, this.unit).steering.replace("Steering ", "");
       }
     }
   }

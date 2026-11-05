@@ -150,3 +150,41 @@ export function timeOfFrame(clock: DriveClock, frame: number): number {
   const t1 = k < last ? (clock.startS[k + 1] as number) : clock.durationS;
   return t0 + ((frame - start) / length) * (t1 - t0);
 }
+
+/** The bucket holding the moment `seconds` into the drive. */
+export function bucketAtTime(clock: DriveClock, seconds: number): number {
+  let low = 0;
+  let high = clock.startS.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if ((clock.startS[mid] as number) <= seconds) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
+/** How long the buckets run, in seconds: the shortest and the longest, the
+ * last (which holds what is left over) not counted. */
+export function bucketSpan(clock: DriveClock): { readonly shortest: number; readonly longest: number } {
+  const lengths = clock.startS.slice(1, -1).map((start, i) => (clock.startS[i + 2] as number) - start);
+  const whole = lengths.length > 0 ? lengths : [clock.durationS];
+  return { shortest: Math.min(...whole), longest: Math.max(...whole) };
+}
+
+/** The steering trace in a few figures: the middle bucket's mean size, the
+ * largest and where it is, and the share of buckets above each edge. */
+export function traceStats(
+  meanAbs: readonly number[],
+  edges: readonly number[],
+): { readonly median: number; readonly largest: number; readonly largestAt: number; readonly shareAbove: readonly number[] } {
+  const sorted = [...meanAbs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1 ? (sorted[mid] as number) : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+  const largest = Math.max(...meanAbs);
+  return {
+    median,
+    largest,
+    largestAt: meanAbs.indexOf(largest),
+    shareAbove: edges.map((edge) => meanAbs.filter((v) => v > edge).length / meanAbs.length),
+  };
+}

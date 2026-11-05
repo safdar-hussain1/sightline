@@ -18,7 +18,7 @@
 import { attrs, easeInOut, easeOut, local, svg, tween, watchWidth } from "../charts/draw.ts";
 import { ROLES, ditherRoles, timeOfFrame, type Role, type Segment } from "../charts/timeline.ts";
 import { niceStep } from "../charts/scale.ts";
-import { fmtCount } from "../format.ts";
+import { fmtCount, fmtDeg } from "../format.ts";
 import type { ViewName } from "../router.ts";
 import {
   ROLE_NAMES,
@@ -26,6 +26,7 @@ import {
   clockTime,
   driveTitle,
   exactDeg,
+  momentWords,
   measurementsFailure,
   timelineAlt,
   timelineClipNote,
@@ -48,7 +49,9 @@ interface Geometry {
   readonly width: number;
   readonly height: number;
   readonly x: (seconds: number) => number;
+  /** The steering trace's top, its zero line and its bottom. */
   readonly traceTop: number;
+  readonly traceZero: number;
   readonly traceBottom: number;
   readonly bandTop: number;
   readonly bandBottom: number;
@@ -116,7 +119,7 @@ export class TimelineSection {
     const picked = this.root.querySelector<HTMLInputElement>('input[name="timeline-split"]:checked')?.value;
     if (picked === "shuffled" || picked === "blocked" || picked === "later") this.protocol = picked;
     this.part("lead").textContent = timelineLead(timeline);
-        this.fillTable(timeline);
+    this.fillTable(timeline);
     this.describe(this.protocol);
     this.counts(this.protocol, null, 1);
     this.root.dataset["state"] = "ready";
@@ -153,12 +156,15 @@ export class TimelineSection {
 
   private geometry(width: number): Geometry {
     const narrow = width < 560;
-    const traceTop = 20;
-    const traceBottom = traceTop + (narrow ? 46 : 62);
-    const bandTop = traceBottom + 30;
-    const bandBottom = bandTop + (narrow ? 30 : 38);
+    const half = narrow ? 38 : 54;
+    const traceTop = 6;
+    const traceZero = traceTop + half;
+    const traceBottom = traceZero + half;
+    // Room between the trace and the band for the clip's label and its caret.
+    const bandTop = traceBottom + 40;
+    const bandBottom = bandTop + (narrow ? 34 : 46);
     const duration = this.data?.clock.durationS ?? 1;
-    return { width, height: bandBottom + 30, x: (s) => (s / duration) * width, traceTop, traceBottom, bandTop, bandBottom };
+    return { width, height: bandBottom + 32, x: (s) => (s / duration) * width, traceTop, traceZero, traceBottom, bandTop, bandBottom };
   }
 
   /** The drawing at `width`, every layer laid out, the picked one shown. */
@@ -175,39 +181,53 @@ export class TimelineSection {
       const clip = svg("clipPath", { id: `${this.id}-${name}` }, defs);
       return svg("rect", { x: 0, y: 0, width, height: g.height }, clip);
     };
+    // The frames dropped at a firewall: grey diagonal hatching on the surface.
+    const hatch = svg("pattern", { id: `${this.id}-hatch`, width: 5, height: 5, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    svg("rect", { class: "timeline-chart__hatch-ground", width: 5, height: 5 }, hatch);
+    svg("line", { class: "timeline-chart__hatch-line", x1: 0, y1: 0, x2: 0, y2: 5 }, hatch);
 
-    // How hard the driver was turning, on a square-root scale, with the edges
-    // of the regimes marked.
+    // The steering: how hard the driver was turning as a shaded band either
+    // side of the zero line, which way as the dark shape inside it, both on a
+    // square-root scale so gentle driving still shows beside the spikes.
     const trace = svg("g", { class: "timeline-chart__trace", "clip-path": `url(#${this.id}-trace)` }, root);
     const traceClip = clipRect("trace");
-    const vmax = Math.max(...timeline.meanAbsDeg, ...timeline.turnEdges);
-    const y = (v: number) => g.traceBottom - Math.sqrt(Math.max(0, v) / vmax) * (g.traceBottom - g.traceTop);
-    for (const edge of timeline.turnEdges) {
-      svg("line", { class: "timeline-chart__rule", x1: 0, x2: width, y1: r2(y(edge)), y2: r2(y(edge)) }, trace);
-    }
-    svg("line", { class: "timeline-chart__rule timeline-chart__rule--zero", x1: 0, x2: width, y1: g.traceBottom, y2: g.traceBottom }, trace);
     const { clock } = timeline;
-    const points = timeline.meanAbsDeg.map((v, k) => {
+    const vmax = Math.max(...timeline.meanAbsDeg, ...timeline.turnEdges);
+    const half = g.traceZero - g.traceTop;
+    const lift = (v: number) => Math.sqrt(Math.min(1, Math.abs(v) / vmax)) * half * Math.sign(v);
+    const [, sharp] = timeline.turnEdges;
+    // The rule at the sharp-turn edge, both sides, when there is room for its label.
+    if (lift(sharp) > 14) {
+      for (const dir of [-1, 1]) {
+        const yy = r2(g.traceZero - dir * lift(sharp));
+        svg("line", { class: "timeline-chart__rule", x1: 0, x2: width, y1: yy, y2: yy }, trace);
+        const label = svg("text", { class: "timeline-chart__label", x: 4, y: r2(dir > 0 ? yy - 5 : yy + 14) }, trace);
+        label.textContent = `${exactDeg(sharp)} ${dir > 0 ? "right" : "left"}`;
+      }
+    }
+    svg("line", { class: "timeline-chart__rule timeline-chart__rule--zero", x1: 0, x2: width, y1: g.traceZero, y2: g.traceZero }, trace);
+    const mid = (k: number) => {
       const t0 = clock.startS[k] as number;
       const t1 = k + 1 < clock.startS.length ? (clock.startS[k + 1] as number) : clock.durationS;
-      return `${r2(g.x((t0 + t1) / 2))} ${r2(y(v))}`;
-    });
-    svg("path", { class: "timeline-chart__area", d: `M0 ${g.traceBottom}L${points.join("L")}L${width} ${g.traceBottom}Z` }, trace);
-    const traceLabel = svg("text", { class: "card-chart__note", x: 0, y: 12 }, root);
-    traceLabel.textContent = "How hard the driver was turning (square-root scale)";
-    // Each edge labelled where there is room for its label above the line.
-    let above = -Infinity;
-    for (const edge of [...timeline.turnEdges].sort((a, b) => b - a)) {
-      if (y(edge) - above < 14) continue;
-      const label = svg("text", { class: "card-chart__tick", x: 2, y: r2(y(edge) - 3) }, trace);
-      label.textContent = exactDeg(edge);
-      above = y(edge);
-    }
+      return g.x((t0 + t1) / 2);
+    };
+    const upper = timeline.meanAbsDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero - lift(v))}`);
+    const lower = timeline.meanAbsDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero + lift(v))}`).reverse();
+    svg("path", { class: "timeline-chart__envelope", d: `M${upper.join("L")}L${lower.join("L")}Z` }, trace);
+    const way = timeline.meanDeg.map((v, k) => `${r2(mid(k))} ${r2(g.traceZero - lift(v))}`);
+    svg("path", { class: "timeline-chart__way", d: `M${r2(mid(0))} ${g.traceZero}L${way.join("L")}L${r2(mid(way.length - 1))} ${g.traceZero}Z` }, trace);
+    // The largest bucket, named where it peaks.
+    const peak = timeline.meanAbsDeg.indexOf(Math.max(...timeline.meanAbsDeg));
+    const peakX = mid(peak);
+    const peakAnchor = peakX > width - 70 ? "end" : "start";
+    const peakLabel = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", x: r2(peakAnchor === "end" ? peakX - 6 : peakX + 6), y: g.traceTop + 12, "text-anchor": peakAnchor }, trace);
+    peakLabel.textContent = `${fmtDeg(timeline.meanAbsDeg[peak] as number, 1)} peak`;
 
     // Each split's layout, one layer apiece.
     const band = svg("g", { class: "timeline-chart__band" }, root);
     const layers = new Map<TimelineProtocol, { group: SVGGElement; clip: SVGRectElement }>();
     const xFrame = (frame: number) => g.x(timeOfFrame(clock, frame));
+    const bandHeight = g.bandBottom - g.bandTop;
     for (const protocol of PROTOCOLS) {
       const group = svg("g", { class: "timeline-chart__layer", "data-split": protocol, "clip-path": `url(#${this.id}-${protocol})` }, band);
       const clip = clipRect(protocol);
@@ -215,39 +235,47 @@ export class TimelineSection {
         const cells = Math.max(1, Math.floor(width / CELL_PX));
         const { train, val, test } = timeline.protocols.shuffled.sizes;
         ditherRoles(cells, { train, val, test }).forEach((role, i) => {
-          svg("rect", { class: `timeline-chart__cell role--${role}`, x: r2((i * width) / cells), y: g.bandTop, width: r2(width / cells - 1), height: g.bandBottom - g.bandTop }, group);
+          svg("rect", { class: `timeline-chart__cell role--${role}`, x: r2((i * width) / cells), y: g.bandTop, width: r2(width / cells), height: bandHeight }, group);
         });
       } else {
         for (const segment of timeline.protocols[protocol].segments) {
           const x1 = xFrame(segment.from);
           const x2 = xFrame(segment.to);
-          svg("rect", { class: `timeline-chart__segment role--${segment.role}`, x: r2(x1), y: g.bandTop, width: r2(Math.max(0.5, x2 - x1)), height: g.bandBottom - g.bandTop }, group);
+          const rect = svg("rect", { class: `timeline-chart__segment role--${segment.role}`, x: r2(x1), y: g.bandTop, width: r2(Math.max(0.5, x2 - x1)), height: bandHeight }, group);
+          if (segment.role === "dropped") rect.style.fill = `url(#${this.id}-hatch)`;
         }
       }
       layers.set(protocol, { group, clip });
     }
 
-    // The demo's clip, where it was recorded.
+    // The demo's clip, where it was recorded: its stretch of the steering
+    // shaded, a bracket round it on the band, and a caret and label above.
     if (this.clip && this.clip.firstS !== null && this.clip.lastS !== null) {
       const x1 = g.x(this.clip.firstS);
-      const x2 = Math.max(x1 + 2, g.x(this.clip.lastS));
+      const x2 = Math.max(x1 + 6, g.x(this.clip.lastS));
+      const centre = (x1 + x2) / 2;
       const mark = svg("g", { class: "timeline-chart__clip" }, root);
-      svg("rect", { class: "timeline-chart__clip-window", x: r2(x1), y: g.bandTop - 4, width: r2(x2 - x1), height: g.bandBottom - g.bandTop + 8, rx: 1.5 }, mark);
-      const mid = (x1 + x2) / 2;
-      const anchor = mid < width * 0.2 ? "start" : mid > width * 0.8 ? "end" : "middle";
-      const label = svg("text", { class: "card-chart__note timeline-chart__clip-label", x: r2(anchor === "start" ? x1 : anchor === "end" ? x2 : mid), y: g.bandTop - 10, "text-anchor": anchor }, mark);
+      svg("rect", { class: "timeline-chart__clip-column", x: r2(x1), y: g.traceTop, width: r2(x2 - x1), height: g.traceBottom - g.traceTop }, mark);
+      svg("rect", { class: "timeline-chart__clip-window", x: r2(x1), y: g.bandTop - 4, width: r2(x2 - x1), height: bandHeight + 8, rx: 2 }, mark);
+      svg("line", { class: "timeline-chart__clip-stem", x1: r2(centre), x2: r2(centre), y1: g.traceBottom + 2, y2: g.bandTop - 10 }, mark);
+      svg("path", { class: "timeline-chart__clip-caret", d: `M${r2(centre - 5)} ${g.bandTop - 15}L${r2(centre + 5)} ${g.bandTop - 15}L${r2(centre)} ${g.bandTop - 7}Z` }, mark);
+      const anchor = centre < width * 0.22 ? "start" : centre > width * 0.78 ? "end" : "middle";
+      const label = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", x: r2(anchor === "start" ? Math.max(0, x1) : anchor === "end" ? Math.min(width, x2) : centre), y: g.traceBottom + 20, "text-anchor": anchor }, mark);
       label.textContent = `the demo’s clip, ${clockTime(this.clip.firstS)}`;
     }
 
     // The drive's clock, at round minutes.
-    const step = niceStep(clock.durationS / 60, 6);
+    const step = niceStep(clock.durationS / 60, width < 560 ? 4 : 6);
     const axis = svg("g", { class: "timeline-chart__axis" }, root);
     for (let m = 0; m * 60 <= clock.durationS; m += step) {
       const x = g.x(m * 60);
-      svg("line", { class: "timeline-chart__tick", x1: r2(x), x2: r2(x), y1: g.bandBottom + 2, y2: g.bandBottom + 7 }, axis);
-      const text = svg("text", { class: "card-chart__tick", x: r2(x), y: g.bandBottom + 20, "text-anchor": m === 0 ? "start" : "middle" }, axis);
+      svg("line", { class: "timeline-chart__tick", x1: r2(x), x2: r2(x), y1: g.bandBottom + 2, y2: g.bandBottom + 8 }, axis);
+      const text = svg("text", { class: "timeline-chart__label", x: r2(Math.max(x, m === 0 ? 1 : 0)), y: g.bandBottom + 24, "text-anchor": m === 0 ? "start" : "middle" }, axis);
       text.textContent = m === 0 ? "0" : `${fmtCount(m)} min`;
     }
+
+    // The crosshair, drawn when the pointer is over the chart.
+    svg("line", { class: "timeline-chart__hair", "data-timeline": "hair", x1: 0, x2: 0, y1: g.traceTop, y2: g.bandBottom, visibility: "hidden" }, root);
 
     const old = this.part("plot").querySelector("svg");
     if (old) old.replaceWith(root);
@@ -315,39 +343,48 @@ export class TimelineSection {
     );
   }
 
-  /** The stretch under the pointer, in words; null puts it away. */
+  /** The moment under the pointer, in words: the steering over the trace,
+   * the split's stretch over the band; null puts it away. */
   private point(event: PointerEvent | null): void {
     const tip = this.part("tip");
     const d = this.drawing;
     const timeline = this.data;
-    if (!event || !d || !timeline) {
+    const hair = d?.root.querySelector<SVGLineElement>('[data-timeline="hair"]');
+    const away = () => {
       tip.hidden = true;
-      return;
-    }
+      hair?.setAttribute("visibility", "hidden");
+    };
+    if (!event || !d || !timeline) return away();
     const box = d.root.getBoundingClientRect();
     const px = event.clientX - box.left;
     const py = event.clientY - box.top;
     const g = d.geometry;
-    if (px < 0 || px > g.width || py < g.bandTop - 6 || py > g.bandBottom + 6) {
-      tip.hidden = true;
-      return;
-    }
+    const overTrace = py >= g.traceTop && py <= g.traceBottom;
+    const overBand = py >= g.bandTop - 6 && py <= g.bandBottom + 6;
+    if (px < 0 || px > g.width || !(overTrace || overBand)) return away();
     const seconds = (px / g.width) * timeline.clock.durationS;
-    if (this.protocol === "shuffled") {
-      tip.textContent = `At ${clockTime(seconds)}: every frame here was dealt at random`;
+    let words: string;
+    if (overTrace) {
+      words = momentWords(timeline, seconds);
+    } else if (this.protocol === "shuffled") {
+      words = `At ${clockTime(seconds)}: every frame here was dealt at random`;
     } else {
       const segment = this.segmentAt(seconds);
-      if (!segment) {
-        tip.hidden = true;
-        return;
-      }
-      tip.textContent =
+      if (!segment) return away();
+      words =
         `${ROLE_NAMES[segment.role]}: ${clockTime(timeOfFrame(timeline.clock, segment.from))} to ${clockTime(timeOfFrame(timeline.clock, segment.to))}, ` +
         `frames ${fmtCount(segment.from)} to ${fmtCount(segment.to - 1)}`;
     }
+    tip.textContent = words;
     tip.hidden = false;
+    if (hair) {
+      hair.setAttribute("x1", String(r2(px)));
+      hair.setAttribute("x2", String(r2(px)));
+      hair.setAttribute("visibility", "visible");
+    }
     const left = Math.min(Math.max(8, px + 14), Math.max(8, box.width - tip.offsetWidth - 8));
-    tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(Math.max(4, g.bandTop - tip.offsetHeight - 8))}px)`;
+    const top = overTrace ? g.traceBottom + 6 : Math.max(4, g.bandTop - tip.offsetHeight - 8);
+    tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
   }
 
   /** The picked split's stretch at `seconds` into the drive. */

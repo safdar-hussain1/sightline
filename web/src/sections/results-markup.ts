@@ -190,10 +190,10 @@ export function pairsHtml(): string {
                 <div class="compare__words">
                   <p class="compare__title">Slide between them</p>
                   <p class="compare__text" data-pairs="compare-text">The test frame and the shuffled split’s closest training frame, one over the other.</p>
-                  <p class="compare__note">Pixel difference is the root-mean-square difference between the gray levels of a test frame and its neighbour, compared as small grayscale copies, the way the lookup table compares them: the lower, the more alike.</p>
+                  <p class="compare__note" data-pairs="compare-note"></p>
                 </div>
               </div>
-              <details class="numbers" data-pairs="numbers">
+              <details class="numbers pairs__details" data-pairs="numbers">
                 <summary>All the numbers in these pairs</summary>
                 <div class="numbers__scroll"><table class="numbers__table" data-pairs="table"><caption>Each test frame and its closest training frame under each split</caption></table></div>
               </details>
@@ -226,6 +226,11 @@ export function timelineHtml(): string {
                   <label class="segmented__option"><input class="segmented__input" type="radio" name="timeline-split" value="later" />Later in the drive</label>
                 </fieldset>
               </div>
+              <ul class="timeline__trace-key" role="list">
+                <li><span class="timeline__trace-swatch timeline__trace-swatch--turn" aria-hidden="true"></span>How hard the driver was turning</li>
+                <li><span class="timeline__trace-swatch timeline__trace-swatch--way" aria-hidden="true"></span>Which way, on average</li>
+                <li>Square-root scale, so gentle driving still shows</li>
+              </ul>
               <div class="chart__plot chart__plot--timeline" data-timeline="plot">
                 ${TIMELINE_PLACEHOLDER}
                 <div class="chart__tip" data-timeline="tip" aria-hidden="true" hidden></div>

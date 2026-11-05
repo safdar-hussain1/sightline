@@ -661,7 +661,7 @@ describe("the frame next door", () => {
     expect(photo("test").src).toBe("http://localhost/data/leakage/frame-7917.jpg");
     expect(photo("shuffled").src).toBe("http://localhost/data/leakage/frame-7916.jpg");
     expect(photo("blocked").src).toBe("http://localhost/data/leakage/frame-28219.jpg");
-    expect(all('[data-pairs="facts-shuffled"] li').map((li) => li.textContent)).toEqual(["1 frame before it, 41 ms", "Pixel difference 8.8", "", "Steering 0.5° right"]);
+    expect(all('[data-pairs="facts-shuffled"] li').map((li) => li.textContent)).toEqual(["1 frame before it, 41 ms", "Pixel difference 8.8 grey levels", "", "Steering 0.5° right"]);
     expect(all('[data-pairs="table"] tbody tr')).toHaveLength(12);
     expect(q('[data-pairs="root"]').dataset["state"]).toBe("ready");
     expect(q('[data-pairs="root"]').style.getPropertyValue("--photo-aspect")).toBe(String(455 / 256));
@@ -720,6 +720,43 @@ describe("the frame next door", () => {
     expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 50%)");
   });
 
+  it("gives the slider to the visitor the moment they reach for it: the sweep stops where it is, whatever they reach with", () => {
+    const touches: Array<[string, string]> = [
+      ["compare-range", "pointerdown"],
+      ["compare-range", "keydown"],
+      ["compare-frame", "pointerdown"],
+    ];
+    for (const [target, event] of touches) {
+      document.body.innerHTML = "";
+      layoutAs(1000, true);
+      const { section, frames } = mount(false);
+      section.show(pairs(), URL_PAIRS, null);
+      const over = () => q('[data-pairs="compare-over"]').style.clipPath;
+      frames.tick(400);
+      const frozen = over();
+      expect(frozen).not.toBe("inset(0 0 0 50%)");
+      q(`[data-pairs="${target}"]`).dispatchEvent(new Event(event, { bubbles: true }));
+      // Nothing more is drawn by the sweep: not at the next frame, not when it would have ended.
+      expect(over()).toBe(frozen);
+      frames.tick(300);
+      frames.tick(4000);
+      expect(over()).toBe(frozen);
+    }
+    // And a drag after the press holds: the sweep never pulls the handle back.
+    document.body.innerHTML = "";
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    section.show(pairs(), URL_PAIRS, null);
+    frames.tick(400);
+    const range = q<HTMLInputElement>('[data-pairs="compare-range"]');
+    range.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    range.value = "90";
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    frames.tick(4000);
+    expect(q('[data-pairs="compare-over"]').style.clipPath).toBe("inset(0 0 0 90%)");
+    expect(range.value).toBe("90");
+  });
+
   it("says why there are no pairs, in its lead, when they cannot be had", () => {
     const { section } = mount(true);
     const error = new AssetError("gone", "missing", URL_PAIRS);
@@ -742,7 +779,7 @@ describe("how the drive was split", () => {
     const { section } = mount(true);
     const timeline = timelineOf(realRaw());
     section.show(timeline, clipWindow(JSON.parse(clipFile)));
-    expect(text('[data-timeline="lead"]')).toMatch(/^The 55\.9 minutes of the 2018 drive/);
+    expect(text('[data-timeline="lead"]')).toMatch(/^The 2018 drive runs 55\.9 minutes/);
     expect(all(".timeline-chart__layer")).toHaveLength(3);
     // Shuffled, blocked, later: only the blocked layer is shown.
     expect([layer(0).style.display, layer(1).style.display, layer(2).style.display]).toEqual(["none", "", "none"]);
@@ -826,5 +863,21 @@ describe("how the drive was split", () => {
     section.fail(error);
     expect(text('[data-timeline="lead"]')).toBe(measurementsFailure(error));
     expect(q('[data-timeline="root"]').dataset["state"]).toBe("unavailable");
+  });
+});
+
+describe("the Results view whose code did not load", () => {
+  it("leaves no part waiting: each says so in plain words, and none reads as checking", async () => {
+    const { markResultsUnavailable, resultsCodeFailure } = await import("./unavailable.ts");
+    mountResults();
+    expect(all('[data-state="loading"]').length).toBeGreaterThan(5);
+    markResultsUnavailable();
+    expect(all('#results-view [data-state="loading"]')).toHaveLength(0);
+    for (const root of ["results", "paired", "pairs", "timeline", "ladder"]) {
+      expect(q(`[data-${root}="root"]`).dataset["state"]).toBe("unavailable");
+    }
+    expect(text(".results__lede")).toBe(resultsCodeFailure());
+    expect(text('[data-timeline="lead"]')).toBe(resultsCodeFailure());
+    expect(text('[data-card="export"]')).toBe(resultsCodeFailure());
   });
 });

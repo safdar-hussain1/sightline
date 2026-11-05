@@ -27,6 +27,7 @@ import { HowItWorks } from "./sections/how.ts";
 import { mountDemoMarkup } from "./sections/markup.ts";
 import { readFigures } from "./sections/reader.ts";
 import { mountShell } from "./shell.ts";
+import { markResultsUnavailable } from "./sections/unavailable.ts";
 import { initTheme } from "./theme.ts";
 
 console.info("Sightline — built by Safdar Hussain · https://github.com/safdar-hussain1/sightline");
@@ -54,6 +55,7 @@ function resultsShown(view: ViewName): void {
       (code) => code.startResults(results, cockpit, view),
       (error: unknown) => {
         console.warn("The Results view's code could not be loaded:", error);
+        markResultsUnavailable();
         return { viewShown: () => undefined };
       },
     );

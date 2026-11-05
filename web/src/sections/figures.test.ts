@@ -386,6 +386,7 @@ describe("readPairs", () => {
       blocked: { frame: 28219, image: "frame-28219.jpg", gapFrames: 20302, gapS: 1073.237, pixelRmse: 28.473862043437446, angle: 1.409999966621399 },
     });
     expect(pairs.nearestBlocked).toBe(501);
+    expect(pairs.scale).toEqual({ min: 0, max: 255, unit: "grey levels" });
   });
 
   it("refuses a pair whose gap is not its frames' distance, a blocked neighbour nearer than the split allows, or an image outside its folder", () => {
@@ -399,6 +400,8 @@ describe("readPairs", () => {
     expect(bad("pairs.1.blocked.gap_s", -1)?.message).toMatch(/pairs\.1\.blocked\.gap_s/);
     expect(bad("drive", "drive2017")?.message).toMatch(/drive/);
     expect(bad("seed", 4)?.message).toMatch(/seed/);
+    expect(bad("pixel_scale.max", 20)?.message).toMatch(/pixel_scale\.max/);
+    expect(bad("pixel_scale.unit", 3)?.message).toMatch(/pixel_scale\.unit/);
   });
 });
 
@@ -417,15 +420,18 @@ describe("readTimeline", () => {
 
   it("refuses rules that do not reproduce the recorded sizes, or a clock that runs backwards", () => {
     expect(refusal(readTimeline, patch(real(), "split_rules.blocked.firewall", 200))?.message).toMatch(/split_sizes\.blocked|firewall/);
+    expect(refusal(readTimeline, patch(real(), "split_sizes.leaky.drive", "drive2017"))?.message).toMatch(/split_sizes\.leaky\.drive/);
+    expect(refusal(readTimeline, patch(real(), "split_sizes.forward.frames", 63824))?.message).toMatch(/split_sizes\.forward\.frames/);
     expect(refusal(readTimeline, patch(real(), "split_sizes.forward.val", 9075))?.message).toMatch(/split_sizes\.forward/);
     expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.start_s.5", 1))?.message).toMatch(/start_s\.5/);
     expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.start_frame.3", 190))?.message).toMatch(/start_frame\.3/);
     expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.duration_s", 3000))?.message).toMatch(/duration_s/);
+    expect(refusal(readTimeline, patch(real(), "drive_profile.drives.drive2018.mean_deg.7", 900))?.message).toMatch(/mean_deg\.7/);
   });
 });
 
 describe("readClipWindow", () => {
   it("reads where the demo's clip sits in its drive, in frames and in seconds", () => {
-    expect(readClipWindow(JSON.parse(clipFile))).toEqual({ drive: "drive2018", title: "2018: minutes it never trained on", firstFrame: 28752, frames: 420, firstS: 1519.063, lastS: 1541.774, aspect: 455 / 256 });
+    expect(readClipWindow(JSON.parse(clipFile))).toEqual({ drive: "drive2018", title: "2018: minutes it never trained on", firstFrame: 28752, frames: 420, firstS: 1519.063, lastS: 1541.774, aspect: 455 / 256, twinTrained: 0.7095238095238096, twinNeighbour: 0.9714285714285714 });
   });
 });
