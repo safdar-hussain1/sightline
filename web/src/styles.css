@@ -3046,6 +3046,10 @@ html:not(.js) .windshield__status {
   stroke-width: 1;
 }
 
+.card__chart-title {
+  margin: 0 0 var(--space-3);
+}
+
 .card-chart__extra {
   font-weight: 400;
   fill: var(--ink-3);
@@ -3115,10 +3119,10 @@ html:not(.js) .windshield__status {
   stroke-dasharray: 3 3;
 }
 
-/* The standard recipe's reach: the gauge's track up to the limit, the part
-   its answers used in PilotNet's colour, the limit a wall in the page's ink,
-   and the rest of the turn, past the limit, a quiet line that still reads
-   3:1 on the surface. The wheel inside it is turned to its largest answer. */
+/* The standard recipe's reach, either way from straight ahead: the gauge's
+   track up to the limit on both sides, the size of its largest answer in
+   PilotNet's colour on both alike, the limit a wall in the page's ink, and
+   the figure in the middle. */
 .card-chart__reach-track {
   fill: none;
   stroke: var(--line);
@@ -3134,35 +3138,16 @@ html:not(.js) .windshield__status {
   stroke: var(--model-pilotnet);
 }
 
-.card-chart__beyond {
-  fill: none;
-  stroke: var(--ink-3);
-  stroke-width: 2.5;
-  stroke-linecap: round;
+.card-chart__big {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  fill: var(--ink);
 }
 
 .card-chart__wall {
   stroke: var(--ink);
   stroke-width: 2.5;
-  stroke-linecap: round;
-}
-
-/* The wheel is a drawing, quieter than the gauge's marks around it; only its
-   marker, which shows the turn, wears PilotNet's colour. */
-.card-chart__wheel-rim,
-.card-chart__wheel-spoke {
-  fill: none;
-  stroke: var(--line-strong);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-}
-
-.card-chart__wheel-hub {
-  fill: var(--line-strong);
-}
-
-.card-chart__wheel-marker {
-  stroke-width: 4;
   stroke-linecap: round;
 }
 
@@ -3196,6 +3181,11 @@ html:not(.js) .windshield__status {
   .sources-card__grid {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr);
     gap: var(--space-7);
+  }
+
+  /* Without its data the splits part is put away: two columns, none empty. */
+  .sources-card[data-state="unavailable"] .sources-card__grid {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr);
   }
 }
 

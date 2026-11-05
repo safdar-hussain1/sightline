@@ -26,7 +26,7 @@ import { frameTiming, type Gaps } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
 import { steerParts } from "../format.ts";
 import type { ViewName } from "../router.ts";
-import { framesAges, framesText, framesTitle, speedText } from "./copy.ts";
+import { framesAges, framesText, framesTitle, speedText } from "./words.ts";
 import { EASE_OUT, prefersReducedMotion } from "./motion.ts";
 
 /** One answer, from the frames arriving to the heat settling, and a rest. */

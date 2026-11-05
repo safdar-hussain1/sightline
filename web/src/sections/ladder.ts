@@ -15,7 +15,7 @@
  */
 
 import { attrs, easeInOut, easeOut, lines, local, svg, tween, watchWidth } from "../charts/draw.ts";
-import { ladderLayout, lerpLadder, type LadderLayout, type LadderView } from "../charts/ladder.ts";
+import { ladderLayout, lerpLadder, seedTicks, type LadderLayout, type LadderView } from "../charts/ladder.ts";
 import { fmtDeg, fmtPct } from "../format.ts";
 import type { ViewName } from "../router.ts";
 import { NETWORK_NAMES, STRAIGHT, barWords, capitalised, ladderAlt, ladderCaption, ladderLead, measurementsFailure, rungCaption, rungNote } from "./copy.ts";
@@ -346,20 +346,25 @@ export class LadderSection {
       const [x, y1, y2] = [whisker.x, whisker.y1, whisker.y2].map((n) => Math.round(n * 100) / 100) as [number, number, number];
       attrs(marks.whisker, { d: `M${x - 4} ${y1}h8M${x} ${y1}V${y2}M${x - 4} ${y2}h8`, opacity: frame.whiskers });
     }
-    const seen = new Map<string, number>();
+    // Each bar's ticks are laid out together, so trainings that scored
+    // nearly the same stand side by side rather than merging into one line.
     const columns = new Map((error?.bars ?? []).map((bar) => [key(bar.model, bar.rung), bar]));
+    const heights = new Map<string, number[]>();
     for (const dot of error?.dots ?? []) {
       const k = key(dot.model, dot.rung);
+      heights.set(k, [...(heights.get(k) ?? []), dot.cy]);
+    }
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    for (const [k, ys] of heights) {
       const marks = d.marks.get(k);
       const column = columns.get(k);
       if (!marks || !column) continue;
-      const n = seen.get(k) ?? 0;
-      seen.set(k, n + 1);
-      const pair = marks.seeds[n];
-      if (!pair) continue;
-      const y = Math.round(dot.cy * 100) / 100;
-      const tick = `M${Math.round((column.x - 2) * 100) / 100} ${y}h${Math.round((column.w + 4) * 100) / 100}`;
-      for (const el of pair) attrs(el, { d: tick, opacity: frame.seeds });
+      seedTicks(column.x, column.w, ys).forEach((tick, n) => {
+        const pair = marks.seeds[n];
+        if (!pair) return;
+        const path = `M${r2(tick.x1)} ${r2(tick.y)}h${r2(tick.x2 - tick.x1)}`;
+        for (const el of pair) attrs(el, { d: path, opacity: frame.seeds });
+      });
     }
     for (const note of words.missing) {
       const el = d.missing.get(key(note.model, note.rung));

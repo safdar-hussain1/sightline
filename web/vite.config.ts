@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 
 import { injectCockpit } from "./src/cockpit/markup.ts";
-import { injectSections } from "./src/sections/markup.ts";
+import { injectSections } from "./src/sections/inject.ts";
 import { injectShell } from "./src/shell.ts";
 
 /**

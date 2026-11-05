@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readLadder, readPaired } from "../sections/figures.ts";
 import { resultsFixture, setSkill } from "../sections/fixture.ts";
 import { barsLayout } from "./bars.ts";
-import { LADDER_GRID, ladderLayout, lerpLadder } from "./ladder.ts";
+import { LADDER_GRID, ladderLayout, lerpLadder, seedTicks } from "./ladder.ts";
 import { SLOPE_NARROW, lerpSlope, nearestLine, slopeLayout, tickDecimals } from "./slope.ts";
 
 const paired = () => readPaired(resultsFixture());
@@ -222,5 +222,28 @@ describe("the cards' bar layout", () => {
     const [straight, model] = layout.bars;
     expect(straight?.x0).toBe(2);
     expect((model?.x1 ?? 0) - 2).toBeCloseTo((((straight?.x1 ?? 0) - 2) * 36) / 78.4, 9);
+  });
+});
+
+describe("each training's tick", () => {
+  it("spans the bar where the trainings stand apart", () => {
+    expect(seedTicks(100, 20, [10, 40, 70])).toEqual([
+      { x1: 98, x2: 122, y: 10 },
+      { x1: 98, x2: 122, y: 40 },
+      { x1: 98, x2: 122, y: 70 },
+    ]);
+  });
+
+  it("stands side by side with the others where trainings would merge into one line, so each stays visible", () => {
+    const ticks = seedTicks(100, 20, [50.4, 50, 50.9]);
+    expect(ticks).toHaveLength(3);
+    const spans = ticks.map((t) => [t.x1, t.x2] as const).sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < spans.length; i += 1) expect((spans[i]?.[0] ?? 0) - (spans[i - 1]?.[1] ?? 0)).toBeGreaterThanOrEqual(2);
+    expect(spans[0]?.[0]).toBe(98);
+    expect(spans[2]?.[1]).toBeCloseTo(122, 6);
+    // Two close, one apart: only the close two share the width.
+    const mixed = seedTicks(100, 20, [50, 51, 80]);
+    expect(mixed[2]).toEqual({ x1: 98, x2: 122, y: 80 });
+    expect((mixed[0]?.x2 ?? 0) <= (mixed[1]?.x1 ?? 0) || (mixed[1]?.x2 ?? 0) <= (mixed[0]?.x1 ?? 0)).toBe(true);
   });
 });

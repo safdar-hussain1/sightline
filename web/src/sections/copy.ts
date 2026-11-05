@@ -1,5 +1,6 @@
 /**
- * The sentences the page's sections say about the measurements and the clip.
+ * The sentences the Results view says about the measurements and the clip
+ * (the demo view's are in words.ts, re-exported here).
  *
  * Every number in them is read from results.json, a clip.json, or what this
  * browser measured itself, and each sentence is built so it cannot say more
@@ -12,10 +13,9 @@
 
 import type { Agreement, CockpitState } from "../cockpit/live.ts";
 import { splitTitle } from "../cockpit/copy.ts";
-import { AssetError } from "../data/load.ts";
-import { driveName, framesBack, medianGap, type FrameTiming } from "../data/timing.ts";
+import { driveName } from "../data/timing.ts";
 import type { Clip } from "../data/types.ts";
-import { countWord, fmtCount, fmtDeg, fmtMs, fmtPct, fmtRatio, fmtSpread, ordinalWord } from "../format.ts";
+import { countWord, fmtCount, fmtDeg, fmtPct, fmtRatio, fmtSpread, ordinalWord } from "../format.ts";
 import {
   LADDER_MODELS,
   ORACLES,
@@ -36,59 +36,20 @@ import {
 } from "./figures.ts";
 import { framesInKey, networkName } from "./names.ts";
 
-export const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-
-/** "about three times" for a ratio of 3.05: the ratio to the nearest half, in
- * words while it is small enough to say. Meant for ratios of 1.25 or more. */
-export function timesInWords(ratio: number): string {
-  const half = Math.round(ratio * 2) / 2;
-  const whole = Math.floor(half);
-  if (whole > 12) {
-    return `${fmtCount(Math.round(ratio))} times`;
-  }
-  return half === whole ? `${countWord(whole)} times` : `${countWord(whole)} and a half times`;
-}
-
-/** Why the measurements are not shown, for the visitor: what went wrong in
- * plain words, never the URL (the console has it). */
-export function measurementsFailure(error: unknown): string {
-  if (error instanceof AssetError) {
-    if (error.kind === "missing") return "The measurements are not on this copy of the site.";
-    if (error.kind === "unreachable") return "The measurements could not be downloaded. Check the connection, then reload the page.";
-  }
-  return "The measurements file is not in the form this page reads, so its figures are not shown.";
-}
-
-// -- The accuracy figure ----------------------------------------------------------
-
-export function accuracySentence(heldOut: Figures["heldOut"]): string {
-  return (
-    `On minutes of driving it never trained on, Sightline is off by ${fmtDeg(heldOut.model)} on average. ` +
-    `Always steering straight is off by ${fmtDeg(heldOut.straight)} on the same frames.`
-  );
-}
-
-/** The frames are the split's test frames: the split also holds back
- * validation frames and the gaps around them, which this figure does not use. */
-export function accuracyCaption(heldOut: Figures["heldOut"]): string {
-  return `Mean error on the ${fmtCount(heldOut.frames)} test frames held back from its training.`;
-}
-
-/** The figure's text alternative, from the same numbers it draws. */
-export function accuracyLabel(heldOut: Figures["heldOut"]): string {
-  return `Mean error on the same ${fmtCount(heldOut.frames)} frames: Sightline ${fmtDeg(heldOut.model)}, always steering straight ${fmtDeg(heldOut.straight)}.`;
-}
-
-/** What the paired measurement means, from its ratio: the blocked-trained
- * model's error over the shuffled-trained one's on the same held-out frames. */
-export function leakageSentence(ratio: number): string {
-  const tail = "better than it is on road it has not seen nearby.";
-  if (!(ratio > 1)) {
-    return "Tested the usual way, on shuffled frames, the same kind of model looks no better than it is on road it has not seen nearby.";
-  }
-  const how = ratio < 1.25 ? "a little" : `about ${timesInWords(ratio)}`;
-  return `Test it the usual way, on shuffled frames, and the same kind of model looks ${how} ${tail}`;
-}
+export {
+  accuracyCaption,
+  accuracyLabel,
+  accuracySentence,
+  capitalised,
+  framesAges,
+  framesText,
+  framesTitle,
+  leakageSentence,
+  measurementsFailure,
+  speedText,
+  timesInWords,
+} from "./words.ts";
+import { capitalised, timesInWords } from "./words.ts";
 
 // -- The Results view ---------------------------------------------------------------
 
@@ -288,57 +249,6 @@ export function parityState(agreement: Agreement | null, state: CockpitState | "
     "",
     true,
   );
-}
-
-// -- How it works ------------------------------------------------------------------------
-
-/** The first step's title: how many frames the model is shown, and, on a
- * drive whose frames carry timestamps, the drive's median time between the
- * oldest of them and the frame on screen -- said as the drive's, since the
- * clip's own frames have their own spread. Elsewhere it counts frames. */
-export function framesTitle(clip: Clip, timing: FrameTiming): string {
-  const lags = clip.frame_lags;
-  if (lags.length === 0) return "One frame at a time";
-  const oldest = Math.max(...lags);
-  const gap = medianGap(oldest, timing.gaps);
-  if (gap === null) {
-    return lags.length === 1 ? `This frame and the one ${framesBack(oldest)} before it` : `This frame and the ${countWord(lags.length)} before it`;
-  }
-  const count = capitalised(countWord(lags.length + 1));
-  const drive = driveName(timing.drive);
-  return lags.length === 1 ? `${count} frames, ${gap} apart on ${drive}` : `${count} frames, the oldest ${gap} earlier on ${drive}`;
-}
-
-/** The labels of the frames shown in the first step, the frame on screen
- * first: how many frames back each is, which is true of every frame of the clip. */
-export function framesAges(clip: Clip, _timing?: FrameTiming): string[] {
-  return ["now", ...clip.frame_lags.map((lag) => `${framesBack(lag)} before`)];
-}
-
-export function framesText(clip: Clip, timing: FrameTiming): string {
-  const size = `${clip.sprite.frame_w} × ${clip.sprite.frame_h} pixels`;
-  const lags = clip.frame_lags;
-  if (lags.length === 0) {
-    return `The frame on screen, cropped to the road and shrunk to ${size}.`;
-  }
-  const history = lags.length === 1 ? `the one ${framesBack(lags[0] as number)} before it` : `the ones ${lags.map(framesBack).join(" and ")} before it`;
-  const oldest = Math.max(...lags);
-  const quoted = timing.gaps === null && timing.reference !== null ? medianGap(oldest, timing.reference.gaps) : null;
-  const spacing =
-    timing.gaps !== null
-      ? ""
-      : quoted === null || timing.reference === null
-        ? " This drive’s frames carry no timestamps, so their spacing is counted in frames."
-        : ` This drive’s frames carry no timestamps; on ${driveName(timing.reference.drive)}, whose frames do, ` +
-          `a frame and the one ${countWord(oldest)} before it were taken ${quoted} apart.`;
-  return (
-    `The frame on screen and ${history}, cropped to the road and shrunk to ${size}.${spacing} ` +
-    `${capitalised(countWord(lags.length + 1))} frames show which way the view is moving, which one frame cannot.`
-  );
-}
-
-export function speedText(msPerFrame: number | null): string {
-  return msPerFrame === null ? "" : `Here it takes about ${fmtMs(msPerFrame)} a frame.`;
 }
 
 // -- Names ----------------------------------------------------------------------------
@@ -664,9 +574,9 @@ export function legacyText(legacy: Legacy): { lead: string; other: string; cap: 
         `${againstStraight(blocked)}, and by ${fmtDeg(later.model)} on the drive’s last part, ${againstStraight(later)}.`,
     cap:
       legacy.largest < legacy.cap
-        ? `Its arctangent output can never pass ${exactDeg(legacy.cap)}${turn ? `, ${turn}` : ""}: its largest answer is ${fmtDeg(legacy.largest)}, ` +
+        ? `Its arctangent output can never pass ${exactDeg(legacy.cap)} either way${turn ? `, ${turn}` : ""}: its largest answer, either way, is ${fmtDeg(legacy.largest)}, ` +
           `yet the driver turned past ${exactDeg(legacy.cap)} on ${fmtCount(legacy.beyond)} frames of ${other}.`
-        : `Its largest answer is ${fmtDeg(legacy.largest)}; the driver turned past ${exactDeg(legacy.cap)} on ${fmtCount(legacy.beyond)} frames of ${other}.`,
+        : `Its largest answer, either way, is ${fmtDeg(legacy.largest)}; the driver turned past ${exactDeg(legacy.cap)} on ${fmtCount(legacy.beyond)} frames of ${other}.`,
   };
 }
 
@@ -722,7 +632,7 @@ export function yardsticksAlt(sets: readonly YardstickSet[]): string {
       const where =
         set.kind === "held-back"
           ? `Mean error on the held-back stretches of ${driveTitle(set.drive)} (${fmtCount(set.frames)} frames)`
-          : `On another day’s drive, ${driveTitle(set.drive)} (${fmtCount(set.frames)} frames)`;
+          : `Mean error on another day’s drive, ${driveTitle(set.drive)} (${fmtCount(set.frames)} frames)`;
       const e = set.errors;
       return (
         `${where}: ${YARDSTICK_SAID.zero} ${fmtDeg(e.zero)}, ${YARDSTICK_SAID.mean} ${fmtDeg(e.mean)}, ` +
@@ -733,12 +643,13 @@ export function yardsticksAlt(sets: readonly YardstickSet[]): string {
     .join(" ");
 }
 
-/** What the rules that read the answers show: a bound on their error,
- * rounded up, never to nearest. */
+/** What the rules that read the answers show: a bound on their MEAN error,
+ * rounded up, never to nearest. On a few frames they are far off, so it is
+ * never said of every frame. */
 export function yardsticksVerdict(sets: readonly YardstickSet[]): string {
   const largest = Math.max(...sets.flatMap((set) => ORACLES.map((name) => set.errors[name])));
   return (
-    `The rules that read the answers are off by at most ${upperBound(largest)}: the true angle barely changes from one frame to the next. ` +
+    `The rules that read the answers are off by ${upperBound(largest)} or less on average: the true angle barely changes from one frame to the next. ` +
     "They are yardsticks here, not rivals."
   );
 }

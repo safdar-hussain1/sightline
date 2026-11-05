@@ -197,7 +197,7 @@ export class Cards {
       [`The last part of ${other}`, legacy.later],
     ] as const;
     const alt =
-      `${legacyAlt(legacy)} Its largest answer is ${fmtDeg(legacy.largest)}; its output can never pass ${exactDeg(legacy.cap)}, ` +
+      `${legacyAlt(legacy)} Its largest answer, either way, is ${fmtDeg(legacy.largest)}; its output can never pass ${exactDeg(legacy.cap)} either way, ` +
       `and the driver turned past that on ${fmtCount(legacy.beyond)} frames of ${other}.`;
     this.chart("recipe", {
       id: "recipe",

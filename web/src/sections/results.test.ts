@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ladderLayout } from "../charts/ladder.ts";
 import { slopeLayout } from "../charts/slope.ts";
 import { AssetError } from "../data/load.ts";
+import { textWidth } from "../charts/marks.ts";
 import { Cards } from "./cards.ts";
 import {
   exportText,
@@ -39,7 +40,7 @@ import type { Frames } from "./countup.ts";
 import { readFigures, readFrames, readLadder, readLegacy, readPaired, readParity, readRegimes, readSplits, readYardsticks } from "./figures.ts";
 import { patch, resultsFixture } from "./fixture.ts";
 import { LadderSection } from "./ladder.ts";
-import { resultsHtml } from "./markup.ts";
+import { resultsHtml } from "./results-markup.ts";
 import { PairedSection } from "./paired.ts";
 
 const raw = () => resultsFixture();
@@ -378,6 +379,24 @@ describe("the ladder", () => {
     expect(text('[data-ladder="chart-caption"]')).toBe(ladderCaption(ladder, "error"));
   });
 
+  it("keeps every training's tick visible where trainings scored nearly the same", () => {
+    layoutAs(1000, true);
+    const { section, frames } = mount(false);
+    section.show(readLadder(raw()), readSplits(raw()));
+    pick("ladder-view", "error");
+    frames.tick(5000);
+    // SightlineNet on the shuffled rung: 2.8°, 2.9° and 3.0°, under a pixel apart.
+    const spans = all(".ladder-chart__seed")
+      .slice(0, 3)
+      .map((tick) => {
+        const [, x, , w] = /^M([\d.]+) ([\d.]+)h([\d.]+)$/.exec(tick.getAttribute("d") ?? "") ?? [];
+        return [Number(x), Number(x) + Number(w)] as const;
+      })
+      .sort((a, b) => a[0] - b[0]);
+    expect(spans).toHaveLength(3);
+    for (let i = 1; i < spans.length; i += 1) expect((spans[i]?.[0] ?? 0) >= (spans[i - 1]?.[1] ?? 0)).toBe(true);
+  });
+
   it("says what a bar's height means in the view on screen: in raw error a bar above the line never beats steering straight", () => {
     layoutAs(1000, true);
     const { section, frames } = mount(false);
@@ -492,7 +511,7 @@ describe("the cards", () => {
       { title: "Held-back stretches of its own drive", more: ladder.bars.sightlinenet[1]?.skill.mean ?? 0, fewer: ladder.bars["sightlinenet-1f"][1]?.skill.mean ?? 0 },
     ], frames).desc);
     expect(text("#baselines-chart-desc")).toBe(yardsticksAlt(sets));
-    expect(text("#recipe-chart-desc")).toMatch(/Its largest answer is 169\.8°; its output can never pass 180°, and the driver turned past that on 235 frames of the 2018 drive\.$/);
+    expect(text("#recipe-chart-desc")).toMatch(/Its largest answer, either way, is 169\.8°; its output can never pass 180° either way, and the driver turned past that on 235 frames of the 2018 drive\.$/);
     for (const name of ["baselines", "frames", "regimes", "recipe", "trust"]) expect(q(`[data-card="${name}"]`).dataset["state"]).toBe("ready");
   });
 
@@ -510,7 +529,7 @@ describe("the cards", () => {
       "Sightline 36.0°", "steering straight 78.4°",
     ]);
     expect(labels("recipe")).toEqual([
-      "largest answer169.8°", "limit 180°", "235 framesturned past it",
+      "169.8°largest answereither way", "limit 180° either way", "235 frames of the 2018 driveturned past it",
       "PilotNet 4.5°", "steering straight 15.5°",
       "PilotNet 22.0°", "steering straight 17.5°",
       "PilotNet 19.4°", "steering straight 9.4°",
@@ -525,14 +544,42 @@ describe("the cards", () => {
     expect(all(".card-chart__label").every((el) => !/series--/.test(el.getAttribute("class") ?? ""))).toBe(true);
   });
 
-  it("turn the standard recipe's wheel to its largest answer, never past its limit", () => {
+  it("draw the standard recipe's largest answer as a size either way, never as a turn to one side", () => {
     layoutAs(540, true);
     const cards = mount();
     cards.showRecipe(readLegacy(raw()));
-    expect(q('[data-card="recipe-plot"] .card-chart__wheel').getAttribute("transform")).toMatch(/^rotate\(169\.84 /);
-    const wall = q('[data-card="recipe-plot"] .card-chart__wall');
-    // The limit, 180°, is straight down from the wheel's centre.
-    expect(wall.getAttribute("x1")).toBe(wall.getAttribute("x2"));
+    const plot = q('[data-card="recipe-plot"]');
+    // The answer's size on both sides of straight ahead, mirror images of each other.
+    const arcs = all('[data-card="recipe-plot"] .card-chart__reach');
+    expect(arcs).toHaveLength(2);
+    const ends = arcs.map((arc) => (arc.getAttribute("d") ?? "").match(/-?[\d.]+/g)?.map(Number) ?? []);
+    const cx = 270;
+    const [a, b] = ends as [number[], number[]];
+    expect(a[0]).toBeCloseTo(cx, 6);
+    expect(b.at(-2)).toBeCloseTo(cx, 6);
+    expect((a.at(-2) ?? 0) - cx).toBeCloseTo(cx - (b[0] ?? 0), 1);
+    // Nothing turns to one side.
+    expect(plot.querySelector("[transform*=rotate]")).toBeNull();
+    const words = labels("recipe").join(" | ");
+    expect(words).toMatch(/largest answer.*either way/);
+    expect(words).toMatch(/limit 180° either way/);
+  });
+
+  it("keep the standard recipe's words inside its drawing at the narrowest phone", () => {
+    for (const width of [240, 280, 540]) {
+      document.body.innerHTML = "";
+      layoutAs(width, true);
+      const cards = mount();
+      cards.showRecipe(readLegacy(raw()));
+      for (const text of all('[data-card="recipe-plot"] svg text')) {
+        const x = Number(text.getAttribute("x"));
+        const anchor = text.getAttribute("text-anchor") ?? "start";
+        const longest = Math.max(...[...text.querySelectorAll("tspan")].map((span) => (span.getAttribute("x") === null ? 0 : textWidth(span.textContent ?? ""))), textWidth(text.textContent ?? "") * (text.querySelector("tspan[x]") ? 0 : 1));
+        const [left, right] = anchor === "middle" ? [x - longest / 2, x + longest / 2] : anchor === "end" ? [x - longest, x] : [x, x + longest];
+        expect(left, `${width}: ${text.textContent}`).toBeGreaterThanOrEqual(0);
+        expect(right, `${width}: ${text.textContent}`).toBeLessThanOrEqual(width);
+      }
+    }
   });
 
   it("draw themselves in once they near the screen: the dumbbell's dot travels from fewer frames to more", () => {

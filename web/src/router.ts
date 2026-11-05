@@ -15,9 +15,10 @@
  * leaves the scroll position to the browser, which restores where the visitor
  * was; once it has, focus moves, without scrolling, to the heading or control
  * nearest the top of the screen in the view now shown -- or a labelled region
- * whose top is on screen, when none of its own headings or controls is -- so
- * the next Tab carries on from where the visitor is rather than from a place
- * in the view just hidden. Focus already on something still on screen stays
+ * whose top is on screen, when none of its own headings or controls is, or,
+ * with nothing on screen to focus, the nearest heading or control below it --
+ * so the next Tab carries on from where the visitor is rather than from a
+ * place in the view just hidden. Focus already on something still on screen stays
  * where it is. It
  * never changes the document's title: the title is what search engines index,
  * and it names the page, not the view.
@@ -59,30 +60,40 @@ const REGIONS = "section[aria-label], section[aria-labelledby]";
 export type PlaceKind = "heading" | "control" | "region";
 const RANK: Readonly<Record<PlaceKind, number>> = { heading: 0, control: 1, region: 2 };
 
-/** Of `boxes`, the index of the one whose top is nearest the top of a
- * viewport `height` tall, among those at least partly in view -- a region
- * only while its own top is on screen, since one that began far above says
- * nothing of where the visitor is. A heading wins a tie with a control, a
- * control with a region. Null when none qualifies. */
+/** Of `boxes`, the index of the place focus should go to in a viewport
+ * `height` tall. First choice: the one whose top is on screen nearest the top
+ * of it; then one cut off at the top that reaches furthest down into it. A
+ * region counts only while its own top is on screen, since one that began far
+ * above says nothing of where the visitor is. When nothing is in view, the
+ * nearest heading or control below the screen, and failing that the nearest
+ * above it, so the next Tab carries on from near where the visitor is. A
+ * heading wins a tie with a control, a control with a region. Null when there
+ * is no place at all. */
 export function nearestToTop(
   boxes: ReadonlyArray<{ readonly top: number; readonly bottom: number; readonly kind: PlaceKind }>,
   height: number,
 ): number | null {
-  let best: number | null = null;
-  boxes.forEach((box, i) => {
-    if (box.bottom <= 0 || box.top >= height) return;
-    if (box.kind === "region" && box.top < 0) return;
-    const current = best === null ? undefined : boxes[best];
-    const distance = Math.abs(box.top);
-    if (
-      current === undefined ||
-      distance < Math.abs(current.top) ||
-      (distance === Math.abs(current.top) && RANK[box.kind] < RANK[current.kind])
-    ) {
-      best = i;
-    }
-  });
-  return best;
+  const ranked = (score: (box: (typeof boxes)[number]) => number | null): number | null => {
+    let best: number | null = null;
+    let bestScore = Infinity;
+    boxes.forEach((box, i) => {
+      const value = score(box);
+      if (value === null) return;
+      const current = best === null ? undefined : boxes[best];
+      if (value < bestScore || (value === bestScore && current !== undefined && RANK[box.kind] < RANK[current.kind])) {
+        best = i;
+        bestScore = value;
+      }
+    });
+    return best;
+  };
+  const inView = (box: (typeof boxes)[number]) => box.bottom > 0 && box.top < height;
+  return (
+    ranked((box) => (inView(box) && box.top >= 0 ? box.top : null)) ??
+    ranked((box) => (inView(box) && box.top < 0 && box.kind !== "region" ? -box.top : null)) ??
+    ranked((box) => (box.kind !== "region" && box.top >= height ? box.top : null)) ??
+    ranked((box) => (box.kind !== "region" && box.bottom <= 0 ? -box.bottom : null))
+  );
 }
 
 /** Whether a radio button is the one of its group that Tab reaches: the
@@ -228,6 +239,7 @@ export class Router {
     const regions = found(REGIONS, "region").filter((region) => !inner.some((place) => inView(place) && region.element.contains(place.element)));
     const places = [...inner, ...regions];
     const nearest = nearestToTop(places, innerHeight);
+    // The view's own focus target only when it holds no place at all.
     const target = nearest === null ? document.querySelector<HTMLElement>(this.options.focus[view]) : places[nearest]?.element;
     if (target) this.focusOn(target);
   }

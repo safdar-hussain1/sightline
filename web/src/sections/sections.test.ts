@@ -19,7 +19,8 @@ import { readFigures } from "./figures.ts";
 import { patch, resultsFixture } from "./fixture.ts";
 import { Headline } from "./headline.ts";
 import { HowItWorks } from "./how.ts";
-import { accuracyHtml, howHtml, resultsHtml } from "./markup.ts";
+import { accuracyHtml, howHtml } from "./markup.ts";
+import { resultsHtml } from "./results-markup.ts";
 
 const figures = () => readFigures(resultsFixture());
 

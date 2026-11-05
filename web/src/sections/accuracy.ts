@@ -12,8 +12,8 @@
  */
 
 import { fmtDeg } from "../format.ts";
-import { accuracyCaption, accuracyLabel, accuracySentence, leakageSentence, measurementsFailure } from "./copy.ts";
-import type { Figures } from "./figures.ts";
+import { accuracyCaption, accuracyLabel, accuracySentence, leakageSentence, measurementsFailure } from "./words.ts";
+import type { Figures } from "./reader.ts";
 import { EASE_OUT, onScreen, prefersReducedMotion } from "./motion.ts";
 
 /** How far below the screen the figure starts growing, px. */

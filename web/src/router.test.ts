@@ -241,6 +241,31 @@ describe("the router", () => {
     expect(q("#view-skill").hasAttribute("tabindex")).toBe(false);
   });
 
+  it("after Forward with no heading or control on screen, focuses the nearest one below, never the view's title far above", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    history.back();
+    await ticks(6);
+    // Only a drawing is on screen: everything to tab to is above or below it.
+    layout({ "results-view": -6300, "results-title": -6275, "ladder-title": -4800, "view-skill": 1180, "view-error": 1180, "ladder-more": 1500 }, 40, { "results-view": 9000 });
+    restore();
+    expect(document.activeElement?.id).toBe("view-skill");
+  });
+
+  it("after Forward with every place above the screen, focuses the nearest above", async () => {
+    history.replaceState(null, "", "/#results");
+    start();
+    link("demo").click();
+    await ticks();
+    history.back();
+    await ticks(6);
+    layout({ "results-view": -6300, "results-title": -6275, "ladder-title": -900, "view-skill": -700, "view-error": -700, "ladder-more": -400 }, 40, { "results-view": 6200 });
+    restore();
+    expect(document.activeElement?.id).toBe("ladder-more");
+  });
+
   it("after Forward, focuses a group of radio buttons by the one Tab reaches, the checked one", async () => {
     history.replaceState(null, "", "/#results");
     start();
@@ -344,8 +369,10 @@ describe("nearestToTop", () => {
   type Kind = "heading" | "control" | "region";
   const box = (top: number, kind: Kind = "heading", height = 40) => ({ top, bottom: top + height, kind });
 
-  it("picks the place whose top is nearest the top of the screen, above or below it", () => {
-    expect(nearestToTop([box(300), box(-20), box(600)], 800)).toBe(1);
+  it("picks the place nearest the top of the screen, preferring one whose top is on screen to one cut off above", () => {
+    expect(nearestToTop([box(300), box(-20), box(600)], 800)).toBe(0);
+    expect(nearestToTop([box(-20), box(-5)], 800)).toBe(1);
+    expect(nearestToTop([box(-34, "control"), box(537, "control")], 841)).toBe(1);
     expect(nearestToTop([box(-700, "region", 900), box(120)], 800)).toBe(1);
     expect(nearestToTop([box(300), box(40, "control")], 800)).toBe(1);
   });
@@ -357,9 +384,13 @@ describe("nearestToTop", () => {
     expect(nearestToTop([box(10, "region", 900), box(400)], 800)).toBe(0);
   });
 
-  it("skips places wholly above or below the screen, and finds none when none is in view", () => {
+  it("with nothing in view, takes the nearest heading or control below the screen, then the nearest above", () => {
     expect(nearestToTop([box(-60), box(500)], 800)).toBe(1);
-    expect(nearestToTop([box(-60), box(900)], 800)).toBeNull();
+    expect(nearestToTop([box(-6275), box(900, "control"), box(1400)], 800)).toBe(1);
+    expect(nearestToTop([box(-6275), box(-300, "control"), box(-5000)], 800)).toBe(1);
+    // A region is never the fallback: one off screen says nothing of where the visitor is.
+    expect(nearestToTop([box(900, "region", 900), box(-300)], 800)).toBe(1);
+    expect(nearestToTop([box(900, "region", 900)], 800)).toBeNull();
     expect(nearestToTop([], 800)).toBeNull();
   });
 

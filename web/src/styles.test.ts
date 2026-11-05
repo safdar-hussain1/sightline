@@ -97,3 +97,13 @@ describe("the charts' words", () => {
     expect(css).toMatch(/\.sources-card\[data-state="unavailable"\] :is\(\[data-card="live"\], \.sources-card__part--splits\)/);
   });
 });
+
+describe("the sources card without its data", () => {
+  it("closes up to two columns on a wide screen once its splits part is put away, leaving none empty", () => {
+    const wide = css.slice(css.indexOf(".sources-card__grid {\n    grid-template-columns"));
+    const media = css.lastIndexOf("@media", css.indexOf(".sources-card__grid {\n    grid-template-columns"));
+    expect(css.slice(media, media + 40)).toMatch(/@media \(min-width: 64rem\)/);
+    const block = wide.slice(0, wide.indexOf("\n}\n"));
+    expect(block).toMatch(/\.sources-card\[data-state="unavailable"\] \.sources-card__grid \{\s*grid-template-columns: minmax\(0, 0\.9fr\) minmax\(0, 1fr\);/);
+  });
+});

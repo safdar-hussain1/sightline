@@ -15,9 +15,9 @@ import {
   RESULTS_ROOT,
   accuracyHtml,
   howHtml,
-  injectSections,
-  resultsHtml,
 } from "./markup.ts";
+import { injectSections } from "./inject.ts";
+import { resultsHtml } from "./results-markup.ts";
 import { networkName } from "./names.ts";
 
 /** The text a visitor reads in some markup: no tags, no attribute values,
@@ -49,6 +49,10 @@ describe("the sections' markup", () => {
     const counts = "two|three|four|five|six|seven|eight|nine|ten|eleven|twelve";
     expect(said).not.toMatch(new RegExp(`\\b(${counts})\\s+(trainings?|frames?|seeds?|runs?|models?|drives?)\\b`, "i"));
     expect(said).not.toMatch(/\b(half a turn|quarter turn|full turn|a second frame|a second drive|checked twice)\b/i);
+  });
+
+  it("heads the baselines' rulers with what they measure: the mean error", () => {
+    expect(resultsHtml()).toMatch(/data-card="baselines"[\s\S]*?<p class="chart__title card__chart-title">Mean error, in degrees of steering-wheel angle<\/p>[\s\S]*?data-card="baselines-plot"/);
   });
 
   it("names the one-frame network by its key, as the data does", () => {

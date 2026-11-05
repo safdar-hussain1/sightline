@@ -586,7 +586,7 @@ describe("the cards' sentences", () => {
       other:
         "On the 2018 drive, which it never saw, it does worse than always steering straight: 22.0° against 17.5° on the held-back stretches Sightline is tested on, " +
         "and 19.4° against 9.4° on the drive’s last part.",
-      cap: "Its arctangent output can never pass 180°, half a turn of the wheel: its largest answer is 169.8°, yet the driver turned past 180° on 235 frames of the 2018 drive.",
+      cap: "Its arctangent output can never pass 180° either way, half a turn of the wheel: its largest answer, either way, is 169.8°, yet the driver turned past 180° on 235 frames of the 2018 drive.",
     });
     expect(recipeNote(legacy.recipe)).toBe(
       "The recipe, as its report records it: PilotNet in TensorFlow 1: shuffled 80/20 frame split, MSE in radians plus L2, atan output head limited to ±180°.",
@@ -682,7 +682,7 @@ describe("counts said from the data, never typed", () => {
 
   it("says the head cannot pass its limit only while its largest answer is below it", () => {
     const over = readLegacy(patch(resultsFixture(), "legacy.atan_cap.max_abs_pred_deg", 185));
-    expect(legacyText(over).cap).toBe("Its largest answer is 185.0°; the driver turned past 180° on 235 frames of the 2018 drive.");
+    expect(legacyText(over).cap).toBe("Its largest answer, either way, is 185.0°; the driver turned past 180° on 235 frames of the 2018 drive.");
   });
 });
 
@@ -724,15 +724,23 @@ describe("the baselines' sentences", () => {
     expect(yardsticksAlt(sets())).toBe(
       "Mean error on the held-back stretches of the 2018 drive (6,000 frames): always steering straight 17.5°, always steering the training frames’ mean angle 17.8°, " +
         "and, reading the answer stream the model never sees, holding the last label 0.6° and linear extrapolation 0.7°; Sightline 10.1°. " +
-        "On another day’s drive, the 2017 drive (45,404 frames): always steering straight 15.5°, always steering the training frames’ mean angle 15.5°, " +
+        "Mean error on another day’s drive, the 2017 drive (45,404 frames): always steering straight 15.5°, always steering the training frames’ mean angle 15.5°, " +
         "and, reading the answer stream the model never sees, holding the last label 0.5° and linear extrapolation 0.5°; Sightline 9.8°.",
     );
   });
 
-  it("says what the rules that read the answers show, with their error bounded from above", () => {
+  it("says what the rules that read the answers show: a bound on their mean error, rounded up, never one on every frame", () => {
     expect(yardsticksVerdict(sets())).toBe(
-      "The rules that read the answers are off by at most 0.7°: the true angle barely changes from one frame to the next. They are yardsticks here, not rivals.",
+      "The rules that read the answers are off by 0.7° or less on average: the true angle barely changes from one frame to the next. They are yardsticks here, not rivals.",
     );
+    // 0.64° rounds to 0.6° but is bounded by 0.7°.
+    const json = resultsFixture();
+    for (const split of ["test", "cross_drive"]) {
+      patch(json, `baselines.${split}.baselines.zoh.mae_deg`, 0.5);
+      patch(json, `baselines.${split}.baselines.extrap.mae_deg`, split === "test" ? 0.64 : 0.55);
+    }
+    expect(yardsticksVerdict(readYardsticks(json))).toMatch(/^The rules that read the answers are off by 0\.7° or less on average:/);
+    expect(yardsticksVerdict(readYardsticks(json))).not.toMatch(/at most/);
   });
 });
 

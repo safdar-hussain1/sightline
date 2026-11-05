@@ -20,6 +20,7 @@
 import { attrs, local, svg } from "../charts/draw.ts";
 import { arcPath, dumbbellLabels, hbarPath, labelSpan, textWidth, wheelPoint } from "../charts/marks.ts";
 import { linear, niceAxis } from "../charts/scale.ts";
+import { driveName } from "../data/timing.ts";
 import { fmtCount, fmtDeg, fmtPct } from "../format.ts";
 import { exactDeg, regimeNames, YARDSTICK_LABELS, yardstickSetName } from "./copy.ts";
 import { textAt } from "./countup.ts";
@@ -180,60 +181,49 @@ export function regimesDrawing(group: SVGGElement, width: number, regimes: Regim
 
 // -- The standard recipe ---------------------------------------------------------
 
-/** The wheel turned to the standard recipe's largest answer, on a gauge of
- * how far the wheel turns either way: the reach of its arctangent output up
- * to the limit, the part it used, and the rest of the turn, where the driver
- * went and it cannot. Drawn from `top`, `width` wide; returns its height. */
+/** The standard recipe's reach, as a gauge of how far the wheel turns
+ * either way from straight ahead (the top): the data holds the size of its
+ * largest answer, not its side, so that size is drawn on both sides alike,
+ * up to the limit its arctangent output can never pass, with the limit a wall
+ * at the foot. The figure stands in the middle; the limit and the turns the
+ * driver made past it are said under the gauge, every line centred, so all of
+ * it fits the narrowest phone. Returns its height. */
 function reachDrawing(group: SVGGElement, width: number, legacy: Legacy): CardDrawing {
-  const side = Math.max(...["largest answer", "turned past it", `${fmtCount(legacy.beyond)} frames`].map((t) => textWidth(t)));
-  const r = Math.max(40, Math.min(80, (width - 2 * side - 40) / 2));
+  const r = Math.max(48, Math.min(80, width / 2 - 16));
   const cx = width / 2;
-  const cy = 20 + r;
-  const turn = (angle: number) => Math.min(angle, 359.99);
-  svg("path", { class: "card-chart__reach-track", d: arcPath(cx, cy, r, 0, legacy.cap) }, group);
-  svg("path", { class: "card-chart__beyond", d: arcPath(cx, cy, r, legacy.cap, turn(360)) }, group);
-  const used = svg("path", { class: "card-chart__reach series-stroke--pilotnet" }, group);
-  const [w1x, w1y] = wheelPoint(cx, cy, r - 9, legacy.cap);
-  const [w2x, w2y] = wheelPoint(cx, cy, r + 9, legacy.cap);
-  svg("line", { class: "card-chart__wall", x1: w1x, y1: w1y, x2: w2x, y2: w2y }, group);
+  const cy = 24 + r;
+  const sides = (from: number) => [arcPath(cx, cy, r, 0, from), arcPath(cx, cy, r, 360 - from, 360)];
+  for (const d of sides(legacy.cap)) svg("path", { class: "card-chart__reach-track", d }, group);
+  const used = sides(0).map((d) => svg("path", { class: "card-chart__reach series-stroke--pilotnet", d }, group));
+  for (const angle of new Set([legacy.cap, 360 - legacy.cap])) {
+    const [x1, y1] = wheelPoint(cx, cy, r - 9, angle);
+    const [x2, y2] = wheelPoint(cx, cy, r + 9, angle);
+    svg("line", { class: "card-chart__wall", x1, y1, x2, y2 }, group);
+  }
   const [t0x, t0y] = wheelPoint(cx, cy, r + 8, 0);
   const zeroMark = svg("text", { class: "card-chart__tick", x: t0x, y: t0y - 2, "text-anchor": "middle" }, group);
   // Straight ahead, where every turn of the wheel is measured from.
   zeroMark.textContent = exactDeg(0);
 
-  // The wheel itself, its marker at the top when it points straight ahead.
-  const inner = r - 21;
-  const wheel = svg("g", { class: "card-chart__wheel" }, group);
-  svg("circle", { class: "card-chart__wheel-rim", cx, cy, r: inner }, wheel);
-  for (const angle of [90, 180, 270]) {
-    const [x1, y1] = wheelPoint(cx, cy, 6, angle);
-    const [x2, y2] = wheelPoint(cx, cy, inner, angle);
-    svg("line", { class: "card-chart__wheel-spoke", x1, y1, x2, y2 }, wheel);
-  }
-  svg("circle", { class: "card-chart__wheel-hub", cx, cy, r: 6 }, wheel);
-  const [m1x, m1y] = wheelPoint(cx, cy, inner - 5, 0);
-  const [m2x, m2y] = wheelPoint(cx, cy, inner + 5, 0);
-  svg("line", { class: "card-chart__wheel-marker series-stroke--pilotnet", x1: m1x, y1: m1y, x2: m2x, y2: m2y }, wheel);
+  // The figure, in the middle of the gauge.
+  const readout = svg("text", { class: "card-chart__label card-chart__readout", x: cx, y: cy + 2, "text-anchor": "middle" }, group);
+  const value = svg("tspan", { class: "card-chart__big", x: cx }, readout);
+  svg("tspan", { class: "card-chart__name", x: cx, dy: 20 }, readout).textContent = "largest answer";
+  svg("tspan", { class: "card-chart__name", x: cx, dy: 15 }, readout).textContent = "either way";
 
-  // Its words, outside the gauge: the largest answer on the right, the limit
-  // at the foot, the turns past it on the left.
-  const [ax, ay] = wheelPoint(cx, cy, r + 14, 128);
-  const answer = svg("text", { class: "card-chart__label", x: ax, y: ay, "text-anchor": "start" }, group);
-  svg("tspan", { class: "card-chart__name", x: ax }, answer).textContent = "largest answer";
-  const value = svg("tspan", { class: "card-chart__figure", x: ax, dy: 16 }, answer);
-  const limit = label(group, cx, cy + r + 24, "middle", "limit", exactDeg(legacy.cap));
-  void limit;
-  const [bx, by] = wheelPoint(cx, cy, r + 14, 232);
-  const beyond = svg("text", { class: "card-chart__label", x: bx, y: by, "text-anchor": "end" }, group);
-  svg("tspan", { class: "card-chart__figure", x: bx }, beyond).textContent = `${fmtCount(legacy.beyond)} frames`;
-  svg("tspan", { class: "card-chart__name", x: bx, dy: 16 }, beyond).textContent = "turned past it";
+  // Under it: the limit, and the turns past it.
+  const limit = label(group, cx, cy + r + 26, "middle", "limit", exactDeg(legacy.cap));
+  svg("tspan", { class: "card-chart__name" }, limit.text).textContent = " either way";
+  const beyond = svg("text", { class: "card-chart__label", x: cx, y: cy + r + 46, "text-anchor": "middle" }, group);
+  svg("tspan", { class: "card-chart__figure" }, beyond).textContent = `${fmtCount(legacy.beyond)} frames`;
+  svg("tspan", { class: "card-chart__name" }, beyond).textContent = ` of ${driveName(legacy.blocked.drive)}`;
+  svg("tspan", { class: "card-chart__name", x: cx, dy: 16 }, beyond).textContent = "turned past it";
 
   return {
-    height: cy + r + 32,
+    height: cy + r + 70,
     paint: (t) => {
       const angle = legacy.largest * t;
-      attrs(used, { d: arcPath(cx, cy, r, 0, angle) });
-      attrs(wheel, { transform: `rotate(${Math.round(angle * 100) / 100} ${cx} ${cy})` });
+      sides(angle).forEach((d, i) => attrs(used[i] as SVGPathElement, { d }));
       value.textContent = textAt(fmtDeg(legacy.largest), legacy.largest, 0, t);
     },
   };

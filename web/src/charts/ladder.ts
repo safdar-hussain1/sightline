@@ -203,3 +203,33 @@ export function lerpLadder(from: LadderLayout, to: LadderLayout, t: number): Lad
     ticks: to.ticks,
   };
 }
+
+/** The gap between two ticks, px: closer than this, two trainings would
+ * read as one line. */
+const TICK_GAP = 3;
+
+/** Each training's tick across a bar at `x`, `w` wide, at the heights `ys`:
+ * across the whole bar (and 2 px past each side) where the trainings stand
+ * apart; where two or more would sit within `TICK_GAP` px of each other,
+ * side by side, sharing that width with a 2 px gap between them, so every
+ * training stays visible. In the order of `ys`. */
+export function seedTicks(x: number, w: number, ys: readonly number[]): Array<{ x1: number; x2: number; y: number }> {
+  const order = ys.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y);
+  const clusters: number[][] = [];
+  for (const item of order) {
+    const last = clusters.at(-1);
+    const previous = last === undefined ? undefined : ys[last[last.length - 1] as number];
+    if (last && previous !== undefined && item.y - previous < TICK_GAP) last.push(item.i);
+    else clusters.push([item.i]);
+  }
+  const left = x - 2;
+  const span = w + 4;
+  const out: Array<{ x1: number; x2: number; y: number }> = new Array(ys.length);
+  for (const cluster of clusters) {
+    const each = (span - (cluster.length - 1) * 2) / cluster.length;
+    cluster.forEach((i, k) => {
+      out[i] = { x1: left + k * (each + 2), x2: left + k * (each + 2) + each, y: ys[i] as number };
+    });
+  }
+  return out;
+}
