@@ -428,7 +428,10 @@ def build_parser() -> argparse.ArgumentParser:
     from sightline.models import MODEL_SPECS
     from sightline.train import DEVICES
 
-    parser = argparse.ArgumentParser(prog="sightline", description=__doc__)
+    # the description is this module's docstring, whose synopsis lists one command a line; the
+    # default formatter would run those lines together into a single paragraph
+    parser = argparse.ArgumentParser(prog="sightline", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("data", help="check the dataset on disk")

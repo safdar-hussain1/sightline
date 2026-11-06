@@ -58,6 +58,8 @@ def test_help_runs_as_a_module(tmp_path):
     assert listed, out
     assert {"data", "cache", "train", "eval", "report", "figures", "leakage", "legacy", "export", "site-data",
             "demo"} <= set(listed.group(1).split(","))
+    # the synopsis keeps one command a line, as the module docstring writes it
+    assert "\n    sightline cache   --drive drive2018\n    sightline train   --drive drive2018 " in out, out
 
 
 @pytest.mark.parametrize("argv", [["data", "verify"], ["cache"], ["train"], ["eval"], ["report"], ["figures"],
