@@ -56,8 +56,8 @@
     "web/public/model-card.md": "1c926f2b4b70084054ff70585161367f47c33c0cc11bc0d4954b32dd947488d8",
     "web/public/models/sightline-shuffled.onnx": "f137b012950fe28a0a55c64440299352be8471663322d91d456a1e85b8b4a69b",
     "web/public/models/sightline.onnx": "77e13d2cf1965b5b662dcb68b3a4a225eb8922e67492bb7c2f45e58e1c19a341",
-    "web/public/og-image.png": "729febd1116f350d9900200566075db319d8c2bd3b3bedcf2c97e9d60178658e",
-    "web/public/readme-hero.png": "b12c958de8d3d110d87fbb7e5ba385dba184daee9d572f64fa822af68e1eab18",
+    "web/public/og-image.png": "201ba96d9df3469795634359066451fdfd8d8decf075d01c2b0276c82b927053",
+    "web/public/readme-hero.png": "214d4d1a19a2fe650f44d8a0bc1243585df0565e69b3d92bc2da535d110aa77e",
     "web/public/sitemap.xml": "ad8015b5cb1d1a6bde479dcd022c6f02aa22e175860a89323c4fd7c5d480d33b",
     "web/src/charts/bars.ts": "517eacbc8dd2f4a4ed60f134b339eafca590ec77cae609fd7b83fd41c80e37fc",
     "web/src/charts/draw.ts": "7a5d644891bda1bdfa1c3cdd0b2045d287c49139971e2f68f868b9bb09a9232c",
@@ -187,8 +187,8 @@
     "docs/model-card.md": "1c926f2b4b70084054ff70585161367f47c33c0cc11bc0d4954b32dd947488d8",
     "docs/models/sightline-shuffled.onnx": "f137b012950fe28a0a55c64440299352be8471663322d91d456a1e85b8b4a69b",
     "docs/models/sightline.onnx": "77e13d2cf1965b5b662dcb68b3a4a225eb8922e67492bb7c2f45e58e1c19a341",
-    "docs/og-image.png": "729febd1116f350d9900200566075db319d8c2bd3b3bedcf2c97e9d60178658e",
-    "docs/readme-hero.png": "b12c958de8d3d110d87fbb7e5ba385dba184daee9d572f64fa822af68e1eab18",
+    "docs/og-image.png": "201ba96d9df3469795634359066451fdfd8d8decf075d01c2b0276c82b927053",
+    "docs/readme-hero.png": "214d4d1a19a2fe650f44d8a0bc1243585df0565e69b3d92bc2da535d110aa77e",
     "docs/sitemap.xml": "ad8015b5cb1d1a6bde479dcd022c6f02aa22e175860a89323c4fd7c5d480d33b"
   }
 }
