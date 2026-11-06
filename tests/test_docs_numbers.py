@@ -1393,6 +1393,12 @@ TRAINING_TIMES = (r"each run took (?P<least>\d+) to (?P<most>\d+) minutes by its
                   r"took (?P<shipped>\d+) minutes")
 
 #: (documents, pattern, why the numbers in its matches may be printed, a check on a match or None)
+def _verdict(m: re.Match) -> bool:
+    """The verdict's shape is the one scripts/verify_page.sh accepts: every check passed, on one thread."""
+    script = (REPO / "scripts" / "verify_page.sh").read_text(encoding="utf-8")
+    return "threads=1" in script
+
+
 ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None]] = [
     (("README", "CARD"), r"(?P<w>\d+) × (?P<h>\d+) (?:pixels|frame)",
      "the camera's frame size, the site builder's CAMERA_SIZE", _camera),
@@ -1472,6 +1478,11 @@ ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None
     (("README",), r"SHA-256", "the hash function's name", None),
     (("README",), r"(?<![^ ])[1-4]\. \*\*(?=Two frames|The network|One graph, two answers|In the browser)",
      "the numbered steps of How it works", None),
+    (("README",), r"`PASS (?P<k>\d)/(?P=k) threads=1`", "the page verifier's verdict on a pass: the self-test's checks, all "
+     "passed, on one thread (scripts/verify_page.sh matches its exact shape)", _verdict),
+    (("README",), r"IPv6", "the name of the internet protocol's version", None),
+    (("README",), r"`--host 127\.0\.0\.1`|`127\.0\.0\.1` may refuse", "the loopback address, a command-line "
+     "setting of Vite's preview server", None),
 ]
 
 #: "at least" before these is a rule's own threshold, a constant of the code an ALLOWED entry checks, not a
@@ -2114,11 +2125,19 @@ def _excerpt_names(text: str, folders: set[str]) -> set[str]:
 
 def test_every_excerpt_of_the_dataset_the_repository_ships_is_named_in_the_licence_and_the_readme():
     """Everything under web/public/data/ but the JSON is an excerpt of the dataset's drives (a clip, the sheets of
-    its frames, a thumbnail, the self-test frames). The licence note and the README name them by path: each name
+    its frames, a thumbnail, the self-test frames), and so are the steering labels in two JSON files (the clips'
+    ``labels_deg``, the leakage pairs' ``angle_deg``). The licence note and the README name them by path: each name
     matches a shipped file, and each shipped file is matched by a name."""
     data = REPO / "web" / "public" / "data"
-    shipped = sorted(path.relative_to(data).as_posix() for path in data.rglob("*")
-                     if path.is_file() and not path.name.startswith(".") and path.suffix != ".json")
+    #: the two JSON files that carry the dataset's steering labels (a clip's ``labels_deg``, a pair's
+    #: ``angle_deg``); every other JSON file holds this project's own measurements
+    label_excerpts = {"clips/c2017/clip.json": "labels_deg", "clips/c2018/clip.json": "labels_deg",
+                      "leakage/pairs.json": "angle_deg"}
+    for name, key in label_excerpts.items():
+        assert key in (data / name).read_text(encoding="utf-8"), f"{name} no longer carries {key}"
+    shipped = sorted([path.relative_to(data).as_posix() for path in data.rglob("*")
+                      if path.is_file() and not path.name.startswith(".") and path.suffix != ".json"]
+                     + list(label_excerpts))
     folders = {name.split("/")[0] for name in shipped}
     assert len(shipped) >= 30 and len(folders) >= 3, shipped
     for label, text in (("LICENSE", (REPO / "LICENSE").read_text(encoding="utf-8")), ("README", _read("README"))):

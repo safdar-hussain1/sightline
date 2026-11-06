@@ -12,6 +12,8 @@ another day. The shipped SightlineNet runs in the browser as an ONNX graph that 
 together with a VisualBackProp map of where the network looked.
 **Live demo: <https://safdar-hussain1.github.io/sightline/>**
 
+![The Sightline demo paused on a bend to the left: the saliency heat lies over the road, and the model's violet steering wheel has the driver's pale wheel drawn over it.](docs/readme-hero.png)
+
 The page opens on the demo. The model reads a 2018 clip from stretches of road it never trained
 on, or a 2017 clip from another day. Its wheel turns with its answers, the driver's wheel is drawn
 over it in pale lines, and its saliency heat lies over the road. A toggle swaps in its twin
@@ -333,6 +335,20 @@ NVIDIA GPU, install the CPU-only wheel first, then the package:
 
 The tests need no dataset: they run on synthetic drives and the committed reports.
 
+### Continuous integration
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs on every push to `main` and on
+every pull request against it. The Python job runs the whole pytest suite on the CPU, on
+several Python versions, from a full clone, because the authorship test reads every commit. The
+web job, on several Node versions, installs with `npm ci`, runs the Vitest suite (it includes
+the check of both published models in Node, on onnxruntime-web, against the outputs from Python),
+type-checks, builds, and fails if the build changes anything in `docs/`.
+
+It does not run on the dataset or the trained runs, which are git-ignored; tests that need them
+skip or read only the committed reports. It does not use the standard-recipe weights or a GPU, and
+it does not run the page's self-test in a real browser (`scripts/verify_page.sh`) or the mutation
+battery.
+
 ## Get the data
 
 Both drives come from the Sully Chen driving datasets:
@@ -407,10 +423,17 @@ npm --prefix web ci
 npm --prefix web test
 npm --prefix web run build
 npm --prefix web run preview
+
+# with the preview server running, in another terminal: the page's self-test in headless Chrome
+scripts/verify_page.sh "http://localhost:4173/?selftest=1"
+
+# the mutation battery: list its rows, then break each published claim and check a test notices
+python scripts/mutation_battery.py --list
+python scripts/mutation_battery.py
 ```
 
 Then open <http://localhost:4173/> for the page and <http://localhost:4173/?selftest=1> for its
-self-test.
+self-test. `npm --prefix web run build` leaves `docs/` exactly as committed when the sources are.
 
 What to expect:
 
@@ -432,6 +455,11 @@ What to expect:
 - The weights of the standard-recipe PilotNet are not part of this repository, so `legacy` runs
   only where you have them (`--weights`, or the `SIGHTLINE_LEGACY_WEIGHTS` variable).
 - `site-data` encodes the clips with ffmpeg; `--no-video` writes everything else.
+- The page verifier prints `PASS 6/6 threads=1` when every check of the self-test passed, and
+  fails on anything else. It needs Chrome.
+- The mutation battery refuses to start on a dirty git tree and puts every file back. Its rows
+  that plant a banned word need a private word list, named by the `SIGHTLINE_GUARD_WORDS`
+  environment variable; without it those rows are skipped and the battery says so.
 
 ## View it locally
 
@@ -444,10 +472,13 @@ npm --prefix web run build
 npm --prefix web run preview
 ```
 
-Then open <http://localhost:4173/>. Use the preview server rather than `python3 -m http.server`:
-the demo clips are videos the page seeks in, and seeking needs HTTP range requests, which
-Python's simple server does not answer. Opening `docs/index.html` as a file does not work either:
-browsers block the page's modules, models and WebAssembly runtime on `file://`.
+Then open <http://localhost:4173/>. Vite's preview server listens on `localhost`, which on some
+machines is only the IPv6 address, so use that name; `127.0.0.1` may refuse the connection (add
+`--host 127.0.0.1` after `preview` if you need that address). Use the preview server rather than
+`python3 -m http.server`: the demo clips are videos the page seeks in, and seeking needs HTTP
+range requests, which Python's simple server does not answer. Opening `docs/index.html` as a file
+does not work either: browsers block the page's modules, models and WebAssembly runtime on
+`file://`.
 
 <http://localhost:4173/?selftest=1> runs the page's self-test: both models, on the committed
 self-test inputs and on the clips' frames, against the outputs onnxruntime computed in Python. The
@@ -469,12 +500,19 @@ src/sightline/
   demo.py           a stretch of a drive rendered as a cockpit video
   figures.py        the figures in reports/figures/
   cli.py            the sightline command
-scripts/            train_matrix.py, which trains the matrix a few runs at a time
+scripts/
+  train_matrix.py       trains the matrix a few runs at a time
+  build_manifest.mjs    writes docs/build-manifest.json at the end of the web build
+  verify_page.sh        reads the page's self-test verdict in headless Chrome
+  capture.sh            takes the page's screenshots (capture.mjs drives the browser)
+  mutation_battery.py   breaks each published claim and checks that a test notices
 reports/            every published number, as JSON, and the figures drawn from them
 notebooks/          01-data-and-leakage.ipynb (needs the dataset), 02-results.ipynb (reports only)
 tests/              the Python suite, including the guards over the repository and its documents
 web/                the page: index.html, src/ (TypeScript), public/ (models, data, model card)
-docs/               the published site, built by npm --prefix web run build
+docs/               the published site, built by npm --prefix web run build, with
+                    build-manifest.json, og-image.png and readme-hero.png
+.github/workflows/  tests.yml, the CI workflow
 ```
 
 ## Tech stack
@@ -530,10 +568,12 @@ MIT License, Copyright (c) 2018 Sully Chen, as that repository's `LICENSE` file 
 downloaded dataset folders carry no licence file of their own. Under `web/public/data/`, the demo
 clips (`clips/*/clip.mp4`), the clips' sprite sheets (`clips/*/sprite-*.jpg`), the leakage-pair
 thumbnails (`leakage/frame-*.jpg`) and the self-test frame stacks (`selftest/frames.bin`, cut from
-the 2018 clip) are excerpts of those drives. The ONNX models under `web/public/models/` were
-trained on them. The dataset's author asks that the data be used purely for research and
-statistics. That is a request, not a term of the MIT License; this project asks the same of anyone
-who uses these files. The datasets themselves are never committed here.
+the 2018 clip) are excerpts of those drives. The JSON files `clips/*/clip.json` (`labels_deg`) and
+`leakage/pairs.json` (`angle_deg`) carry short excerpts of the dataset's steering labels. The ONNX
+models under `web/public/models/` were trained on them. The dataset's author asks that the data be
+used purely for research and statistics. That is a request, not a term of the MIT License; this
+project asks the same of anyone who uses these files. The datasets themselves are never committed
+here.
 
 **Code.** MIT, see [LICENSE](LICENSE); the ONNX models are released under the same licence.
 

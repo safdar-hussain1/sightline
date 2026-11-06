@@ -209,8 +209,8 @@ def test_the_readme_picture_is_a_png_of_at_most_300_kb():
 #: means new words here and in web/index.html.
 SHARE_ALT = (
     "The Sightline demo paused on a bend to the left: a heat map over the road shows where the "
-    "model looks, brightest on the centre line and the guardrail, beside its violet steering "
-    "wheel and the driver’s pale one."
+    "model looks, brightest on the centre line and the guardrail, and the model’s violet steering "
+    "wheel with the driver’s pale one drawn over it."
 )
 
 #: The page's words for a ratio, as web/src/sections/words.ts writes them:

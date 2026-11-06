@@ -49,7 +49,7 @@ export function shellHtml(): string {
           ${MARK}
           <h1 class="wordmark__name">Sightline</h1>
         </div>
-        <p class="lede">A steering model you can watch drive. It runs in your browser on recorded road footage, turns its wheel beside the real driver’s, and shows where on the road it looks.</p>
+        <p class="lede">A steering model you can watch drive. It runs in your browser on recorded road footage, turns its wheel with the real driver’s drawn over it in pale lines, and shows where on the road it looks.</p>
         ${NAV}
         <button class="theme-toggle" id="${THEME_TOGGLE_ID}" type="button" aria-label="Switch between the light and dark themes">${MOON}${SUN}</button>
       </div>
