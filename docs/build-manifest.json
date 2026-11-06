@@ -1,7 +1,7 @@
 {
   "note": "Written by scripts/build_manifest.mjs during `npm run build`. Do not edit.",
   "inputs": {
-    "web/index.html": "a3e6c103ec4fedcdeb33bb9698a1ac3923759b4ed8a700107b46e14aad8ac706",
+    "web/index.html": "9f8d99b3b88f12c9e561ab9457fa2ab524cdde69c34edcfe292217e3924bb5f3",
     "web/package-lock.json": "503f7db408c614c12a4c19b8adbc1d655850070f658b0900068f2e6628e928ec",
     "web/package.json": "1f1f7c9144c0c05798ef685e7ad1754de46e6ec7e6cfe423f2f6d9f84c13da33",
     "web/public/.nojekyll": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -58,7 +58,7 @@
     "web/public/models/sightline.onnx": "77e13d2cf1965b5b662dcb68b3a4a225eb8922e67492bb7c2f45e58e1c19a341",
     "web/public/og-image.png": "201ba96d9df3469795634359066451fdfd8d8decf075d01c2b0276c82b927053",
     "web/public/readme-hero.png": "214d4d1a19a2fe650f44d8a0bc1243585df0565e69b3d92bc2da535d110aa77e",
-    "web/public/sitemap.xml": "ad8015b5cb1d1a6bde479dcd022c6f02aa22e175860a89323c4fd7c5d480d33b",
+    "web/public/sitemap.xml": "0e05c96ec930696c894bf44b26438e9ac6aca51c18f61d7e270ae81f99c73687",
     "web/src/charts/bars.ts": "517eacbc8dd2f4a4ed60f134b339eafca590ec77cae609fd7b83fd41c80e37fc",
     "web/src/charts/draw.ts": "7a5d644891bda1bdfa1c3cdd0b2045d287c49139971e2f68f868b9bb09a9232c",
     "web/src/charts/ladder.ts": "18bc61abff52a7e4c59f5a256d7f09a7d8bb22a0573f8ca27df15c3e404141c9",
@@ -183,12 +183,12 @@
     "docs/fonts/barlow-600-latin.woff2": "488b58098126c00b8fa77f4d58b0a4bc982e81e4c83323c1a73d9f1a67c15971",
     "docs/fonts/barlow-condensed-600-latin.woff2": "5bc49d41f32810a114765314392332ce2acae2276635eee265a50319a12c1b49",
     "docs/fonts/barlow-condensed-700-latin.woff2": "e3e520cb7468f2efd60bc2ce96694567c3312f4ef414fffbe605e3ad146b24e6",
-    "docs/index.html": "768b8e43c1b02e5f2b1809c5cf53497c23f8a5383e1a3614c7876ecf6466d003",
+    "docs/index.html": "940f35caccb1feb86c271f1b5c26201040ca843707ca23346b6155ae4a499075",
     "docs/model-card.md": "1c926f2b4b70084054ff70585161367f47c33c0cc11bc0d4954b32dd947488d8",
     "docs/models/sightline-shuffled.onnx": "f137b012950fe28a0a55c64440299352be8471663322d91d456a1e85b8b4a69b",
     "docs/models/sightline.onnx": "77e13d2cf1965b5b662dcb68b3a4a225eb8922e67492bb7c2f45e58e1c19a341",
     "docs/og-image.png": "201ba96d9df3469795634359066451fdfd8d8decf075d01c2b0276c82b927053",
     "docs/readme-hero.png": "214d4d1a19a2fe650f44d8a0bc1243585df0565e69b3d92bc2da535d110aa77e",
-    "docs/sitemap.xml": "ad8015b5cb1d1a6bde479dcd022c6f02aa22e175860a89323c4fd7c5d480d33b"
+    "docs/sitemap.xml": "0e05c96ec930696c894bf44b26438e9ac6aca51c18f61d7e270ae81f99c73687"
   }
 }

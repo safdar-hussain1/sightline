@@ -11,9 +11,10 @@ published page went unsigned, so both halves are checked:
   published ``index.html`` actually loads, and the entry's first statement;
 - a visible footer credit, "Built by Safdar Hussain", linking to the profile.
 
-The footer also carries the two notices the dataset's terms call for: the page
-is for research and education only, never for controlling a vehicle, and the
-footage is credited to its author with a link.
+The footer also carries two notices: the page is for research and education
+only, never for controlling a vehicle, with the dataset author's request that
+the data serve research alone, and the footage is credited to its author with
+a link.
 """
 
 import re
