@@ -123,9 +123,12 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="./assets/index-Cs027Qb7.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-D_UAAIeS.css">
-    <link rel="modulepreload" crossorigin href="./assets/cockpit-CsAnvUXV.js">
+    <script type="module" crossorigin src="./assets/index-jVM99US9.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BRV_iYNQ.css">
+    <link rel="modulepreload" crossorigin href="./assets/cockpit-BbecA7YA.js">
+    <link rel="modulepreload" crossorigin href="./assets/runner-MEyvyCkB.js">
+    <link rel="modulepreload" crossorigin href="./assets/copy-BbT7IQvx.js">
+    <link rel="modulepreload" crossorigin href="./assets/sprites-BO6tR6dx.js">
   </head>
   <body>
     <header class="masthead" id="masthead">
@@ -330,6 +333,108 @@
           </figure>
           <p class="accuracy__leak" data-accuracy="leak">Test it the usual way, on shuffled frames, and the same kind of model looks better than it is on road it has not seen nearby.</p>
           <p class="accuracy__links"><a class="accuracy__more" href="#results">See what the measurements found</a><a href="model-card.md">Read the model card</a></p>
+        </div>
+      </section>
+        <section class="ownclip" id="own-video" aria-labelledby="ownclip-title">
+        <div class="ownclip__inner wrap">
+          <div class="ownclip__head">
+            <h2 class="ownclip__title" id="ownclip-title">Try it on your own video</h2>
+            <p class="ownclip__lede">Choose a video filmed from a car, facing the road, and the same model estimates a steering angle for it, frame by frame, here in this browser.</p>
+          </div>
+
+          <div class="ownclip__console" data-ownclip="console" data-phase="idle">
+            <div class="ownclip__bar">
+              <p class="ood"><span class="ood__badge">Out of distribution</span> <span class="ood__text">Your video almost certainly shows a car, camera and road the model never trained on, and it carries no record of how the wheel was turned. The angle is the model’s estimate, not a measurement of anything.</span></p>
+              <p class="ownclip__private"><svg class="ownclip__icon ownclip__icon--lock" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg><span>Your video stays on your device: it is read here, in this browser, and never uploaded.</span></p>
+            </div>
+
+            <input class="ownclip__file" id="ownclip-file" data-ownclip="file" type="file" accept="video/*" aria-label="Choose a video" />
+
+            <div class="drop" data-ownclip="drop">
+              <figure class="drop__figure">
+                <div class="drop__art"><svg class="art" viewBox="0 0 404 140" aria-hidden="true" focusable="false">
+            <defs><clipPath id="ownclip-art-land"><rect x="8" y="25" width="160" height="90" rx="6"/></clipPath><clipPath id="ownclip-art-port"><rect x="186" y="6" width="72" height="128" rx="6"/></clipPath><clipPath id="ownclip-art-wide"><rect x="276" y="45" width="120" height="50" rx="6"/></clipPath></defs>
+            <g clip-path="url(#ownclip-art-land)"><rect class="art__sky" x="8" y="25" width="160" height="90"/><path class="art__ground" d="M8 62.8H168V115H8Z"/><path class="art__road" d="M83.2 62.8H92.8L152 115H24Z"/><path class="art__edge" d="M83.2 62.8L24 115M92.8 62.8L152 115"/><path class="art__lane" d="M88 63.8V115"/><path class="art__horizon" d="M8 62.8H168"/><rect class="art__band" data-ownclip-art="land" x="8" y="61" width="160" height="54"/></g><rect class="art__frame" x="8" y="25" width="160" height="90" rx="6"/>
+            <g clip-path="url(#ownclip-art-port)"><rect class="art__sky" x="186" y="6" width="72" height="128"/><path class="art__ground" d="M186 66.76H258V134H186Z"/><path class="art__road" d="M219.84 66.76H224.16L272.4 134H171.6Z"/><path class="art__edge" d="M219.84 66.76L171.6 134M224.16 66.76L272.4 134"/><path class="art__lane" d="M222 67.76V134"/><path class="art__horizon" d="M186 66.76H258"/><rect class="art__middle" data-ownclip-art="port-middle" x="186" y="49.75" width="72" height="40.5"/><rect class="art__band" data-ownclip-art="port" x="186" y="65.95" width="72" height="24.3"/></g><rect class="art__frame" x="186" y="6" width="72" height="128" rx="6"/>
+            <g clip-path="url(#ownclip-art-wide)"><rect class="art__sky" x="276" y="45" width="120" height="50"/><path class="art__ground" d="M276 66H396V95H276Z"/><path class="art__road" d="M332.4 66H339.6L366 95H306Z"/><path class="art__edge" d="M332.4 66L306 95M339.6 66L366 95"/><path class="art__lane" d="M336 67V95"/><path class="art__horizon" d="M276 66H396"/><rect class="art__middle" data-ownclip-art="wide-middle" x="291.56" y="45" width="88.89" height="50"/><rect class="art__band" data-ownclip-art="wide" x="291.56" y="65" width="88.89" height="30"/></g><rect class="art__frame" x="276" y="45" width="120" height="50" rx="6"/>
+          </svg></div>
+                <figcaption class="drop__key"><span class="drop__swatch" aria-hidden="true"></span>The violet band is the part of each frame the model reads, from a landscape video, a portrait one and a wider one.</figcaption>
+              </figure>
+              <div class="drop__act">
+                <p class="drop__title">Drop a video here, or</p>
+                <label class="ownclip__choose" for="ownclip-file"><svg class="ownclip__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3.5 9h4M3.5 15h4M16.5 9h4M16.5 15h4"/></svg><span>Choose a video</span></label>
+                <p class="drop__hint">Footage through a windscreen, facing the road, is what it knows.</p>
+              </div>
+            </div>
+
+            <div class="ownclip__player" data-ownclip="player" hidden>
+              <div class="ownclip__screen" data-ownclip="screen">
+                <div class="ownclip__frame" data-ownclip="frame">
+                  <video class="ownclip__video" data-ownclip="video" muted playsinline preload="auto" disablepictureinpicture aria-hidden="true" tabindex="-1"></video>
+                  <canvas class="ownclip__still" data-ownclip="still" aria-hidden="true"></canvas>
+                  <div class="ownclip__band" data-ownclip="band" aria-hidden="true">
+                    <canvas class="ownclip__heat" data-ownclip="heat" width="200" height="66"></canvas>
+                    <span class="ownclip__tag">What the model sees</span>
+                  </div>
+                </div>
+                <p class="ownclip__status" data-ownclip="status"></p>
+              </div>
+
+              <div class="ownclip__side">
+                <div class="ownclip__instruments">
+                  <div class="ownclip__wheel" data-ownclip="wheel" data-waiting="true"><svg class="wheel" viewBox="-6 -6 252 252" aria-hidden="true" focusable="false"><circle class="wheel__track" cx="120" cy="120" r="106"/><path class="wheel__gap" data-wheel="error" d="" stroke-width="9"/><g class="wheel__turn wheel__model" data-wheel="model"><circle class="wheel__rim" cx="120" cy="120" r="80" stroke-width="15"/><path class="wheel__stripe" d="M110.25 40.6A80 80 0 0 1 129.75 40.6" stroke-width="15"/><path class="wheel__spokes" d="M42 124H94M146 124H198M120 146V198"/><circle class="wheel__hub" cx="120" cy="120" r="24"/><path class="wheel__pointer" d="M120 19.5L113 31.5H127Z"/></g><g class="wheel__turn wheel__ghost" data-wheel="human"><path class="wheel__ghost-lines" d="M28.5 124H92M148 124H211.5M120 148V211.5M120 47.5V32.5"/><path class="wheel__ghost-pointer" d="M120 8.5L112.5 -4H127.5Z"/></g></svg></div>
+                  <div class="ownclip__readout">
+                    <p class="ownclip__readout-label"><svg class="key key--model" viewBox="0 0 14 12" aria-hidden="true" focusable="false"><path d="M7 1.5 12.5 10.5h-11z"/></svg>The model’s estimate</p>
+                    <p class="ownclip__angle"><span class="readout__size tnum" data-ownclip="angle">—</span> <span class="readout__side" data-ownclip="side"></span></p>
+                    <p class="ownclip__when tnum" data-ownclip="when"></p>
+                  </div>
+                </div>
+                <figure class="eye ownclip__eye">
+                  <canvas class="eye__canvas" data-ownclip="eye" width="200" height="66" aria-hidden="true"></canvas>
+                  <figcaption class="eye__caption" data-ownclip="eye-caption">What the model gets from this frame, with where it looked.</figcaption>
+                </figure>
+              </div>
+
+              <div class="ownclip__transport">
+                <button class="play" data-ownclip="play" type="button" disabled><svg class="play__icon play__icon--play" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l10.5-6.5z"/></svg><svg class="play__icon play__icon--pause" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg><span class="play__label" data-ownclip="play-label">Play</span></button>
+                <button class="step" data-ownclip="back" type="button" aria-label="Back one frame" disabled><svg class="step__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14.5 6.5 9 12l5.5 5.5"/></svg></button>
+                <button class="step" data-ownclip="forward" type="button" aria-label="Forward one frame" disabled><svg class="step__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9.5 6.5 5.5 5.5-5.5 5.5"/></svg></button>
+                <div class="trace" data-ownclip="trace">
+                  <canvas class="trace__canvas" data-ownclip="trace-canvas" aria-hidden="true"></canvas>
+                  <span class="trace__side trace__side--right" aria-hidden="true">right</span>
+                  <span class="trace__side trace__side--left" aria-hidden="true">left</span>
+                  <input class="trace__scrub" data-ownclip="scrub" type="range" min="0" max="0" step="1" value="0" aria-label="Position in your video" disabled />
+                </div>
+              </div>
+
+              <div class="ownclip__foot">
+                <p class="ownclip__note" data-ownclip="note"></p>
+                <button class="ownclip__action" data-ownclip="cancel" type="button" hidden>Stop reading</button>
+                <button class="ownclip__action" data-ownclip="again" type="button" hidden><svg class="ownclip__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3.5 9h4M3.5 15h4M16.5 9h4M16.5 15h4"/></svg><span>Choose another video</span></button>
+              </div>
+            </div>
+
+            <div class="ownclip__error" data-ownclip="error" hidden>
+              <svg class="ownclip__icon ownclip__icon--alert" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9 9.5l6 6M15 9.5l-6 6"/></svg>
+              <div class="ownclip__error-words" role="alert">
+                <p class="ownclip__error-title" data-ownclip="error-title"></p>
+                <p class="ownclip__error-text" data-ownclip="error-text"></p>
+              </div>
+              <button class="ownclip__choose" data-ownclip="retry" type="button"><svg class="ownclip__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7.5 4.5v15M16.5 4.5v15M3.5 9h4M3.5 15h4M16.5 9h4M16.5 15h4"/></svg><span>Choose another video</span></button>
+            </div>
+
+            <p class="visually-hidden" data-ownclip="live" role="status"></p>
+            <noscript><p class="ownclip__noscript">Reading a video needs JavaScript.</p></noscript>
+          </div>
+
+          <div class="ownclip__notes">
+            <h3 class="ownclip__notes-title">How it reads your video</h3>
+            <ul class="ownclip__rules">
+              <li data-ownclip="rule-crop">It reads the bottom of each frame, at full width, the share of the picture it was trained on. From a portrait video it first takes the band across the middle with the shape of the camera it learned from, then the bottom of that.</li>
+              <li data-ownclip="rule-pace">It steps through your video so that the frames each answer compares are as far apart in time as the ones it learned from. Its first answer comes once it has a frame from just before.</li>
+              <li data-ownclip="rule-cap">A long video is read from its start, up to a limit.</li>
+            </ul>
+          </div>
         </div>
       </section>
       </div>
