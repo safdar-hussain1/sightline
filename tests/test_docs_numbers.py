@@ -1384,6 +1384,11 @@ def _python(m: re.Match) -> bool:
     return f'requires-python = ">={m["v"]}"' in pyproject
 
 
+def _torch(m: re.Match) -> bool:
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    return f'"torch>={m["lo"]},<{m["hi"]}"' in pyproject
+
+
 def _notebook(m: re.Match) -> bool:
     return (REPO / "notebooks" / m[0]).is_file()
 
@@ -1459,6 +1464,8 @@ ALLOWED: list[tuple[tuple[str, ...], str, str, Callable[[re.Match], bool] | None
     (("README", "CARD"), r"https?://[^\s<>()\[\]`]*\d[^\s<>()\[\]`]*", "a link's address, where a digit names "
      "an account, a colour or a file; only the hosts in LINK_HOSTS", _link),
     (("README",), r"Python (?P<v>\d+\.\d+)(?= or newer|\+)", "the Python versions pyproject.toml accepts", _python),
+    (("README",), r"(?<='torch>=)(?P<lo>\d+\.\d+),<(?P<hi>\d+\.\d+)(?=')", "the torch versions pyproject.toml accepts",
+     _torch),
     (("README",), r"--parallel 3\b", "how many runs the matrix runner trains at once: how the matrix was run, "
      "not a result", None),
     (("README",), r"localhost:4173", "the port Vite's preview server listens on by default", None),

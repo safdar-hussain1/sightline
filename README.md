@@ -329,7 +329,7 @@ On Linux, pip's default PyTorch wheel pulls in the CUDA libraries, several gigab
 NVIDIA GPU, install the CPU-only wheel first, then the package:
 
 ```bash
-.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/pip install 'torch>=2.4,<2.16' --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -e '.[dev]'
 ```
 
