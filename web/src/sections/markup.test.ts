@@ -105,8 +105,12 @@ describe("the sections' markup", () => {
 
   it("links the results and the model card from the demo, and the data file from the results", () => {
     expect(accuracyHtml()).toMatch(/<a\b[^>]*href="#results"/);
-    expect(accuracyHtml()).toMatch(/<a\b[^>]*href="model-card\.md"/);
-    expect(resultsHtml()).toMatch(/<a\b[^>]*href="model-card\.md"/);
+    // the model card as the repository renders it: the copy beside the page is served as plain text
+    const card = /<a\b[^>]*href="https:\/\/github\.com\/safdar-hussain1\/sightline\/blob\/main\/web\/public\/model-card\.md"/;
+    expect(accuracyHtml()).toMatch(card);
+    expect(resultsHtml()).toMatch(card);
+    expect(accuracyHtml()).not.toMatch(/href="model-card\.md"/);
+    expect(resultsHtml()).not.toMatch(/href="model-card\.md"/);
     expect(resultsHtml()).toMatch(/<a\b[^>]*href="data\/results\.json"/);
   });
 

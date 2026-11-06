@@ -9,7 +9,7 @@
  * view, never with the demo.
  */
 
-import { RESULTS_ROOT, mountMarkup } from "./markup.ts";
+import { MODEL_CARD, RESULTS_ROOT, mountMarkup } from "./markup.ts";
 import { networkName } from "./names.ts";
 
 // -- The Results view -------------------------------------------------------------
@@ -380,7 +380,7 @@ export function cardsHtml(): string {
               <div class="sources-card__part sources-card__part--files">
                 <h4 class="sources-card__heading">The files</h4>
                 <ul class="sources" role="list"><li><a href="${REPOSITORY}#readme">README</a> <span class="sources__what">what the repository holds, and how to run it</span></li>${sources}</ul>
-                <p class="sources-card__note">Every number in this view is read from <a href="data/results.json">results.json</a>, which the repository generates from those reports. The <a href="model-card.md">model card</a> says how the shipped model was trained, what it is for and where it falls short.</p>
+                <p class="sources-card__note">Every number in this view is read from <a href="data/results.json">results.json</a>, which the repository generates from those reports. The <a href="${MODEL_CARD}">model card</a> says how the shipped model was trained, what it is for and where it falls short.</p>
               </div>
             </div>
           </div>`;

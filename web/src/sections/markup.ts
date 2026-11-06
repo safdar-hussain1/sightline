@@ -19,6 +19,10 @@ export const HOW_ROOT = `<section class="how" id="how-it-works" aria-labelledby=
 export const ACCURACY_ROOT = `<section class="accuracy" id="accuracy" aria-labelledby="accuracy-title"></section>`;
 export const RESULTS_ROOT = `<section class="results" id="results-view" aria-labelledby="results-title"></section>`;
 
+/** The model card as the repository renders it. The copy published beside the
+ * page is served as plain text, so both views link this one instead. */
+export const MODEL_CARD = "https://github.com/safdar-hussain1/sightline/blob/main/web/public/model-card.md";
+
 // -- Drawings ---------------------------------------------------------------------
 
 /** The road as the model's crop shows it, drawn: the stand-in for a frame of
@@ -185,7 +189,7 @@ export function accuracyHtml(): string {
             <figcaption class="bars__caption" data-accuracy="caption">Mean error on the frames its training held back, in degrees of steering-wheel angle.</figcaption>
           </figure>
           <p class="accuracy__leak" data-accuracy="leak">Test it the usual way, on shuffled frames, and the same kind of model looks better than it is on road it has not seen nearby.</p>
-          <p class="accuracy__links"><a class="accuracy__more" href="#results">See what the measurements found</a><a href="model-card.md">Read the model card</a></p>
+          <p class="accuracy__links"><a class="accuracy__more" href="#results">See what the measurements found</a><a href="${MODEL_CARD}">Read the model card</a></p>
         </div>
       `;
 }
