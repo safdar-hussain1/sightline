@@ -14,7 +14,7 @@
 import { fmtDeg } from "../format.ts";
 import { accuracyCaption, accuracyLabel, accuracySentence, leakageSentence, measurementsFailure } from "./words.ts";
 import type { Figures } from "./reader.ts";
-import { EASE_OUT, onScreen, prefersReducedMotion } from "./motion.ts";
+import { EASE_OUT, MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
 /** How far below the screen the figure starts growing, px. */
 const LEAD_PX = 120;
@@ -97,15 +97,15 @@ export class Accuracy {
     this.grown = true;
     ["straight", "model"].forEach((name, i) => {
       this.part(`bar-${name}`).animate?.([{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }], {
-        duration: 1100,
+        duration: MOTION_MS.draw,
         delay: 120 + i * 160,
         easing: EASE_OUT,
         fill: "backwards",
       });
       this.part(`value-${name}`).animate?.([{ opacity: 0 }, { opacity: 1 }], {
-        duration: 400,
+        duration: MOTION_MS.move,
         delay: 700 + i * 160,
-        easing: "ease-out",
+        easing: EASE_OUT,
         fill: "backwards",
       });
     });

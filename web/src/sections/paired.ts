@@ -31,10 +31,10 @@ import {
 } from "./copy.ts";
 import { textAt, type Frames } from "./countup.ts";
 import type { Figures, Network, PairedNetwork } from "./figures.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { EASE_OUT, MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
-const DRAW_MS = 1500;
-const MORPH_MS = 560;
+const DRAW_MS = MOTION_MS.draw;
+const MORPH_MS = MOTION_MS.settle;
 /** How far below the screen the chart starts drawing itself in, px. */
 const LEAD_PX = 80;
 /** How near a seed's line the pointer must be to pick it out, px. */
@@ -287,9 +287,9 @@ export class PairedSection {
     if (this.reduced()) return;
     this.root.querySelectorAll<HTMLElement>(".sketch__frame--both").forEach((frame, i) => {
       frame.animate?.([{ opacity: 0.2, transform: "scaleY(0.6)" }, { opacity: 1, transform: "none" }], {
-        duration: 520,
+        duration: MOTION_MS.settle,
         delay: 260 + i * 140,
-        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+        easing: EASE_OUT,
         fill: "backwards",
       });
     });

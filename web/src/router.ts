@@ -24,6 +24,8 @@
  * and it names the page, not the view.
  */
 
+import { EASE_OUT, MOTION_MS } from "./sections/motion.ts";
+
 export type ViewName = "demo" | "results";
 
 export const VIEW_NAMES: readonly ViewName[] = ["demo", "results"];
@@ -117,7 +119,7 @@ const fadeIn = (el: HTMLElement) => {
       { opacity: 0, transform: "translateY(0.5rem)" },
       { opacity: 1, transform: "none" },
     ],
-    { duration: 280, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" },
+    { duration: MOTION_MS.move, easing: EASE_OUT },
   );
 };
 

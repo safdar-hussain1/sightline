@@ -7,7 +7,7 @@
     <title>Sightline — a steering model that shows where it looks</title>
     <meta
       name="description"
-      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+      content="Watch a steering model read road footage in your browser and see where it looks. Tested on shuffled frames, it looks about three times better than it is."
     />
     <meta name="author" content="Safdar Hussain" />
     <meta name="google-site-verification" content="0SIEfExLTSQj1qvnHWF5A5fY58KVl2lpIEnePP9CtI0" />
@@ -15,21 +15,24 @@
     <!-- The mark: a steering wheel with the centre marker at twelve o'clock. -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="color-scheme" content="light dark" />
-    <!-- The heading's face, wanted for the first paint. -->
+    <!-- The display faces, wanted for the first paint: the name's, and the
+         one the headings, the readouts and the controls' leads are set in. -->
     <link rel="preload" href="/fonts/barlow-condensed-700-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/barlow-condensed-600-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- The measurements, asked for with the page: every figure on it is read from them. -->
     <link rel="preload" href="/data/results.json" as="fetch" type="application/json" crossorigin />
     <meta name="theme-color" content="#eeedf3" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#17132a" media="(prefers-color-scheme: dark)" />
 
     <!-- Open Graph and Twitter. og-image.png is a screenshot of this page's
-         cockpit in a real browser. -->
+         first screen in a real browser (scripts/capture.sh), and the alt
+         text says what it shows. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Safdar Hussain" />
     <meta property="og:title" content="Sightline — a steering model that shows where it looks" />
     <meta
       property="og:description"
-      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+      content="Watch a steering model read road footage in your browser and see where it looks. Tested on shuffled frames, it looks about three times better than it is."
     />
     <meta property="og:url" content="https://safdar-hussain1.github.io/sightline/" />
     <meta property="og:image" content="https://safdar-hussain1.github.io/sightline/og-image.png" />
@@ -37,19 +40,19 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="The Sightline cockpit on a road clip: a heat map over the road showing where the model looks, and its violet steering wheel beside the driver’s ghost wheel."
+      content="The Sightline demo paused on a bend to the left: a heat map over the road shows where the model looks, brightest on the centre line and the guardrail, beside its violet steering wheel and the driver’s pale one."
     />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Sightline — a steering model that shows where it looks" />
     <meta
       name="twitter:description"
-      content="Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is."
+      content="Watch a steering model read road footage in your browser and see where it looks. Tested on shuffled frames, it looks about three times better than it is."
     />
     <meta name="twitter:image" content="https://safdar-hussain1.github.io/sightline/og-image.png" />
     <meta
       name="twitter:image:alt"
-      content="The Sightline cockpit on a road clip: a heat map over the road showing where the model looks, and its violet steering wheel beside the driver’s ghost wheel."
+      content="The Sightline demo paused on a bend to the left: a heat map over the road shows where the model looks, brightest on the centre line and the guardrail, beside its violet steering wheel and the driver’s pale one."
     />
 
     <!-- Structured data: the page as an application you can run, and the
@@ -62,7 +65,7 @@
             "@type": "WebApplication",
             "name": "Sightline",
             "url": "https://safdar-hussain1.github.io/sightline/",
-            "description": "Watch a steering model drive recorded road footage in your browser, see where it looks, and see how a shuffled test split makes it look better than it is.",
+            "description": "Watch a steering model read road footage in your browser and see where it looks. Tested on shuffled frames, it looks about three times better than it is.",
             "image": "https://safdar-hussain1.github.io/sightline/og-image.png",
             "applicationCategory": "ReferenceApplication",
             "operatingSystem": "Any (runs in a web browser)",

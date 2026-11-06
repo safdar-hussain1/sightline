@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { blockedSegments, bucketAtTime, bucketSpan, columnPeaks, ditherRoles, labelWidth, laterSegments, peakLabelStart, roleSizes, shuffledSizes, timeOfFrame, traceStats } from "./timeline.ts";
+import { blockedSegments, bucketAtTime, bucketSpan, columnPeaks, ditherRoles, labelWidth, laterSegments, PEAK_CLEAR, peakLabelPlace, roleSizes, shuffledSizes, timeOfFrame, traceStats } from "./timeline.ts";
 
 /** The roles of frames 0..n-1, frame by frame, as the splits module deals them. */
 function blockedByFrame(n: number, block: number, firewall: number, pattern: string): string[] {
@@ -143,10 +143,38 @@ describe("one point per column of the trace", () => {
 });
 
 describe("the peak's label", () => {
-  it("is centred on its peak, moved only as far as keeps it inside the chart", () => {
-    const w = labelWidth("208.5° peak");
-    expect(peakLabelStart(500, 1152, w)).toBe(500 - w / 2);
-    expect(peakLabelStart(10, 1152, w)).toBe(0);
-    expect(peakLabelStart(1150, 1152, w)).toBe(1152 - w);
+  const full = labelWidth("208.5° peak, at 23:49");
+  const short = labelWidth("208.5° at 23:49");
+  const both = [full, short];
+
+  it("stands beside the peak's dot, on the side away from the clip, in its longest wording", () => {
+    // The clip to the right: the label ends a gap short of the peak.
+    expect(peakLabelPlace(500, 1152, both, 550)).toEqual({ wording: 0, start: 500 - 6 - full });
+    // The clip to the left: the label starts a gap past it.
+    expect(peakLabelPlace(500, 1152, both, 450)).toEqual({ wording: 0, start: 506 });
+  });
+
+  it("closes in on the dot at the chart's edge, then takes a shorter wording, before it crosses to the clip's side", () => {
+    // Room for the full wording only nearer the dot than the gap.
+    expect(peakLabelPlace(full + 5, 1152, both, 400)).toEqual({ wording: 0, start: 0 });
+    // No room for the full wording on the left: the short one stays there.
+    expect(peakLabelPlace(full - 10, 1152, both, 400)).toEqual({ wording: 1, start: full - 16 - short });
+    // No room for either on the left: the full one goes to the right.
+    expect(peakLabelPlace(40, 1152, both, 90)).toEqual({ wording: 0, start: 46 });
+  });
+
+  it("is never over the dot, and never outside the chart", () => {
+    for (const [peakX, width, avoid] of [[100, 160, 150], [1120, 1152, 1000], [30, 1152, null], [600, 620, 0]] as const) {
+      const { wording, start } = peakLabelPlace(peakX, width, both, avoid);
+      const w = both[wording] as number;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(start + w).toBeLessThanOrEqual(width);
+      if (start + w > peakX - PEAK_CLEAR && start < peakX + PEAK_CLEAR) expect(wording).toBe(1);
+    }
+  });
+
+  it("with no clip to avoid, takes the side with more room", () => {
+    expect(peakLabelPlace(300, 1152, both, null).start).toBe(306);
+    expect(peakLabelPlace(900, 1152, both, null).start).toBe(900 - 6 - full);
   });
 });

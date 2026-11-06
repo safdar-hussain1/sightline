@@ -113,3 +113,44 @@ describe("the tables behind the charts", () => {
     expect(css).toMatch(/\n\.numbers \{[^}]*min-inline-size:\s*0;/);
   });
 });
+
+describe("reduced motion", () => {
+  // The rules without their comments, so a selector reads as written.
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const at = plain.indexOf("@media (prefers-reduced-motion: reduce)");
+  const before = plain.slice(0, at);
+  const block = plain.slice(at);
+
+  it("is handled rule by rule, never by stopping every animation and transition at once", () => {
+    expect(at).toBeGreaterThan(0);
+    expect(css).not.toMatch(/0\.01ms/);
+    expect(css).not.toMatch(/(transition|animation)[a-z-]*:[^;]*!important/);
+  });
+
+  it("takes the movement out of every transition that moves something, and keeps its colour and opacity changes", () => {
+    const moving = [...before.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => /transition:[^;]*\b(transform|translate|scale)\b/.test(m[2] ?? ""))
+      .map((m) => (m[1] ?? "").trim());
+    expect(moving.length).toBeGreaterThan(5);
+    const stilled = [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => /transition-property:/.test(m[2] ?? ""))
+      .flatMap((m) => (m[1] ?? "").split(",").map((s) => s.trim()));
+    for (const selector of moving) expect(stilled, selector).toContain(selector);
+    const kept = block.match(/transition-property:\s*([^;]+);/)?.[1] ?? "";
+    expect(kept).not.toMatch(/transform|translate|scale|all/);
+    expect(kept).toMatch(/opacity/);
+  });
+
+  it("stops every animation that loops", () => {
+    const looping = [...before.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => /animation:[^;]*infinite/.test(m[2] ?? ""))
+      .map((m) => (m[1] ?? "").trim());
+    expect(looping.length).toBeGreaterThan(0);
+    const stopped = [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => /animation:\s*none/.test(m[2] ?? "")).map((m) => (m[1] ?? "").trim());
+    for (const selector of looping) expect(stopped, selector).toContain(selector);
+  });
+
+  it("keeps a press from giving", () => {
+    expect(block).toMatch(/:is\(\.theme-toggle, \.play, \.step, \.how__toggle\):active \{\s*scale: none;/);
+  });
+});

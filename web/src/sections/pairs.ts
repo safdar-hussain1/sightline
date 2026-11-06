@@ -19,14 +19,14 @@ import { gapWords, measurementsFailure, neighbourWords, pairAlt, pairsLead, pick
 import type { Frames } from "./countup.ts";
 import type { FramePair, FramePairs } from "./figures.ts";
 import { fmtCount, fmtFixed } from "../format.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { EASE_OUT, MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
 const SPLITS = ["test", "shuffled", "blocked"] as const;
 type Panel = (typeof SPLITS)[number];
 
-/** The picture fade, ms, and the strong ease-out it settles with. */
-const FADE_MS = 220;
-const FADE_EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
+/** The picture fade, ms, and the ease-out it settles with. */
+const FADE_MS = MOTION_MS.move;
+const FADE_EASE = EASE_OUT;
 /** The slider's one sweep, ms. */
 const SWEEP_MS = 1800;
 /** A pick this soon after a press on the thumbnails came from the pointer. */

@@ -633,6 +633,7 @@ import shippedFile from "../../public/data/results.json?raw";
 import clipFile from "../../public/data/clips/c2018/clip.json?raw";
 import { clockTime, neighbourWords as words2, pairsLead as lead2, timelineAlt as alt2, timelineNote as note2 } from "./copy.ts";
 import { labelWidth, timeOfFrame as timeOf } from "../charts/timeline.ts";
+import { fmtDeg } from "../format.ts";
 import { readClipWindow as clipWindow, readPairs as pairsOf, readTimeline as timelineOf } from "./figures.ts";
 import { PairsSection } from "./pairs.ts";
 import { TimelineSection } from "./timeline.ts";
@@ -661,7 +662,7 @@ describe("the frame next door", () => {
     expect(photo("test").src).toBe("http://localhost/data/leakage/frame-7917.jpg");
     expect(photo("shuffled").src).toBe("http://localhost/data/leakage/frame-7916.jpg");
     expect(photo("blocked").src).toBe("http://localhost/data/leakage/frame-28219.jpg");
-    expect(all('[data-pairs="facts-shuffled"] li').map((li) => li.textContent)).toEqual(["1 frame before it, 41 ms", "Pixel difference 8.8 grey levels", "", "Steering 0.5° right"]);
+    expect(all('[data-pairs="facts-shuffled"] li').map((li) => li.textContent)).toEqual(["1 frame before it, 41\u00A0ms", "Pixel difference 8.8 grey levels", "", "Steering 0.5° right"]);
     expect(all('[data-pairs="table"] tbody tr')).toHaveLength(12);
     expect(q('[data-pairs="root"]').dataset["state"]).toBe("ready");
     expect(q('[data-pairs="root"]').style.getPropertyValue("--photo-aspect")).toBe(String(455 / 256));
@@ -808,7 +809,7 @@ describe("how the drive was split", () => {
     const { section } = mount(true);
     const timeline = timelineOf(realRaw());
     section.show(timeline, clipWindow(JSON.parse(clipFile)));
-    expect(text('[data-timeline="lead"]')).toMatch(/^The 2018 drive runs 55\.9 minutes/);
+    expect(text('[data-timeline="lead"]')).toMatch(/^The 2018 drive runs 55\.9\u00A0minutes/);
     expect(all(".timeline-chart__layer")).toHaveLength(3);
     // Shuffled, blocked, later: only the blocked layer is shown.
     expect([layer(0).style.display, layer(1).style.display, layer(2).style.display]).toEqual(["none", "", "none"]);
@@ -823,18 +824,27 @@ describe("how the drive was split", () => {
     expect(all('[data-timeline="table"] tbody tr')).toHaveLength(3);
   });
 
-  it("never lets the peak's label touch the demo clip's column, at any chart width", () => {
+  it("never lets the peak's label touch the demo clip's column, at any chart width, and says when the peak was", () => {
     const timeline = timelineOf(realRaw());
     const clip = clipWindow(JSON.parse(clipFile));
-    for (const width of [1152, 700, 358, 290, 260]) {
+    const peak = timeline.meanAbsDeg.indexOf(Math.max(...timeline.meanAbsDeg));
+    for (const width of [1152, 672, 334, 304, 264]) {
       document.body.innerHTML = "";
       layoutAs(width, false);
       const { section } = mount(true);
       section.show(timeline, clip);
       const label = q<SVGTextElement>('[data-timeline="peak"]');
       const column = q(".timeline-chart__clip-column");
-      // The label's box: its text from the baseline up the 12 px of the face.
-      const x = Number(label.getAttribute("x"));
+      const dot = q('[data-timeline="peak-dot"]');
+      // The label names the peak's size and the time of its bucket, both from
+      // the data, in the longest wording that keeps it off the clip's side.
+      const [size, when] = [fmtDeg(timeline.meanAbsDeg[peak] as number, 1), clockTime(timeline.clock.startS[peak] as number)];
+      expect([`${size} peak, at ${when}`, `${size} peak, ${when}`, `${size} at ${when}`]).toContain(label.textContent);
+      if (width >= 700) expect(label.textContent).toBe(`${size} peak, at ${when}`);
+      // The label's box: its text from the baseline up the 12 px of the face,
+      // from its anchor.
+      const anchor = Number(label.getAttribute("x"));
+      const x = label.getAttribute("text-anchor") === "end" ? anchor - labelWidth(label.textContent ?? "") : anchor;
       const baseline = Number(label.getAttribute("y"));
       const box = { left: x, right: x + labelWidth(label.textContent ?? ""), top: baseline - 12, bottom: baseline + 3 };
       const colX = Number(column.getAttribute("x"));
@@ -844,6 +854,17 @@ describe("how the drive was split", () => {
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(width);
       expect(box.top).toBeGreaterThanOrEqual(0);
+      // The dot sits on the top of the spike, at the trace's top, and the label
+      // stands beside it -- on the side away from the clip whenever that side
+      // can hold it -- never over it.
+      const dotX = Number(dot.getAttribute("cx"));
+      expect(Number(dot.getAttribute("cy"))).toBe(20);
+      expect(box.right <= dotX - 4.5 || box.left >= dotX + 4.5, `at ${width}px the label is over the dot`).toBe(true);
+      // On every width the page is drawn at, the clip is right of the peak and
+      // the label left of it.
+      const clipCentre = colX + Number(column.getAttribute("width")) / 2;
+      expect(clipCentre).toBeGreaterThan(dotX);
+      expect(box.right, `at ${width}px the label is on the clip's side`).toBeLessThanOrEqual(dotX);
     }
   });
 

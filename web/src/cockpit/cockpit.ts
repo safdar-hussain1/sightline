@@ -209,6 +209,13 @@ class View {
     for (const control of [this.play, this.back, this.forward]) control.disabled = !on;
   }
 
+  /** Whether the windshield may show the video while the clip loads: once the
+   * clip's own footage has its first frame, the road shows under the loading
+   * message, and the heat and the wheel follow when the model starts. */
+  showFootage(on: boolean): void {
+    this.windshield.dataset["footage"] = String(on);
+  }
+
   /** The frame on screen has no output from the model yet: its wheel dims. */
   waiting(on: boolean): void {
     this.wheelBox.dataset["waiting"] = String(on);
@@ -490,6 +497,7 @@ export class Cockpit implements LiveCockpit {
       const ready = () => {
         stop();
         video.addEventListener("error", stopped);
+        if (generation === this.generation) this.view.showFootage(true);
         resolve();
       };
       const failed = () => {
@@ -598,6 +606,7 @@ export class Cockpit implements LiveCockpit {
     this.awaiting = null;
     this.check = null;
     this.view.setState(state);
+    this.view.showFootage(false);
     this.view.showPlaying(false);
     this.view.enableTransport(false);
     this.strip.setEnabled(false);

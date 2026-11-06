@@ -32,9 +32,9 @@ import {
   type ParityLook,
 } from "./copy.ts";
 import type { Figures } from "./figures.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
-const COUNT_MS = 1500;
+const COUNT_MS = MOTION_MS.draw;
 /** How often the live check is read while the view is on screen, ms. */
 const CHECK_MS = 600;
 

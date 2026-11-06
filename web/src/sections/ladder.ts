@@ -21,10 +21,10 @@ import type { ViewName } from "../router.ts";
 import { NETWORK_NAMES, STRAIGHT, barWords, capitalised, ladderAlt, ladderCaption, ladderLead, measurementsFailure, rungCaption, rungNote } from "./copy.ts";
 import { textAt, type Frames } from "./countup.ts";
 import { LADDER_MODELS, type Ladder, type LadderModel, type Splits } from "./figures.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
-const GROW_MS = 1500;
-const MORPH_MS = 640;
+const GROW_MS = MOTION_MS.draw;
+const MORPH_MS = MOTION_MS.settle;
 const LEAD_PX = 80;
 /** A bar's rounded end, px; its foot on the line stays square. */
 const CAP = 4;

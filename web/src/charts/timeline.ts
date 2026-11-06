@@ -193,10 +193,39 @@ export function traceStats(
  * pixels a character, a little over what the page's text face takes. */
 export const labelWidth = (text: string): number => text.length * 7;
 
-/** Where the label that names the peak starts: centred on the peak, moved
- * only as far as keeps its box inside the chart. */
-export function peakLabelStart(peakX: number, width: number, textWidth: number): number {
-  return Math.max(0, Math.min(peakX - textWidth / 2, width - textWidth));
+/** How far the label that names the peak keeps from the centre of the
+ * peak's dot, px: the dot's radius and a clear pixel. */
+export const PEAK_CLEAR = 4.5;
+
+/**
+ * Which of the label's wordings to use and where it starts. The label stands
+ * beside the dot that marks the peak, `gap` pixels from it (less, down to
+ * `PEAK_CLEAR`, where the chart's edge is near), on the side away from
+ * `avoidX` -- the demo clip's column, which would otherwise read as the
+ * peak's -- or, with nothing to avoid, on the side with more room. `widths`
+ * are the wordings' widths, longest first: the longest that fits on that side
+ * is used; when none does, the longest that fits on the other side; and when
+ * none fits anywhere, the shortest, kept inside the chart.
+ */
+export function peakLabelPlace(peakX: number, width: number, widths: readonly number[], avoidX: number | null, gap = 6): { readonly wording: number; readonly start: number } {
+  const onLeft = (w: number) => {
+    const start = Math.max(0, peakX - gap - w);
+    return start + w <= peakX - PEAK_CLEAR ? start : null;
+  };
+  const onRight = (w: number) => {
+    const start = Math.min(width - w, peakX + gap);
+    return start >= peakX + PEAK_CLEAR ? start : null;
+  };
+  const wantLeft = avoidX === null ? peakX > width / 2 : avoidX > peakX;
+  const sides = wantLeft ? [onLeft, onRight] : [onRight, onLeft];
+  for (const side of sides) {
+    for (let i = 0; i < widths.length; i += 1) {
+      const start = side(widths[i] as number);
+      if (start !== null) return { wording: i, start };
+    }
+  }
+  const last = widths.length - 1;
+  return { wording: last, start: Math.max(0, Math.min(peakX - (widths[last] as number) / 2, width - (widths[last] as number))) };
 }
 
 /** One point per column of `step` pixels: of the buckets whose x falls in a

@@ -704,15 +704,19 @@ export function protocolTexts(splits: Splits): { shuffled: string; blocked: stri
 
 // -- The frame pairs ------------------------------------------------------------------
 
+/** A number and its unit, joined by a no-break space so a line never ends
+ * between them. */
+const unit = (figure: string, name: string) => `${figure}\u00A0${name}`;
+
 /** How far apart two frames were taken, from their timestamps, in the unit
  * that reads best: milliseconds under a second, seconds under a minute, then
  * minutes and whole seconds (rounded down). Empty without timestamps. */
 export function gapWords(seconds: number | null): string {
   if (seconds === null) return "";
-  if (seconds < 1) return `${fmtCount(Math.round(seconds * 1000))} ms`;
-  if (seconds < 60) return `${fmtFixed(seconds)} s`;
+  if (seconds < 1) return unit(fmtCount(Math.round(seconds * 1000)), "ms");
+  if (seconds < 60) return unit(fmtFixed(seconds), "s");
   const minutes = Math.floor(seconds / 60);
-  return `${fmtCount(minutes)} min ${fmtCount(Math.floor(seconds - minutes * 60))} s`;
+  return `${unit(fmtCount(minutes), "min")} ${unit(fmtCount(Math.floor(seconds - minutes * 60)), "s")}`;
 }
 
 /** A lower bound, rounded down to one decimal: never above what it bounds. */
@@ -735,7 +739,7 @@ export function pairsLead(pairs: FramePairs): string {
     nearTime = gapWords(low) === gapWords(high) ? `, ${gapWords(high)} apart` : high < 1 ? `, ${fmtCount(Math.round(low * 1000))} to ${gapWords(high)} apart` : `, ${gapWords(low)} to ${gapWords(high)} apart`;
   }
   const farTimes = far.flatMap((side) => (side.gapS === null ? [] : [side.gapS]));
-  const farTime = farTimes.length === far.length ? `, at least ${atLeast(Math.min(...farTimes) / 60)} minutes of driving` : "";
+  const farTime = farTimes.length === far.length ? `, at least ${unit(atLeast(Math.min(...farTimes) / 60), "minutes")} of driving` : "";
   return (
     `${capitalised(countWord(list.length))} test frames, each beside the training frame that looks most like it. ` +
     `Under the shuffled split that frame is ${where}${nearTime}. ` +
@@ -806,7 +810,7 @@ export type TimelineProtocol = "shuffled" | "blocked" | "later";
 
 export function timelineLead(timeline: Timeline): string {
   return (
-    `${capitalised(driveTitle(timeline.drive))} runs ${minutesOf(timeline.clock.durationS)} minutes, from its first frame to its last. ` +
+    `${capitalised(driveTitle(timeline.drive))} runs ${unit(minutesOf(timeline.clock.durationS), "minutes")}, from its first frame to its last. ` +
     `Each split deals its ${fmtCount(timeline.frames)} frames to training, validation and testing in its own way.`
   );
 }
@@ -894,7 +898,7 @@ export function traceWords(timeline: Timeline): string {
     `The steering above it is drawn bucket by bucket: ${buckets}. ` +
     "The shaded band is how hard the driver was turning (the mean size of the angle) and the solid shape inside it which way, on a square-root scale. " +
     "Where buckets are narrower than a pixel and a half, each column of pixels draws the bucket that turns hardest. " +
-    `Half the buckets turn less than ${fmtDeg(stats.median, 1)} on average and the largest ${fmtDeg(stats.largest, 1)}; ` +
+    `Half the buckets turn less than ${fmtDeg(stats.median, 1)} on average and the largest ${fmtDeg(stats.largest, 1)}, at ${clockTime(clock.startS[stats.largestAt] as number)}; ` +
     `${fmtPct(stats.shareAbove[0] as number)} of buckets turn more than ${fmtDeg(low, 0)} and ${fmtPct(stats.shareAbove[1] as number)} more than ${fmtDeg(high, 0)}.`
   );
 }

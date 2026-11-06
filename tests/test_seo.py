@@ -10,8 +10,9 @@ What is asserted is the portfolio's standard for every project page: a title of
 at most 60 characters, a description of 120 to 160, the author, the Search
 Console token, a canonical URL, a favicon that resolves, Open Graph and Twitter
 tags that agree with the title and description, a 1200x630 ``og-image.png`` under
-500 KB, JSON-LD describing the page as a ``WebApplication`` and the repository as
-``SoftwareSourceCode`` with the author written out on both, exactly one ``<h1>``
+500 KB (and the README's picture of the demo beside it), JSON-LD describing the
+page as a ``WebApplication`` and the repository as ``SoftwareSourceCode`` with
+the author written out on both, exactly one ``<h1>``
 in the HTML the server sends, a sitemap whose ``<lastmod>`` is a literal date
 rather than a build-time one, and no ``robots.txt``. Scripts may not rewrite the
 title a crawler reads, except the in-page self-test, which only runs on request.
@@ -19,6 +20,7 @@ title a crawler reads, except the in-page self-test, which only runs on request.
 
 import datetime as dt
 import json
+import math
 import re
 import struct
 from html.parser import HTMLParser
@@ -180,11 +182,6 @@ def test_open_graph_and_twitter_agree_with_the_page(side):
     assert page.one("twitter:card") == "summary_large_image"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=FileNotFoundError,
-    reason="og-image is captured from the finished hero",
-)
 @sides
 def test_the_share_image_is_1200_by_630_and_under_500_kb(side):
     image = _resolve(side, _parse(side).one("og:image"))
@@ -193,16 +190,73 @@ def test_the_share_image_is_1200_by_630_and_under_500_kb(side):
     assert len(data) < 500 * 1024, f"{len(data)} bytes"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=FileNotFoundError,
-    reason="og-image is captured from the finished hero",
+@pytest.mark.parametrize("name", ["og-image.png", "readme-hero.png"])
+def test_the_published_pictures_are_the_authored_ones(name):
+    """docs/ must serve the files web/public/ holds, not stale copies of them."""
+    assert (ROOT / "docs" / name).read_bytes() == (ROOT / "web" / "public" / name).read_bytes()
+
+
+def test_the_readme_picture_is_a_png_of_at_most_300_kb():
+    data = (ROOT / "docs" / "readme-hero.png").read_bytes()
+    width, height = _png_size(data)
+    assert width >= 900 and 1.6 <= width / height <= 2.0, (width, height)
+    assert len(data) <= 300 * 1024, f"{len(data)} bytes"
+
+
+#: What the share image shows, in words: the demo's first screen, which
+#: scripts/capture.mjs pauses on a frame of the 2018 clip where the model's
+#: heat is brightest on the centre line and the guardrail. A new picture
+#: means new words here and in web/index.html.
+SHARE_ALT = (
+    "The Sightline demo paused on a bend to the left: a heat map over the road shows where the "
+    "model looks, brightest on the centre line and the guardrail, beside its violet steering "
+    "wheel and the driver’s pale one."
 )
-def test_the_published_share_image_is_the_authored_one():
-    """docs/ must serve the file web/public/ holds, not a stale copy of it."""
-    assert (ROOT / "docs" / "og-image.png").read_bytes() == (
-        ROOT / "web" / "public" / "og-image.png"
-    ).read_bytes()
+
+#: The page's words for a ratio, as web/src/sections/words.ts writes them:
+#: rounded to the nearest half, in words up to twelve.
+_NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                 "ten", "eleven", "twelve"]
+
+
+def _times_in_words(ratio: float) -> str:
+    half = math.floor(ratio * 2 + 0.5) / 2
+    whole = math.floor(half)
+    if whole > 12:
+        return f"{math.floor(ratio + 0.5):,} times"
+    return f"{_NUMBER_WORDS[whole]} times" if half == whole else f"{_NUMBER_WORDS[whole]} and a half times"
+
+
+@sides
+def test_the_description_says_what_the_paired_measurement_found(side):
+    """The description is static text, so its "about three times" is held to
+    results.json here: the paired measurement's ratio for SightlineNet, the
+    network the demo runs, in the words the page's own sentence uses."""
+    ratio = json.loads((ROOT / "web" / "public" / "data" / "results.json").read_text(encoding="utf-8"))[
+        "paired_leakage"]["sightlinenet"]["ratio"]["mean"]
+    assert ratio >= 1.25, "below 1.25 the page says 'a little', not 'about'"
+    description = _parse(side).one("description")
+    assert description == (
+        "Watch a steering model read road footage in your browser and see where it looks. "
+        f"Tested on shuffled frames, it looks about {_times_in_words(ratio)} better than it is."
+    )
+
+
+@sides
+def test_the_share_image_alt_says_what_the_image_shows(side):
+    page = _parse(side)
+    assert page.one("og:image:alt") == SHARE_ALT
+    assert page.one("twitter:image:alt") == SHARE_ALT
+
+
+@sides
+def test_the_head_text_carries_no_typed_figure(side):
+    """Every figure on the page is read from the data; the head's words carry
+    none in digits, and the one count they make in words is pinned above."""
+    page = _parse(side)
+    for key in ("description", "og:description", "twitter:description", "og:image:alt", "twitter:image:alt"):
+        assert not re.search(r"\d", page.one(key)), key
+    assert not re.search(r"\d", page.title)
 
 
 @sides

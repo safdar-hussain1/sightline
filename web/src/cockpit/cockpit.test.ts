@@ -562,6 +562,38 @@ describe("stale values", () => {
     expect(say("average")).toBe("14.2°");
   });
 
+  it("shows the clip's own road under the loading message once its footage has a first frame, and never the last clip's", async () => {
+    let release: (value: Uint8Array[]) => void = () => undefined;
+    world.decode = () => new Promise((resolve) => (release = resolve));
+    const { video } = mount();
+    // The footage has its first frame while the frames still decode: the road
+    // shows, the model not yet.
+    await until(() => el("windshield").dataset["footage"] === "true", "the footage has a frame");
+    expect(consoleState()).toBe("loading");
+    expect(shown("status")).not.toBe("");
+    release(frames());
+    await until(() => consoleState() === "ready", "the clip is ready");
+
+    // Another clip: the last clip's picture goes at once, and the new clip's
+    // shows once its own footage has a frame.
+    world.decode = () => new Promise((resolve) => (release = resolve));
+    pick("cockpit-clip", "c2017");
+    expect(consoleState()).toBe("loading");
+    expect(el("windshield").dataset["footage"]).toBe("false");
+    await until(() => el("windshield").dataset["footage"] === "true", "the next clip's footage has a frame");
+    expect(consoleState()).toBe("loading");
+
+    // Footage that fails takes the picture with it.
+    const element = el("video") as HTMLVideoElement;
+    Object.defineProperty(element, "error", { configurable: true, value: { code: 2 } });
+    release(frames());
+    await until(() => consoleState() === "ready", "the next clip is ready");
+    element.dispatchEvent(new Event("error"));
+    await until(() => consoleState() === "unavailable", "the footage stopped");
+    expect(el("windshield").dataset["footage"]).toBe("false");
+    void video;
+  });
+
   it("shows nothing of the model's on a frame whose output is still being computed", async () => {
     // Only the opening run (frames 0 to 3) goes through; the rest wait.
     let release: () => void = () => undefined;

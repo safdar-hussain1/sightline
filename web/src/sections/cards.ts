@@ -36,9 +36,9 @@ import type { Frames } from "./countup.ts";
 import { framesDrawing, recipeDrawing, regimesDrawing, yardsticksDrawing, type CardDrawing, type FramesRow } from "./drawings.ts";
 import type { ExportCheck, FrameCounts, Ladder, Legacy, Regimes, Splits, YardstickSet } from "./figures.ts";
 import { fmtCount, fmtDeg } from "../format.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
-const GROW_MS = 1100;
+const GROW_MS = MOTION_MS.draw;
 const LEAD_PX = 60;
 
 export type CardName = "baselines" | "frames" | "regimes" | "recipe" | "trust";

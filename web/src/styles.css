@@ -161,7 +161,8 @@
   --regime-sharp: #e6d6ff;
   --strip-average: rgb(236 233 246 / 70%);
   --strip-playhead: #ece9f6;
-  /* On the light page the dark screen stands out by itself. */
+  /* On the light page the dark screen stands out by itself; on the dark one
+     a hairline edge sets it off the ground, under the same drop shadow. */
   --console-frame: 0 0 0 0 transparent;
 
   /* Attention: dark to light, steadily rising in relative luminance
@@ -213,8 +214,21 @@
   --nav-thumb: color-mix(in oklab, var(--accent) 13%, var(--surface));
   --nav-thumb-edge: color-mix(in oklab, var(--accent) 45%, transparent);
 
-  /* The one motion curve: fast in, a gentle settle. */
+  /* Motion: one curve -- fast in, a gentle settle -- and five durations,
+     each for one kind of change. Colour and hover changes take the plain
+     `ease`; anything that moves takes the curve. The scripts' motions use
+     the same curve and the same steps (sections/motion.ts). */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* A wheel following the footage, frame to frame. */
+  --motion-frame: 60ms;
+  /* A control answering the pointer: hover, press, a colour. */
+  --motion-quick: 160ms;
+  /* Something taking its new place or state: the nav's thumb, a spotlight. */
+  --motion-move: 320ms;
+  /* A chart settling into a choice the visitor made. */
+  --motion-settle: 560ms;
+  /* How it works turning its wheel to the model's answer. */
+  --motion-slow: 900ms;
 
   /* The theme toggle shows the theme a press switches to. */
   --show-moon: block;
@@ -238,7 +252,7 @@
     --focus: #c28dfb;
     --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
     --accent-text: #c28dfb;
-    --console-frame: 0 0 0 1px #4d4475, 0 0 0 5px rgb(147 51 234 / 10%);
+    --console-frame: 0 0 0 1px #4d4475;
     --mark-tile: #0e0b1d;
     --show-moon: none;
     --show-sun: block;
@@ -267,7 +281,7 @@
   --focus: #c28dfb;
   --shadow-screen: 0 2.5rem 4rem -2.5rem rgb(0 0 0 / 60%);
   --accent-text: #c28dfb;
-  --console-frame: 0 0 0 1px #4d4475, 0 0 0 5px rgb(147 51 234 / 10%);
+  --console-frame: 0 0 0 1px #4d4475;
   --mark-tile: #0e0b1d;
   --show-moon: none;
   --show-sun: block;
@@ -305,6 +319,10 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* The browser's own parts in the page's colours: the scrollbars of the
+     tables that scroll on a phone, and the native controls' accent. */
+  scrollbar-color: var(--line-strong) transparent;
+  accent-color: var(--accent);
 }
 
 body {
@@ -486,7 +504,7 @@ svg {
   cursor: pointer;
   /* Only the border, which is what hover changes: a background transition
      would also play, out of step with the page, whenever the theme switches. */
-  transition: border-color 150ms ease;
+  transition: border-color var(--motion-quick) ease, scale var(--motion-quick) var(--ease-out);
   /* It needs a script to work; until index.html's first script marks the page
      with the "js" class, it holds its place unseen. */
   visibility: hidden;
@@ -498,6 +516,11 @@ svg {
 
 .theme-toggle:hover {
   border-color: var(--ink-3);
+}
+
+/* Every button answers a press by giving a little under it. */
+:is(.theme-toggle, .play:not(:disabled), .step:not(:disabled), .how__toggle):active {
+  scale: 0.97;
 }
 
 .theme-toggle__icon {
@@ -548,7 +571,7 @@ svg {
   border-radius: calc(var(--radius-control) - 0.1875rem);
   background: var(--nav-thumb);
   box-shadow: inset 0 0 0 1px var(--nav-thumb-edge);
-  transition: translate 320ms var(--ease-out);
+  transition: translate var(--motion-move) var(--ease-out);
 }
 
 :root[data-view="results"] .views-nav::before {
@@ -565,7 +588,7 @@ svg {
   color: var(--ink-2);
   font: 600 0.9375rem / 1 var(--font-text);
   text-decoration: none;
-  transition: color 150ms ease;
+  transition: color var(--motion-quick) ease;
 }
 
 .views-nav__link:hover,
@@ -604,9 +627,49 @@ svg {
   }
 }
 
+/* A small phone (360 px): the same row a size smaller, and the lede a step
+   smaller and closer, so the footage, the wheel and Play still make the first
+   screen. Measured in Barlow at 360 px: mark 32 + name 98 + nav 118 + toggle
+   40, with the gaps, leave 22 px to spare. */
+@media (width < 24rem) {
+  .masthead {
+    padding-block: var(--space-4);
+  }
+
+  .masthead__inner {
+    row-gap: var(--space-3);
+  }
+
+  .wordmark {
+    gap: 0.375rem;
+  }
+
+  .wordmark__name {
+    font-size: 2rem;
+  }
+
+  .mark {
+    inline-size: 2rem;
+  }
+
+  .views-nav__link {
+    padding-inline: 0.375rem;
+    font-size: 0.8125rem;
+  }
+
+  .theme-toggle {
+    inline-size: 2.5rem;
+    block-size: 2.5rem;
+  }
+
+  .lede {
+    font-size: 1rem;
+  }
+}
+
 /* Narrower than that, the nav takes a row of its own rather than squeeze
    the name. */
-@media (width < 24rem) {
+@media (width < 21.5rem) {
   .masthead__inner {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -661,8 +724,8 @@ svg {
     "instruments"
     "transport"
     "key"
-    "note"
-    "eye";
+    "eye"
+    "note";
   gap: var(--space-4);
   padding: var(--space-3);
   border-radius: var(--radius-screen);
@@ -692,6 +755,16 @@ svg {
 @media (min-width: 40rem) {
   .cockpit__console {
     padding: var(--space-4);
+  }
+
+  /* A tablet: the two choices side by side, which keeps Play on the first
+     screen under the footage and the wheel. */
+  .cockpit__choices {
+    flex-direction: row;
+  }
+
+  .cockpit__choices > .picker {
+    flex: 1 1 0;
   }
 }
 
@@ -756,7 +829,7 @@ svg {
   padding: var(--space-2) var(--space-3);
   border-radius: calc(var(--radius-control) - 0.25rem);
   cursor: pointer;
-  transition: background-color 150ms ease;
+  transition: background-color var(--motion-quick) ease;
 }
 
 .picker__option:hover {
@@ -843,7 +916,7 @@ svg {
   position: absolute;
   inset: calc(var(--band-top, 0.42) * 100%) 0 0 0;
   border-top: 1px solid rgb(255 255 255 / 75%);
-  transition: opacity 400ms ease;
+  transition: opacity var(--motion-move) ease;
 }
 
 .windshield__heat {
@@ -906,10 +979,19 @@ html:not(.js) .windshield__status {
 }
 
 /* Between clips, and when a clip cannot run, the last picture shown belongs
-   to no clip on screen: the windshield holds only its message. */
-[data-state="loading"] .windshield__video,
+   to no clip on screen: the windshield holds only its message -- until the
+   clip being loaded has its own first frame, which shows under the message
+   while the model starts, so the first screen holds the road early on. */
+[data-state="loading"] .windshield:not([data-footage="true"]) .windshield__video,
 [data-state="unavailable"] .windshield__video {
   visibility: hidden;
+}
+
+/* The message keeps its place over the whole windshield -- nothing moves when
+   the road comes in -- and dims the road under it until the model runs. */
+[data-state="loading"] .windshield[data-footage="true"] .windshield__status {
+  background: rgb(14 11 29 / 62%);
+  color: var(--console-ink);
 }
 
 .cockpit__noscript {
@@ -951,7 +1033,7 @@ html:not(.js) .windshield__status {
   color: var(--on-accent);
   font: 600 var(--text-md) / 1 var(--font-text);
   cursor: pointer;
-  transition: box-shadow 150ms ease;
+  transition: box-shadow var(--motion-quick) ease, scale var(--motion-quick) var(--ease-out);
 }
 
 /* Hover adds a halo rather than a lighter fill, which would take the label
@@ -992,6 +1074,7 @@ html:not(.js) .windshield__status {
   background: var(--console-2);
   color: var(--console-ink);
   cursor: pointer;
+  transition: background-color var(--motion-quick) ease, scale var(--motion-quick) var(--ease-out);
 }
 
 .step:hover:not(:disabled) {
@@ -1102,11 +1185,12 @@ html:not(.js) .windshield__status {
 }
 
 /* -- The model's note: what the selected model is, and what this clip is to it.
-   Above the wheel on a wide screen, below the strip on a phone. The slot
+   Above the wheel on a wide screen, last on the screen on a phone. The slot
    holds, unseen, the note of every model on the clip on screen, each in the
    same grid cell as the note itself, so it is as tall as the longest at any
    width and switching models moves nothing: not the wheel above Play on a
-   wide screen, not the model's eye below it on a phone. Its floor of four
+   wide screen; on a phone the room a shorter note leaves falls at the foot of
+   the screen, not between the note and the model's eye. Its floor of four
    lines holds the place of a clip's notes while the clip loads. */
 
 .model-note {
@@ -1139,8 +1223,10 @@ html:not(.js) .windshield__status {
 }
 
 @media (min-width: 40rem) {
+  /* The wheel no larger than it reads well, so Play stays on a tablet's
+     first screen. */
   .instruments {
-    grid-template-columns: minmax(10rem, 2fr) minmax(0, 3fr);
+    grid-template-columns: minmax(10rem, 13.5rem) minmax(0, 1fr);
   }
 }
 
@@ -1180,8 +1266,8 @@ html:not(.js) .windshield__status {
   transform-box: view-box;
   transform-origin: 50% 50%;
   /* About one frame of the clip: the wheel moves between frames instead of
-     jumping. Reduced motion turns it off with every other transition. */
-  transition: transform 60ms linear;
+     jumping. Under reduced motion it jumps (see Motion, at the end). */
+  transition: transform var(--motion-frame) linear;
 }
 
 /* The driver's wheel is a pale wireframe over the model's: where the two
@@ -1205,13 +1291,13 @@ html:not(.js) .windshield__status {
 .wheel__rim {
   fill: none;
   stroke: var(--wheel-ink);
-  transition: stroke 400ms ease;
+  transition: stroke var(--motion-move) ease;
 }
 
 .wheel__stripe {
   fill: none;
   stroke: var(--model-stripe);
-  transition: stroke 400ms ease;
+  transition: stroke var(--motion-move) ease;
 }
 
 .wheel__spokes {
@@ -1219,19 +1305,19 @@ html:not(.js) .windshield__status {
   stroke: var(--wheel-ink);
   stroke-width: 12;
   stroke-linecap: round;
-  transition: stroke 400ms ease;
+  transition: stroke var(--motion-move) ease;
 }
 
 .wheel__hub {
   fill: var(--console-3);
   stroke: var(--wheel-ink);
   stroke-width: 5;
-  transition: stroke 400ms ease;
+  transition: stroke var(--motion-move) ease;
 }
 
 .wheel__pointer {
   fill: var(--wheel-ink);
-  transition: fill 400ms ease;
+  transition: fill var(--motion-move) ease;
 }
 
 /* Until the model is running, its wheel is unlit and the driver's ghost is
@@ -1351,6 +1437,15 @@ html:not(.js) .windshield__status {
   color: var(--console-ink-2);
 }
 
+/* On a wide screen the caption is the foot of the column that sets the
+   screen's height: it keeps the room of its longest wording (three lines, on
+   the 2018 clip), so changing clips moves nothing below the screen. */
+@media (min-width: 60rem) {
+  .eye__caption {
+    min-height: calc(3 * 1.4em);
+  }
+}
+
 /* -- Below the cockpit: How it works and the accuracy figure ------------------ */
 
 /* Words sit on the page ground; everything the model sees and does -- its
@@ -1414,7 +1509,7 @@ html:not(.js) .windshield__status {
   color: var(--ink);
   font: 600 var(--text-sm) / 1 var(--font-text);
   cursor: pointer;
-  transition: border-color 150ms ease;
+  transition: border-color var(--motion-quick) ease, scale var(--motion-quick) var(--ease-out);
 }
 
 .how__toggle:hover {
@@ -1770,7 +1865,7 @@ html:not(.js) .windshield__status {
 /* Here the wheel turns to each new answer at a reading pace, not frame by
    frame as in the cockpit. */
 .how-answer__wheel .wheel__turn {
-  transition: transform 900ms var(--ease-out);
+  transition: transform var(--motion-slow) var(--ease-out);
 }
 
 .how-answer__angle {
@@ -1820,7 +1915,7 @@ html:not(.js) .windshield__status {
 .how__caveat {
   margin-block-start: var(--space-6);
   padding-inline-start: var(--space-3);
-  border-inline-start: 2px solid var(--line-strong);
+  border-inline-start: 1px solid var(--line-strong);
   max-width: 44em;
   font-size: var(--text-sm);
   color: var(--ink-2);
@@ -2106,7 +2201,7 @@ html:not(.js) .windshield__status {
   border-radius: var(--radius-control);
   background: var(--console-2);
   text-align: center;
-  transition: border-color 150ms ease, background-color 150ms ease;
+  transition: border-color var(--motion-quick) ease, background-color var(--motion-quick) ease;
 }
 
 /* Wide: the drawing of the rule on the left, the way in on the right. */
@@ -2205,7 +2300,7 @@ html:not(.js) .windshield__status {
   fill: rgb(176 122 247 / 26%);
   stroke: var(--model);
   stroke-width: 1.5;
-  transition: fill 150ms ease;
+  transition: fill var(--motion-quick) ease;
 }
 
 .ownclip__console[data-drag="true"] .art__band {
@@ -2261,7 +2356,7 @@ html:not(.js) .windshield__status {
   color: var(--on-accent);
   font: 600 var(--text-md) / 1 var(--font-text);
   cursor: pointer;
-  transition: box-shadow 150ms ease, transform 160ms var(--ease-out);
+  transition: box-shadow var(--motion-quick) ease, transform var(--motion-quick) var(--ease-out);
 }
 
 .ownclip__choose:hover {
@@ -2346,14 +2441,14 @@ html:not(.js) .windshield__status {
   position: absolute;
   inset: auto;
   box-shadow: 0 0 0 1px rgb(255 255 255 / 70%), 0 0 0 100vmax rgb(14 11 29 / 45%);
-  transition: opacity 300ms ease;
+  transition: opacity var(--motion-move) ease;
 }
 
 .ownclip__heat {
   display: block;
   inline-size: 100%;
   block-size: 100%;
-  transition: opacity 300ms ease;
+  transition: opacity var(--motion-move) ease;
 }
 
 .ownclip__tag {
@@ -2448,11 +2543,11 @@ html:not(.js) .windshield__status {
 /* While the video is read the wheel takes each new batch of answers at a
    reading pace; while it plays, frame by frame, as in the cockpit. */
 .ownclip__wheel .wheel__turn {
-  transition: transform 240ms var(--ease-out);
+  transition: transform var(--motion-move) var(--ease-out);
 }
 
 [data-phase="done"] .ownclip__wheel .wheel__turn {
-  transition: transform 60ms linear;
+  transition: transform var(--motion-frame) linear;
 }
 
 .ownclip__readout {
@@ -2635,7 +2730,7 @@ html:not(.js) .windshield__status {
   color: var(--console-ink);
   font: 600 var(--text-sm) / 1 var(--font-text);
   cursor: pointer;
-  transition: background-color 150ms ease, transform 160ms var(--ease-out);
+  transition: background-color var(--motion-quick) ease, transform var(--motion-quick) var(--ease-out);
 }
 
 .ownclip__action:hover {
@@ -2717,7 +2812,7 @@ html:not(.js) .windshield__status {
 .ownclip__rules li {
   max-width: 34em;
   padding-inline-start: var(--space-3);
-  border-inline-start: 2px solid var(--line-strong);
+  border-inline-start: 1px solid var(--line-strong);
 }
 
 /* -- The Results view ----------------------------------------------------------- */
@@ -2765,6 +2860,37 @@ html:not(.js) .windshield__status {
   border-block-start: 1px solid var(--line);
 }
 
+/* A tablet: the paired figure across the top, the other two side by side
+   under it, so neither leaves half the band empty. */
+@media (40rem <= width < 60rem) {
+  .headline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .finding--hero {
+    grid-column: 1 / -1;
+  }
+
+  .finding:nth-child(2) {
+    padding-inline-end: var(--space-5);
+  }
+
+  .finding:nth-child(3) {
+    border-block-start: 1px solid var(--line);
+    border-inline-start: 1px solid var(--line);
+    padding-inline-start: var(--space-5);
+  }
+}
+
+/* The notes are served in a short plain wording and carry their figures
+   once the data is in: three lines held from the first paint, the length of
+   the written-in note, so the band does not grow under the visitor. */
+@media (min-width: 40rem) {
+  .finding__note {
+    min-height: calc(3 * 1.5em);
+  }
+}
+
 @media (min-width: 60rem) {
   .headline {
     grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -2786,6 +2912,7 @@ html:not(.js) .windshield__status {
     border-block-start: 0;
     border-inline-start: 1px solid var(--line);
   }
+
 }
 
 .finding__values {
@@ -2900,8 +3027,11 @@ html:not(.js) .windshield__status {
   background: var(--bar-straight);
 }
 
+/* As tall as the row's name, so a row is the same height before its value
+   is written in as after. */
 .ruler__value {
   font-size: var(--text-sm);
+  line-height: 1.2;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2927,10 +3057,12 @@ html:not(.js) .windshield__status {
   visibility: hidden;
 }
 
-/* Until the measurements load each figure holds its place as a quiet shape. */
+/* Until the measurements load each figure holds its place as a quiet shape,
+   as tall as the figure's line (the figures' line-height), so nothing below
+   moves when the figure is written in. */
 [data-results="root"][data-state="loading"] .count {
   min-inline-size: 2.4ch;
-  min-block-size: 0.82em;
+  min-block-size: 0.92em;
   border-radius: 0.375rem;
   background: var(--line);
 }
@@ -3149,7 +3281,7 @@ html:not(.js) .windshield__status {
 
 .sketch__splits div {
   padding-inline-start: var(--space-3);
-  border-inline-start: 2px solid var(--console-line);
+  border-inline-start: 1px solid var(--console-line);
 }
 
 .sketch__splits dt {
@@ -3328,7 +3460,7 @@ html:not(.js) .windshield__status {
   text-align: center;
   color: var(--ink-2);
   cursor: pointer;
-  transition: background-color 0.18s, color 0.18s;
+  transition: background-color var(--motion-quick) ease, color var(--motion-quick) ease;
 }
 
 .segmented__option:hover {
@@ -3487,20 +3619,20 @@ html:not(.js) .windshield__status {
   stroke: var(--series);
   stroke-width: 3;
   stroke-linecap: round;
-  transition: stroke 0.56s var(--ease-out), opacity 0.18s;
+  transition: stroke var(--motion-settle) var(--ease-out), opacity var(--motion-quick) ease;
 }
 
 .slope__dot {
   fill: var(--series);
   stroke: var(--surface);
   stroke-width: 2;
-  transition: fill 0.56s var(--ease-out), opacity 0.18s;
+  transition: fill var(--motion-settle) var(--ease-out), opacity var(--motion-quick) ease;
 }
 
 .slope__dot--shuffled {
   fill: var(--surface);
   stroke: var(--series);
-  transition: stroke 0.56s var(--ease-out), opacity 0.18s;
+  transition: stroke var(--motion-settle) var(--ease-out), opacity var(--motion-quick) ease;
 }
 
 .slope__straight-line {
@@ -3590,7 +3722,7 @@ html:not(.js) .windshield__status {
   box-shadow: inset 0 0 0 2px var(--line-strong);
   font: 600 var(--text-sm) / 1 var(--font-text);
   color: var(--ink-2);
-  transition: background-color 0.2s, box-shadow 0.2s, color 0.2s;
+  transition: background-color var(--motion-quick) ease, box-shadow var(--motion-quick) ease, color var(--motion-quick) ease;
 }
 
 .stepper__mark::before {
@@ -3608,9 +3740,10 @@ html:not(.js) .windshield__status {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* The rung on show: filled, with a ring a step out from it. */
 .stepper__step:has(.stepper__input:checked) .stepper__mark {
   background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-halo);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
   color: var(--on-accent);
 }
 
@@ -3658,7 +3791,7 @@ html:not(.js) .windshield__status {
 .ladder-chart__spotlight {
   fill: var(--spot);
   stroke: color-mix(in oklab, var(--accent) 22%, transparent);
-  transition: transform 0.34s var(--ease-out);
+  transition: transform var(--motion-move) var(--ease-out);
 }
 
 .ladder-chart__title {
@@ -3705,7 +3838,7 @@ html:not(.js) .windshield__status {
 }
 
 .ladder-chart__bar {
-  transition: opacity 0.18s;
+  transition: opacity var(--motion-quick) ease;
 }
 
 .chart__value--small.is-lit {
@@ -3871,7 +4004,7 @@ html:not(.js) .windshield__status {
 }
 
 .card-chart__bar {
-  transition: opacity 0.18s;
+  transition: opacity var(--motion-quick) ease;
 }
 
 /* The dumbbell: the step from fewer frames to more in a 2 px line, and each
@@ -4123,7 +4256,7 @@ html:not(.js) .windshield__status {
   border-radius: var(--radius-control);
   box-shadow: inset 0 0 0 1px var(--line);
   cursor: pointer;
-  transition: box-shadow 160ms ease-out, transform 160ms ease-out, background-color 160ms ease-out;
+  transition: box-shadow var(--motion-quick) ease, transform var(--motion-quick) var(--ease-out), background-color var(--motion-quick) ease;
 }
 
 .pairs__thumb:active {
@@ -4508,6 +4641,15 @@ html:not(.js) .windshield__status {
   paint-order: stroke;
 }
 
+/* The top of the largest spike, ringed in the surface so it stands off the
+   trace it sits on. */
+.timeline-chart__peak {
+  fill: var(--ink);
+  stroke: var(--surface);
+  stroke-width: 2;
+  paint-order: stroke;
+}
+
 .timeline-chart__clip-window {
   fill: none;
   stroke: var(--ink);
@@ -4631,13 +4773,38 @@ html:not(.js) .windshield__status {
 
 /* -- Motion --------------------------------------------------------------- */
 
+/* Under reduced motion nothing moves that the visitor did not move: the
+   wheels jump to each angle, the nav's thumb and the ladder's spotlight to
+   their places, a press does not give, and the live check's ring stops
+   turning. Colour and opacity changes stay, short as they are, since they
+   say what changed. The motions the scripts start check the preference
+   themselves before they start (sections/motion.ts). */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  .views-nav::before,
+  .wheel__turn,
+  .how-answer__wheel .wheel__turn,
+  .ownclip__wheel .wheel__turn,
+  [data-phase="done"] .ownclip__wheel .wheel__turn,
+  .ladder-chart__spotlight,
+  .theme-toggle,
+  .play,
+  .step,
+  .how__toggle,
+  .ownclip__choose,
+  .ownclip__action,
+  .pairs__thumb {
+    transition-property: background-color, border-color, box-shadow, color, fill, opacity, stroke;
+  }
+
+  :is(.theme-toggle, .play, .step, .how__toggle):active {
+    scale: none;
+  }
+
+  :is(.ownclip__choose, .ownclip__action, .pairs__thumb):active {
+    transform: none;
+  }
+
+  .trust:is(:not([data-state]), [data-state="checking"]) .trust__icon circle {
+    animation: none;
   }
 }

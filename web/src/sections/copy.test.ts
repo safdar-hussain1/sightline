@@ -787,7 +787,7 @@ describe("the frame pairs' sentences", () => {
   it("says how far each split's closest training frame is, with a lower bound rounded down", () => {
     expect(pairsLead(thePairs())).toBe(
       "Six test frames, each beside the training frame that looks most like it. Under the shuffled split that frame is one frame away, " +
-        "30 to 57 ms apart. Under the blocked split it is 1,887 frames away or more, at least 1.7 minutes of driving.",
+        "30 to 57\u00A0ms apart. Under the blocked split it is 1,887 frames away or more, at least 1.7\u00A0minutes of driving.",
     );
   });
 
@@ -795,23 +795,23 @@ describe("the frame pairs' sentences", () => {
     const json = JSON.parse(pairsFile) as Record<string, unknown>;
     // The nearest blocked neighbour 119 s away: 1.98 minutes, so at least 1.9, not 2.0.
     const pairs = readPairs(patch(patch(json, "pairs.2.blocked.gap_s", 119), "pairs.3.blocked.gap_s", 119), realResults());
-    expect(pairsLead(pairs)).toMatch(/at least 1\.9 minutes of driving\.$/);
+    expect(pairsLead(pairs)).toMatch(/at least 1\.9\u00A0minutes of driving\.$/);
   });
 
   it("says one time, not a range, when every closest training frame is the same time away", () => {
     let json = JSON.parse(pairsFile) as Record<string, unknown>;
     for (let i = 0; i < 6; i += 1) json = patch(json, `pairs.${i}.leaky.gap_s`, 0.041);
-    expect(pairsLead(readPairs(json, realResults()))).toMatch(/that frame is one frame away, 41 ms apart\. /);
+    expect(pairsLead(readPairs(json, realResults()))).toMatch(/that frame is one frame away, 41\u00A0ms apart\. /);
   });
 
   it("puts a time apart in the unit that reads it best, from the timestamps, never a frame count times a typical interval", () => {
-    expect(gapWords(0.041)).toBe("41 ms");
-    expect(gapWords(0.999)).toBe("999 ms");
-    expect(gapWords(12.34)).toBe("12.3 s");
-    expect(gapWords(107.129)).toBe("1 min 47 s");
-    expect(gapWords(1073.237)).toBe("17 min 53 s");
+    expect(gapWords(0.041)).toBe("41\u00A0ms");
+    expect(gapWords(0.999)).toBe("999\u00A0ms");
+    expect(gapWords(12.34)).toBe("12.3\u00A0s");
+    expect(gapWords(107.129)).toBe("1\u00A0min 47\u00A0s");
+    expect(gapWords(1073.237)).toBe("17\u00A0min 53\u00A0s");
     // Whole seconds are rounded down: 1 min 59.9 s is never "2 min 0 s".
-    expect(gapWords(119.9)).toBe("1 min 59 s");
+    expect(gapWords(119.9)).toBe("1\u00A0min 59\u00A0s");
     expect(gapWords(null)).toBe("");
   });
 
@@ -819,19 +819,19 @@ describe("the frame pairs' sentences", () => {
     const pair = thePairs().pairs[0];
     if (!pair) throw new Error("no pair");
     expect(neighbourWords(pair, "shuffled")).toEqual({
-      where: "1 frame before it, 41 ms",
+      where: "1 frame before it, 41\u00A0ms",
       likeness: "Pixel difference 8.8",
       steering: "Steering 0.5° right",
     });
     expect(neighbourWords(pair, "shuffled", "grey levels").likeness).toBe("Pixel difference 8.8 grey levels");
     expect(neighbourWords(pair, "blocked")).toEqual({
-      where: "20,302 frames after it, 17 min 53 s",
+      where: "20,302 frames after it, 17\u00A0min 53\u00A0s",
       likeness: "Pixel difference 28.5",
       steering: "Steering 1.4° right",
     });
     expect(pairAlt(pair)).toBe(
-      "Test frame 7,917, the driver steering 0.4° right. Under the shuffled split its closest training frame is 1 frame before it, 41 ms, " +
-        "pixel difference 8.8, steering 0.5° right. Under the blocked split it is 20,302 frames after it, 17 min 53 s, pixel difference 28.5, steering 1.4° right.",
+      "Test frame 7,917, the driver steering 0.4° right. Under the shuffled split its closest training frame is 1 frame before it, 41\u00A0ms, " +
+        "pixel difference 8.8, steering 0.5° right. Under the blocked split it is 20,302 frames after it, 17\u00A0min 53\u00A0s, pixel difference 28.5, steering 1.4° right.",
     );
   });
 });
@@ -841,7 +841,7 @@ describe("the split timeline's sentences", () => {
 
   it("words the drive's length from its measured duration", () => {
     expect(timelineLead(timeline())).toBe(
-      "The 2018 drive runs 55.9 minutes, from its first frame to its last. Each split deals its 63,825 frames to training, validation and testing in its own way.",
+      "The 2018 drive runs 55.9\u00A0minutes, from its first frame to its last. Each split deals its 63,825 frames to training, validation and testing in its own way.",
     );
     expect(clockTime(1519.063)).toBe("25:19");
     expect(clockTime(3351.698)).toBe("55:51");
@@ -884,13 +884,13 @@ describe("the split timeline's sentences", () => {
     const words = traceWords(timeline());
     expect(words).toMatch(/997 buckets of 64 frames, 2\.4 to 4\.1 seconds each, and a last of 17\./);
     expect(words).toMatch(/Half the buckets turn less than [\d.]+° on average/);
-    expect(words).toMatch(/the largest 208\.5°/);
+    expect(words).toMatch(/the largest 208\.5°, at 23:49;/);
     expect(bucketWords(timeline(), 0)).toMatch(/^At 0:00, frames 0 to 63: turning 1\.4° on average, [\d.]+° (left|right) overall$/);
   });
 
   it("describes every split's drawing in words, with the frames it deals", () => {
     expect(timelineAlt(timeline(), "blocked")).toMatch(
-      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. The steering above it is drawn bucket by bucket: 997 buckets of 64 frames, 2\.4 to 4\.1 seconds each, and a last of 17\. .*solid shape.*square-root scale\. .*Half the buckets turn less than [\d.]+° on average and the largest 208\.5°; \d+% of buckets turn more than 5° and \d+% more than 30°\.$/,
+      /^The 2018 drive, 55\.9 minutes, split the blocked way: 39,825 frames to train, 6,000 to validate, 6,000 to test and 12,000 dropped, in .* stretches\. The steering above it is drawn bucket by bucket: 997 buckets of 64 frames, 2\.4 to 4\.1 seconds each, and a last of 17\. .*solid shape.*square-root scale\. .*Half the buckets turn less than [\d.]+° on average and the largest 208\.5°, at 23:49; \d+% of buckets turn more than 5° and \d+% more than 30°\.$/,
     );
     expect(timelineAlt(timeline(), "shuffled")).toMatch(/dealt at random/);
   });

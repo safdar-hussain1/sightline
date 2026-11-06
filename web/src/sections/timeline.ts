@@ -16,7 +16,7 @@
  */
 
 import { attrs, easeInOut, easeOut, local, svg, tween, watchWidth } from "../charts/draw.ts";
-import { ROLES, columnPeaks, ditherRoles, labelWidth, peakLabelStart, timeOfFrame, type Role, type Segment } from "../charts/timeline.ts";
+import { ROLES, columnPeaks, ditherRoles, labelWidth, peakLabelPlace, timeOfFrame, type Role, type Segment } from "../charts/timeline.ts";
 import { niceStep } from "../charts/scale.ts";
 import { fmtCount, fmtDeg } from "../format.ts";
 import type { ViewName } from "../router.ts";
@@ -36,11 +36,11 @@ import {
 } from "./copy.ts";
 import { textAt, type Frames } from "./countup.ts";
 import type { ClipWindow, Timeline } from "./figures.ts";
-import { onScreen, prefersReducedMotion } from "./motion.ts";
+import { MOTION_MS, onScreen, prefersReducedMotion } from "./motion.ts";
 
 const PROTOCOLS: readonly TimelineProtocol[] = ["shuffled", "blocked", "later"];
-const DRAW_MS = 1200;
-const MORPH_MS = 720;
+const DRAW_MS = MOTION_MS.draw;
+const MORPH_MS = MOTION_MS.settle;
 const LEAD_PX = 80;
 /** One cell of the shuffled split's mix, px. */
 const CELL_PX = 3;
@@ -231,14 +231,32 @@ export class TimelineSection {
       const label = svg("text", { class: "timeline-chart__label", x: 4, y: r2(dir > 0 ? yy - 5 : yy + 14) }, trace);
       label.textContent = `${exactDeg(sharp)} ${dir > 0 ? "right" : "left"}`;
     }
-    // The largest bucket, named in the headroom above the trace, over its
-    // peak: the clip's column starts below it, so the label is never taken for
-    // the clip's.
+    // The largest bucket: a dot on the top of its spike, and its size and
+    // time named in the headroom above the trace, beside the dot on the side
+    // away from the demo clip's column, so the label is never taken for the
+    // clip's.
     const peak = timeline.meanAbsDeg.indexOf(Math.max(...timeline.meanAbsDeg));
-    const peakText = `${fmtDeg(timeline.meanAbsDeg[peak] as number, 1)} peak`;
-    const start = peakLabelStart(mid(peak), width, labelWidth(peakText));
-    const peakLabel = svg("text", { class: "timeline-chart__label timeline-chart__label--strong", "data-timeline": "peak", x: r2(start), y: PEAK_LABEL_Y, "text-anchor": "start" }, trace);
-    peakLabel.textContent = peakText;
+    const peakSize = timeline.meanAbsDeg[peak] as number;
+    const peakX = mid(peak);
+    svg("circle", { class: "timeline-chart__peak", "data-timeline": "peak-dot", cx: r2(peakX), cy: r2(g.traceZero - lift(peakSize)), r: 3.5 }, trace);
+    // On a narrow chart the label takes a shorter wording before it would
+    // cross to the clip's side.
+    const [size, when] = [fmtDeg(peakSize, 1), clockTime(clock.startS[peak] as number)];
+    const wordings = [`${size} peak, at ${when}`, `${size} peak, ${when}`, `${size} at ${when}`];
+    const clipCentre = this.clip && this.clip.firstS !== null && this.clip.lastS !== null ? g.x((this.clip.firstS + this.clip.lastS) / 2) : null;
+    const place = peakLabelPlace(peakX, width, wordings.map(labelWidth), clipCentre);
+    const text = wordings[place.wording] as string;
+    // Anchored at the end nearest the dot, so the words keep their gap from
+    // it however much narrower than the estimate the face draws them.
+    const leftOfDot = place.start + labelWidth(text) <= peakX;
+    const peakLabel = svg("text", {
+      class: "timeline-chart__label timeline-chart__label--strong",
+      "data-timeline": "peak",
+      x: r2(leftOfDot ? place.start + labelWidth(text) : place.start),
+      y: PEAK_LABEL_Y,
+      "text-anchor": leftOfDot ? "end" : "start",
+    }, trace);
+    peakLabel.textContent = text;
 
     // Each split's layout, one layer apiece.
     const band = svg("g", { class: "timeline-chart__band" }, root);
