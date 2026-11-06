@@ -283,9 +283,9 @@ neighbours both steer at least 15° the same way are repaired by interpolating t
 (268 in drive2017); zeros between smaller angles are left as logged.
 
 - **Shuffled** (`--protocol leaky`): shuffle the frames, then deal 70% to training, 15% to
-  validation and 15% to test: 44,677, 9,574 and 9,574 frames. 90.9% of the test frames sit within
-  one frame of a training frame. This is the standard failure mode, reproduced on purpose so it
-  can be measured.
+  validation and 15% to test: 44,677, 9,574 and 9,574 frames. In the first seed's shuffle, 90.9%
+  of the test frames sit within one frame of a training frame. This is the standard failure mode,
+  reproduced on purpose so it can be measured.
 - **Blocked** (`--protocol blocked`, the honest headline): cut the drive into blocks of 1,500
   frames, dealt out by the repeating pattern `TTVTTET` (T train, V validation, E test). Then drop
   250 frames, the firewall, on each side of every boundary between a training block and an

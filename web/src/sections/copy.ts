@@ -120,7 +120,7 @@ export function memoriserNote(memoriser: Figures["memoriser"]): string {
 
 export function splitsText(gaps: Figures["gaps"]): { shuffled: string; blocked: string } {
   return {
-    shuffled: `Frames are dealt out at random, so ${fmtPct(gaps.shuffledWithinOne)} of test frames sit within one frame of a frame the model trained on.`,
+    shuffled: `Frames are dealt out at random, so in one seed’s shuffled split, ${fmtPct(gaps.shuffledWithinOne)} of test frames sit within one frame of a frame the model trained on.`,
     blocked: `Whole stretches of road are held back, so no test frame comes closer than ${fmtCount(gaps.blockedMinFrames)} frames to one the model trained on.`,
   };
 }
@@ -352,7 +352,7 @@ export function pairedAlt(name: string, network: PairedNetwork): { title: string
 export function rungCaption(rung: Rung, splits: Splits): string {
   switch (rung.kind) {
     case "shuffled":
-      return `Test frames are dealt out at random, so ${fmtPct(splits.shuffled.withinOne)} of them sit within one frame of a frame the network trained on.`;
+      return `Test frames are dealt out at random, so in one training’s draw, ${fmtPct(splits.shuffled.withinOne)} of them sit within one frame of a frame the network trained on.`;
     case "blocked":
       return `Whole stretches of the drive are held back, so no test frame is closer than ${fmtCount(splits.blocked.nearest)} frames to one the network trained on.`;
     case "later":

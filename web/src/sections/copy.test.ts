@@ -209,7 +209,7 @@ describe("the Results view's figures", () => {
 
   it("says how close test frames sit to training frames under each split", () => {
     expect(splitsText(figures().gaps)).toEqual({
-      shuffled: "Frames are dealt out at random, so 91% of test frames sit within one frame of a frame the model trained on.",
+      shuffled: "Frames are dealt out at random, so in one seed’s shuffled split, 91% of test frames sit within one frame of a frame the model trained on.",
       blocked: "Whole stretches of road are held back, so no test frame comes closer than 501 frames to one the model trained on.",
     });
   });
@@ -506,7 +506,7 @@ describe("the ladder's sentences", () => {
 
   it("says what moved further from the training frames on each rung", () => {
     expect(ladder().rungs.map((rung) => rungCaption(rung, splits()))).toEqual([
-      "Test frames are dealt out at random, so 91% of them sit within one frame of a frame the network trained on.",
+      "Test frames are dealt out at random, so in one training’s draw, 91% of them sit within one frame of a frame the network trained on.",
       "Whole stretches of the drive are held back, so no test frame is closer than 501 frames to one the network trained on.",
       "It trains on the first 70% of the drive and is tested on the last 15%, never closer than 10,075 frames to anything it trained on.",
       "A drive recorded on another day: 45,404 frames of the 2017 drive, none of them seen in training.",

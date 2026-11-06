@@ -238,7 +238,7 @@ def test_the_description_says_what_the_paired_measurement_found(side):
     description = _parse(side).one("description")
     assert description == (
         "Watch a steering model read road footage in your browser and see where it looks. "
-        f"Tested on shuffled frames, it looks about {_times_in_words(ratio)} better than it is."
+        f"A shuffled test makes such a model look about {_times_in_words(ratio)} better than it is."
     )
 
 

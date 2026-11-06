@@ -509,8 +509,8 @@ ROWS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
      "interpolating the neighbours ({} in drive2017);", [
         (SUMMARY, "/drives/drive2018/repaired_labels", "int"),
         (SUMMARY, "/drives/drive2017/repaired_labels", "int")]),
-    ("README", "then deal {}% to training, {}% to validation and {}% to test: {}, {} and {} frames. {}% of the test "
-     "frames sit within one frame of a training frame.", [
+    ("README", "then deal {}% to training, {}% to validation and {}% to test: {}, {} and {} frames. In the first "
+     "seed's shuffle, {}% of the test frames sit within one frame of a training frame.", [
         (RESULTS, "/split_rules/leaky/train_frac", "pct0"),
         (RESULTS, "/split_rules/leaky/val_frac", "pct0"),
         (RESULTS, "/split_rules/leaky/test_frac", "pct0"),
@@ -1204,6 +1204,7 @@ CLAIMS: list[tuple[str, str, Callable[[Reader], bool]]] = [
     ("README", "every clip frame and self-test input the page uses", _parity_on_every_page_input),
     ("README", "(PyTorch's MPS backend)", _trained_on_mps),
     ("README", "paired frames of the first seed", _first_seed_is_the_leakage_seed),
+    ("README", "In the first seed's shuffle", _first_seed_is_the_leakage_seed),
     ("README", "recorded for it in `src/sightline/data/verify.py`", _verify_knows_the_reported_drives),
     ("README", "Single-frame models do not reliably beat always steering straight later in the drive or on another "
      "day.", _single_frame_models_no_edge),

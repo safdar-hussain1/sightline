@@ -313,7 +313,7 @@ def test_the_results_notebook_shows_each_split_trained_model_on_another_day():
         for seed, (s, b) in zip(blocked["seeds"], pairs):
             rows.append([LABELS[model], str(seed), f"{s:.2f}", f"{b:.2f}", f"{s - b:+.2f}", f"{straight:.2f}"])
         tokens.append(f"{LABELS[model]}: the model trained on shuffled frames is worse on another day in "
-                      f"{sum(s > b for s, b in pairs)} of {len(pairs)} seeds; above always straight ahead in "
+                      f"{sum(s > b for s, b in pairs)} of {len(pairs)} seeds; worse than always straight ahead in "
                       f"{sum(s > straight for s, _ in pairs)} of {len(pairs)} seeds when trained on shuffled frames, "
                       f"{sum(b > straight for _, b in pairs)} of {len(pairs)} when trained on blocked frames")
     tokens.append(f"always straight ahead on another day: {straight:.2f} deg")
