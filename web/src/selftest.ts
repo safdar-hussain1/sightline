@@ -104,7 +104,6 @@ const PARTS = {
   status: '[data-cockpit="status"]',
   average: '[data-cockpit="average"]',
   clip: 'input[name="cockpit-clip"]:checked',
-  model: 'input[name="cockpit-model"]:checked',
 } as const;
 
 /** What the cockpit shows right now. */
@@ -116,7 +115,9 @@ export function readCockpit(root: ParentNode = document): Shown {
     return {
       state,
       clip: cockpit.querySelector<HTMLInputElement>(PARTS.clip)?.value ?? "",
-      model: cockpit.querySelector<HTMLInputElement>(PARTS.model)?.value ?? "",
+      // The model on screen (the cockpit's console says), not the one the picker
+      // shows as chosen: they differ while the twin is still downloading.
+      model: cockpit.querySelector<HTMLElement>(PARTS.console)?.dataset["model"] ?? "",
       average: cockpit.querySelector(PARTS.average)?.textContent ?? "",
     };
   }
@@ -246,13 +247,21 @@ class Selftest<Session> {
     this.results();
     const clips = [...this.loaded.clips.entries()];
     if (clips.length === 0) throw new Failure("results.json names no clips");
+    const renamed = clips.flatMap(([key, clip]) =>
+      clip instanceof Error || clip.id === key ? [] : [`results.json lists the clip as ${JSON.stringify(key)} but its clip.json says ${JSON.stringify(clip.id)}`],
+    );
+    if (renamed.length > 0) throw new Failure(renamed.join("; "));
     const missing = clips.flatMap(([id, clip]) => (clip instanceof Error ? [`${id}: ${clip.message}`] : []));
     if (missing.length > 0) throw new Failure(`a clip did not load: ${missing.join("; ")}`);
     return clips.map(([, clip]) => clip as Clip);
   }
 
+  /** The folder of a clip's files. `clips()` has already made sure a clip's id
+   * is the key results.json lists it under, so one key serves both. */
   private folder(clip: Clip): string {
-    return new URL("./", this.url(this.results().assets.clips[clip.id] ?? "")).href;
+    const path = this.results().assets.clips[clip.id];
+    if (path === undefined) throw new Failure(`results.json does not list clip ${JSON.stringify(clip.id)}`);
+    return new URL("./", this.url(path)).href;
   }
 
   private session(model: ModelKey): Session {
@@ -504,7 +513,9 @@ export async function runSelftest<Session>(
     verdict = formatVerdict(results, page.threads());
   } catch (error) {
     // Whatever went wrong outside the checks, the title still ends on a verdict.
-    verdict = formatVerdict([...results, { name: "self-test", ok: false, detail: message(error) }], Number.NaN);
+    // It is still a verdict out of the six checks, never a seventh result.
+    const passed = results.filter((result) => result.ok).length;
+    verdict = `FAIL ${passed}/${total} ${oneLine(`self-test: ${message(error)}`)}`;
   }
   for (const result of results) {
     (result.ok ? console.info : console.warn)(`Self-test ${result.ok ? "passed" : "FAILED"} ${result.name}: ${result.detail}`);

@@ -32,7 +32,7 @@ const FORWARD_ICON = `<svg class="step__icon" viewBox="0 0 24 24" aria-hidden="t
 /** The cockpit's contents, written into `COCKPIT_ROOT`. */
 export function cockpitHtml(): string {
   return `
-        <div class="cockpit__console wrap" data-state="loading">
+        <div class="cockpit__console wrap" data-state="loading" data-model="sightline">
           <div class="cockpit__choices">
             <fieldset class="picker picker--clips" data-cockpit="clips" disabled>
               <legend class="visually-hidden">Footage</legend>

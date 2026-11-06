@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -85,11 +86,13 @@ def test_the_verifier_is_tracked_as_an_executable():
 
 #: A stand-in for Chrome: it serves FAKE_TARGETS as the DevTools target list (the page URL it was
 #: started on replaces "{url}"), writes the port into DevToolsActivePort in its profile as Chrome
-#: does, and runs until it is killed. FAKE_EXIT makes it exit at once instead.
+#: does, and runs until it is killed. FAKE_EXIT makes it exit at once instead, and FAKE_IGNORE_TERM makes it ignore SIGTERM.
 FAKE_CHROME = textwrap.dedent("""
-    import http.server, json, os, sys
+    import http.server, json, os, signal, sys
     if os.environ.get("FAKE_EXIT"):
         sys.exit(1)
+    if os.environ.get("FAKE_IGNORE_TERM"):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
     profile = next(a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--user-data-dir="))
     url = sys.argv[-1]
     body = os.environ["FAKE_TARGETS"].replace("{url}", url).encode()
@@ -120,7 +123,8 @@ def _page(title: str, url: str = "{url}", kind: str = "page") -> dict:
     return {"type": kind, "url": url, "title": title}
 
 
-def _verify(tmp_path: Path, targets: list[dict], *args: str, exit_now: bool = False) -> subprocess.CompletedProcess:
+def _verify(tmp_path: Path, targets: list[dict], *args: str, exit_now: bool = False,
+            **extra_env: str) -> subprocess.CompletedProcess:
     script = tmp_path / "fake_chrome.py"
     script.write_text(FAKE_CHROME, encoding="utf-8")
     chrome = tmp_path / "chrome"
@@ -130,7 +134,8 @@ def _verify(tmp_path: Path, targets: list[dict], *args: str, exit_now: bool = Fa
            "FAKE_TARGETS": json.dumps(targets)}
     if exit_now:
         env["FAKE_EXIT"] = "1"
-    return subprocess.run(["bash", str(VERIFY), *args], env=env, capture_output=True, text=True, timeout=60)
+    env.update(extra_env)
+    return subprocess.run([shutil.which("bash") or "bash", str(VERIFY), *args], env=env, capture_output=True, text=True, timeout=60)
 
 
 @needs_tools
@@ -185,3 +190,33 @@ def test_the_verifier_reports_a_chrome_that_exits(tmp_path):
 @pytest.mark.parametrize("args", [[], [URL, "FAIL"], [URL, "PASS ", "soon"]])
 def test_the_verifier_refuses_bad_usage(tmp_path, args):
     assert _verify(tmp_path, [_page("PASS 6/6 threads=1")], *args).returncode == 2
+
+
+@needs_tools
+def test_the_verifier_names_a_missing_curl_before_it_starts_chrome(tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    done = _verify(tmp_path, [_page("PASS 6/6 threads=1")], URL, "PASS ", "10", PATH=str(bare))
+    assert done.returncode == 2, (done.stdout, done.stderr)
+    assert "curl" in done.stderr
+    assert list(tmp_path.glob("verify-page.*")) == [], "Chrome must not have been started"
+
+
+@needs_tools
+def test_the_verifier_does_not_wait_forever_for_a_chrome_that_ignores_sigterm(tmp_path):
+    started = time.monotonic()
+    done = _verify(tmp_path, [_page("PASS 6/6 threads=1")], URL, "PASS ", "20", FAKE_IGNORE_TERM="1")
+    assert (done.returncode, done.stdout.strip()) == (0, "PASS 6/6 threads=1")
+    assert time.monotonic() - started < 25
+    assert list(tmp_path.glob("verify-page.*")) == []
+
+
+@needs_tools
+def test_the_verifier_says_when_no_page_target_matches_the_url(tmp_path):
+    targets = [_page("PASS 6/6 threads=1", url="http://127.0.0.1:8765/?selftest=1&x=a%20b"),
+               _page("", url="about:blank", kind="other")]
+    done = _verify(tmp_path, targets, URL, "PASS ", "2")
+    assert done.returncode == 4
+    assert "no page target matched" in done.stderr
+    assert URL in done.stderr
+    assert "http://127.0.0.1:8765/?selftest=1&x=a%20b" in done.stderr

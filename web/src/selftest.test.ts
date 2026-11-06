@@ -156,6 +156,18 @@ describe("readCockpit", () => {
     expect(readCockpit()).toEqual({ state: "unavailable", status: "The clip could not load." });
   });
 
+  it("reads the model on screen, not the one the picker shows while the twin is still downloading", () => {
+    document.body.innerHTML = `<section class="cockpit" id="cockpit">${cockpitHtml()}</section>`;
+    const screen = document.querySelector<HTMLElement>(".cockpit__console") as HTMLElement;
+    screen.dataset["state"] = "ready";
+    (document.querySelector('input[name="cockpit-model"][value="shuffled"]') as HTMLInputElement).checked = true;
+    expect(readCockpit()).toMatchObject({ state: "ready", model: "sightline" });
+    // The cockpit writes the model it puts on screen under this name.
+    expect(cockpitSource).toContain('console.dataset["model"] = model');
+    screen.dataset["model"] = "shuffled";
+    expect(readCockpit()).toMatchObject({ state: "ready", model: "shuffled" });
+  });
+
   it("says when the page has no cockpit", () => {
     expect(readCockpit()).toEqual({ state: "absent", status: "" });
   });
@@ -222,6 +234,7 @@ interface Breaks {
   inferFails?: ModelKey;
   noTolerance?: boolean;
   missingModel?: ModelKey;
+  clipKey?: string;
 }
 
 const fingerprint = (frame: Bytes) => `frame ${frame[0]} of ${frame.length}`;
@@ -273,7 +286,7 @@ function world(breaks: Breaks = {}): Page<FakeSession> {
     "data/results.json": {
       assets: {
         models: { sightline: "models/a.onnx", shuffled: "models/b.onnx" },
-        clips: { c1: "data/clips/c1/clip.json" },
+        clips: { [breaks.clipKey ?? "c1"]: "data/clips/c1/clip.json" },
         selftest: { expected: "data/selftest/expected.json", frames: "data/selftest/frames.bin" },
       },
       shipped: { run: RUN.sightline, model: "sightlinenet", protocol: "blocked" },
@@ -410,6 +423,22 @@ describe("runSelftest", () => {
     const { verdict, results } = await verdictOf({ resultsMissing: true });
     expect(verdict).toMatch(/^FAIL 0\/6 sessions: results\.json did not load/);
     expect(results.every((r) => !r.ok)).toBe(true);
+  });
+
+  it("fails when results.json lists a clip under another key than its clip.json's id", async () => {
+    const { verdict, results } = await verdictOf({ clipKey: "c9" });
+    expect(verdict).toMatch(/^FAIL 2\/6 metadata: results\.json lists the clip as "c9" but its clip\.json says "c1"/);
+    expect(results.filter((r) => !r.ok).map((r) => r.name)).toEqual(["metadata", "decode-hash", "clip-angles", "clip-mae"]);
+  });
+
+  it("keeps the count at six when something outside the checks goes wrong", async () => {
+    let shows = 0;
+    const { verdict } = await runSelftest(world(), () => {
+      shows += 1;
+      if (shows === 4) throw new Error("the title could not be written");
+    });
+    expect(verdict).toBe("FAIL 2/6 self-test: the title could not be written");
+    expect(verdict).not.toMatch(/\/7/);
   });
 
   it("fails on more than one thread", async () => {

@@ -777,6 +777,9 @@ export class Cockpit implements LiveCockpit {
   private switchTo(model: ModelKey): void {
     this.model = model;
     this.view.modelName.textContent = MODEL_NAMES[model];
+    // The model on screen, for whoever reads the page: the picker shows what
+    // was chosen, which is not this while the twin is still downloading.
+    this.view.console.dataset["model"] = model;
     const loaded = this.state === "ready" ? this.loaded : null;
     this.view.showNote(model, loaded?.clip ?? null);
     if (!loaded) return;

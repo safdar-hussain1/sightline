@@ -52,6 +52,17 @@ export interface Outputs {
   readonly saliency: Float32Array;
 }
 
+/** The end of the line of runs: every run waits for the one before it, on any
+ * session, so no two ever overlap -- whichever build of the runtime is in use
+ * and however many callers there are. A failed run does not stop the line. */
+let line: Promise<unknown> = Promise.resolve();
+
+function inOrder<T>(task: () => Promise<T>): Promise<T> {
+  const run = line.then(task, task);
+  line = run.catch(() => undefined);
+  return run;
+}
+
 /** Run `n` frame stacks (`n` x 66 x 200 x `channels` bytes, NHWC) through the
  * model. */
 export async function infer(
@@ -65,7 +76,7 @@ export async function infer(
     throw new Error(`${n} stacks of ${INPUT_W} x ${INPUT_H} x ${channels} are ${size} bytes, not ${frames.length}`);
   }
   const input = new ort.Tensor("uint8", frames, [n, INPUT_H, INPUT_W, channels]);
-  const outputs = await session.run({ [INPUT_NAME]: input });
+  const outputs = await inOrder(() => session.run({ [INPUT_NAME]: input }));
   const angles = outputs[ANGLE_OUTPUT]?.data;
   const saliency = outputs[SALIENCY_OUTPUT]?.data;
   if (!(angles instanceof Float32Array) || !(saliency instanceof Float32Array)) {

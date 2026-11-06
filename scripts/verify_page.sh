@@ -72,6 +72,11 @@ if ! command -v "$PYTHON" > /dev/null; then
   exit 2
 fi
 
+if ! command -v curl > /dev/null; then
+  echo "verify_page: curl not found; it reads Chrome's DevTools endpoint" >&2
+  exit 2
+fi
+
 # Extra Chrome flags, space separated: for example CHROME_FLAGS="--no-sandbox"
 # where Chrome runs as root in a container.
 read -r -a EXTRA_FLAGS <<< "${CHROME_FLAGS:-}"
@@ -83,6 +88,14 @@ CHROME_PID=""
 cleanup() {
   if [[ -n "$CHROME_PID" ]]; then
     kill "$CHROME_PID" 2>/dev/null || true
+    # A bounded wait: a Chrome that ignores SIGTERM is killed outright.
+    for _ in $(seq 1 50); do
+      kill -0 "$CHROME_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$CHROME_PID" 2>/dev/null; then
+      kill -9 "$CHROME_PID" 2>/dev/null || true
+    fi
     wait "$CHROME_PID" 2>/dev/null || true
   fi
   # Helper processes that outlived the browser still name the profile.
@@ -106,9 +119,11 @@ trap 'exit 130' INT TERM
   "$URL" > "$LOG" 2>&1 &
 CHROME_PID=$!
 
-# The title of the "page" target on $URL, compared without the fragment and
-# with an empty path read as "/"; nothing while there is none. The endpoint
+# "M" and the title of the "page" target on $URL, compared without the fragment
+# and with an empty path read as "/"; nothing while there is none. The endpoint
 # HTML-escapes titles, so the title is unescaped back to what the page wrote.
+# The URLs of every target Chrome reports go to $PROFILE/targets.txt, for the
+# message when none ever matches.
 read_title() {
   curl -s --max-time 5 "http://127.0.0.1:$1/json/list" | "$PYTHON" -c '
 import html, json, sys
@@ -123,17 +138,24 @@ try:
 except Exception:
     sys.exit(0)
 wanted = key(sys.argv[1])
+try:
+    with open(sys.argv[2], "w") as seen:
+        for target in targets:
+            seen.write("%s %s\n" % (target.get("type"), target.get("url", "")))
+except OSError:
+    pass
 for target in targets:
     if target.get("type") == "page" and key(target.get("url", "")) == wanted:
-        print(html.unescape(target.get("title", "")))
+        print("M" + html.unescape(target.get("title", "")))
         break
-' "$URL" || true
+' "$URL" "$PROFILE/targets.txt" || true
 }
 
 PASS_SHAPE='^PASS ([0-9]+)/([0-9]+) threads=1$'
 deadline=$(( $(date +%s) + TIMEOUT ))
 port=""
 title=""
+matched=0
 while (( $(date +%s) < deadline )); do
   if ! kill -0 "$CHROME_PID" 2>/dev/null; then
     echo "verify_page: Chrome exited early" >&2
@@ -144,7 +166,11 @@ while (( $(date +%s) < deadline )); do
     port="$(head -n 1 "$PROFILE/DevToolsActivePort")"
   fi
   if [[ -n "$port" ]]; then
-    title="$(read_title "$port")"
+    found="$(read_title "$port")"
+    if [[ -n "$found" ]]; then
+      matched=1
+      title="${found#M}"
+    fi
     case "$title" in
       FAIL*)
         echo "$title"
@@ -170,6 +196,11 @@ done
 if [[ -z "$port" ]]; then
   echo "verify_page: Chrome never opened its DevTools port" >&2
   exit 3
+fi
+if (( matched == 0 )); then
+  echo "verify_page: no page target matched $URL after ${TIMEOUT}s (Chrome may have normalised the address); Chrome reports:" >&2
+  { cat "$PROFILE/targets.txt" 2>/dev/null || true; } | sed 's/^/  /' >&2
+  exit 4
 fi
 echo "verify_page: no verdict after ${TIMEOUT}s; last title: ${title:-<none>}" >&2
 exit 4

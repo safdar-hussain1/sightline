@@ -99,4 +99,39 @@ describe("infer", () => {
     const session = await createSession("models/sightline.onnx");
     await expect(infer(session, new Uint8Array(10), 1, 6)).rejects.toThrow(/79200/);
   });
+
+  it("runs one inference at a time, across sessions, in the order asked, and survives a failed run", async () => {
+    const events: string[] = [];
+    let active = 0;
+    let widest = 0;
+    const gates: Array<() => void> = [];
+    const fake = (name: string, fail = false) =>
+      ({
+        run: async () => {
+          events.push(`start ${name}`);
+          active += 1;
+          widest = Math.max(widest, active);
+          await new Promise<void>((resolve) => gates.push(resolve));
+          active -= 1;
+          events.push(`end ${name}`);
+          if (fail) throw new Error(`${name} failed`);
+          return { steering_deg: { data: new Float32Array(1) }, saliency: { data: new Float32Array(66 * 200) } };
+        },
+      }) as unknown as Parameters<typeof infer>[0];
+    const frames = new Uint8Array(66 * 200 * 6);
+    const a = infer(fake("a"), frames, 1, 6);
+    const b = infer(fake("b", true), frames, 1, 6);
+    const c = infer(fake("c"), frames, 1, 6);
+    const bFailed = expect(b).rejects.toThrow("b failed");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events).toEqual(["start a"]);
+    for (const name of ["a", "b", "c"]) {
+      gates.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(events.filter((event) => event.startsWith("end"))).toContain(`end ${name}`);
+    }
+    await Promise.all([a, bFailed, c]);
+    expect(widest).toBe(1);
+    expect(events).toEqual(["start a", "end a", "start b", "end b", "start c", "end c"]);
+  });
 });

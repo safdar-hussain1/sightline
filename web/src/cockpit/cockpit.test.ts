@@ -361,6 +361,9 @@ describe("the twin, when it cannot be had", () => {
     await ticks(3);
     expect(say("model-name")).toBe("Sightline");
     expect(say("model-angle")).toBe(sightlineAt(5));
+    // The picker already shows the twin, but the console says what is on screen.
+    expect(checked("cockpit-model")).toBe("shuffled");
+    expect(document.querySelector<HTMLElement>(".cockpit__console")?.dataset["model"]).toBe("sightline");
     expect(world.runs.filter((url) => url.includes("shuffled"))).toEqual([]);
 
     failTwin(new AssetError(`could not reach ${TWIN}: Failed to fetch`, "unreachable", TWIN));
@@ -373,6 +376,7 @@ describe("the twin, when it cannot be had", () => {
     expect(shown("status")).toBe("");
     expect(shown("notice")).toBe("The twin could not be loaded, so Sightline is shown instead; pick the twin again to retry.");
     expect(checked("cockpit-model")).toBe("sightline");
+    expect(document.querySelector<HTMLElement>(".cockpit__console")?.dataset["model"]).toBe("sightline");
     expect(say("model-name")).toBe("Sightline");
     expect(say("model-angle")).toBe(sightlineAt(7));
     expect((el("play") as HTMLButtonElement).disabled).toBe(false);
