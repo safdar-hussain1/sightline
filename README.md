@@ -311,7 +311,7 @@ the CPU.
 
 ## Install
 
-Python 3.10 or newer.
+Python 3.12 or newer.
 
 ```bash
 git clone https://github.com/safdar-hussain1/sightline.git
@@ -517,7 +517,7 @@ docs/               the published site, built by npm --prefix web run build, wit
 
 ## Tech stack
 
-- **Python 3.10+**: PyTorch for the models and training, NumPy, OpenCV for decoding and
+- **Python 3.12+**: PyTorch for the models and training, NumPy, OpenCV for decoding and
   resizing, Pillow and tqdm; ONNX and onnxruntime for the export; matplotlib for the figures;
   Jupyter for the notebooks; pytest.
 - **Browser**: TypeScript built with Vite, onnxruntime-web on WebAssembly, tested with Vitest.

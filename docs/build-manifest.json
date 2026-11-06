@@ -2,8 +2,8 @@
   "note": "Written by scripts/build_manifest.mjs during `npm run build`. Do not edit.",
   "inputs": {
     "web/index.html": "9f8d99b3b88f12c9e561ab9457fa2ab524cdde69c34edcfe292217e3924bb5f3",
-    "web/package-lock.json": "503f7db408c614c12a4c19b8adbc1d655850070f658b0900068f2e6628e928ec",
-    "web/package.json": "1f1f7c9144c0c05798ef685e7ad1754de46e6ec7e6cfe423f2f6d9f84c13da33",
+    "web/package-lock.json": "1eb8e7dc91aacecdb5c25235870b57bbe897540c4469405aff366859c089212a",
+    "web/package.json": "1e0e77d503630a4b68365256f9f9ddbb9156a5c8ed8cd0cdb4e6b3b024dd831e",
     "web/public/.nojekyll": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "web/public/data/clips/c2017/clip.json": "bb5f527c7770470131866a76e22be44b84a829d5d1ca697ef6319d6c707adb34",
     "web/public/data/clips/c2017/clip.mp4": "b4e605c085985e9a03e7c5a7b48442ca50139d00169265a14a2e853195872ec2",
