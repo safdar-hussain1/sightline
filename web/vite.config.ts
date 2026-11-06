@@ -22,8 +22,10 @@ function staticShell(): Plugin {
 /**
  * The demo's own code -- the cockpit and the model runtime -- is a chunk of its
  * own, imported once the page's first chunk runs. A modulepreload in the head
- * lets the browser fetch both chunks side by side. The chunk's file name
- * carries its content hash, so the same sources give the same tag.
+ * lets the browser fetch both chunks side by side, and one for each chunk the
+ * cockpit's imports (the runtime is one when another part of the page imports
+ * it too), so none of them waits for the page's first chunk to ask. A chunk's
+ * file name carries its content hash, so the same sources give the same tags.
  */
 function preloadCockpit(): Plugin {
   return {
@@ -31,12 +33,15 @@ function preloadCockpit(): Plugin {
     transformIndexHtml: {
       order: "post",
       handler: (html, ctx) => {
-        const chunk = Object.values(ctx.bundle ?? {}).find(
+        const chunks = Object.values(ctx.bundle ?? {});
+        const chunk = chunks.find(
           (item) => item.type === "chunk" && item.isDynamicEntry && (item.facadeModuleId ?? "").endsWith("/src/cockpit/cockpit.ts"),
         );
         // The dev server has no bundle, and fetches modules as asked.
-        if (!chunk) return html;
-        return [{ tag: "link", attrs: { rel: "modulepreload", crossorigin: true, href: `./${chunk.fileName}` }, injectTo: "head" }];
+        if (!chunk || chunk.type !== "chunk") return html;
+        const entries = new Set(chunks.flatMap((item) => (item.type === "chunk" && item.isEntry ? [item.fileName] : [])));
+        const files = [chunk.fileName, ...chunk.imports.filter((name) => !entries.has(name))];
+        return files.map((file) => ({ tag: "link", attrs: { rel: "modulepreload", crossorigin: true, href: `./${file}` }, injectTo: "head" as const }));
       },
     },
   };

@@ -5,11 +5,13 @@
  */
 
 import { ACCURACY_ROOT, HOW_ROOT, RESULTS_ROOT, accuracyHtml, filled, howHtml } from "./markup.ts";
+import { OWNCLIP_ROOT, ownclipHtml } from "./ownclip-markup.ts";
 import { resultsHtml } from "./results-markup.ts";
 
 const SECTIONS: ReadonlyArray<readonly [root: string, html: () => string, name: string]> = [
   [HOW_ROOT, howHtml, "How it works"],
   [ACCURACY_ROOT, accuracyHtml, "accuracy"],
+  [OWNCLIP_ROOT, ownclipHtml, "own video"],
   [RESULTS_ROOT, resultsHtml, "results"],
 ];
 

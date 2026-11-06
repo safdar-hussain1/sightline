@@ -17,6 +17,7 @@ import {
   howHtml,
 } from "./markup.ts";
 import { injectSections } from "./inject.ts";
+import { OWNCLIP_ROOT, ownclipHtml } from "./ownclip-markup.ts";
 import { resultsHtml } from "./results-markup.ts";
 import { networkName } from "./names.ts";
 
@@ -33,6 +34,7 @@ const visibleText = (html: string) =>
 const SECTIONS = [
   ["How it works", howHtml, HOW_ROOT],
   ["the accuracy figure", accuracyHtml, ACCURACY_ROOT],
+  ["your own video", ownclipHtml, OWNCLIP_ROOT],
   ["the Results view", resultsHtml, RESULTS_ROOT],
 ] as const;
 

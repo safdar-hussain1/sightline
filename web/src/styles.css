@@ -1954,6 +1954,770 @@ html:not(.js) .windshield__status {
   display: none;
 }
 
+/* -- Try it on your own video ------------------------------------------------- */
+
+/* The visitor's video is something the model sees, so it sits on the
+   console's dark, like the cockpit: the label of what it is to the model, the
+   drop zone, then the player. The words about how it is read sit on the page
+   ground below. */
+
+.ownclip {
+  margin-block-start: var(--space-8);
+  scroll-margin-top: var(--space-4);
+}
+
+.ownclip [hidden] {
+  display: none !important;
+}
+
+.ownclip__inner {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.ownclip__head {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 46rem;
+}
+
+.ownclip__lede {
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.ownclip__console {
+  /* The share of the trace already read: a lighter ground. */
+  --trace-read: rgb(236 233 246 / 8%);
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "bar"
+    "body";
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-screen);
+  background: var(--console);
+  color: var(--console-ink);
+  box-shadow: var(--console-frame), var(--shadow-screen);
+}
+
+.ownclip__console :focus-visible {
+  outline-color: var(--console-focus);
+}
+
+@media (min-width: 40rem) {
+  .ownclip__console {
+    padding: var(--space-4);
+  }
+}
+
+@media (min-width: 60rem) {
+  .ownclip__console {
+    padding: var(--space-4) var(--space-5) var(--space-5);
+  }
+}
+
+/* The screen's own label, there in every state: what this video is to the
+   model, and that it stays here. */
+.ownclip__bar {
+  grid-area: bar;
+  display: grid;
+  gap: var(--space-2) var(--space-6);
+  align-items: start;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--console-ink-2);
+}
+
+@media (min-width: 60rem) {
+  .ownclip__bar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 19rem);
+  }
+}
+
+.ood {
+  max-width: 62em;
+}
+
+.ood__badge {
+  display: inline-block;
+  margin-inline-end: var(--space-1);
+  padding: 0 0.5rem;
+  border-radius: var(--radius-chip);
+  background: var(--console-3);
+  box-shadow: inset 0 0 0 1px var(--console-selected);
+  color: var(--console-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ownclip__private {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--console-ink);
+}
+
+.ownclip__icon {
+  flex: none;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ownclip__icon--lock {
+  color: var(--model);
+}
+
+/* The real file input: out of sight, still in the tab order while the drop
+   zone shows, its focus drawn on the button that is its label. */
+.ownclip__file {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.ownclip__console:has(.ownclip__file:focus-visible) .drop .ownclip__choose {
+  outline: 2px solid var(--console-focus);
+  outline-offset: 3px;
+}
+
+/* -- The drop zone, with a drawing of the part of a frame the model reads. */
+
+.drop {
+  grid-area: body;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-5);
+  min-block-size: 22rem;
+  padding: var(--space-6) var(--space-4);
+  border: 1.5px dashed rgb(236 233 246 / 28%);
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+  text-align: center;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+/* Wide: the drawing of the rule on the left, the way in on the right. */
+@media (min-width: 60rem) {
+  .drop {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+    column-gap: var(--space-8);
+    padding: var(--space-7) var(--space-8);
+    text-align: start;
+  }
+}
+
+.ownclip__console[data-drag="true"] .drop {
+  border-style: solid;
+  border-color: var(--model);
+  background: color-mix(in oklab, var(--model) 12%, var(--console-2));
+}
+
+.drop__figure {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  inline-size: 100%;
+}
+
+.drop__art {
+  inline-size: min(100%, 27rem);
+}
+
+.drop__act {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+}
+
+@media (min-width: 60rem) {
+  .drop__act {
+    justify-items: start;
+  }
+}
+
+.art {
+  inline-size: 100%;
+  block-size: auto;
+}
+
+.art__sky {
+  fill: #1b1633;
+}
+
+.art__ground {
+  fill: #262043;
+}
+
+.art__road {
+  fill: #3a3160;
+}
+
+.art__edge {
+  fill: none;
+  stroke: var(--console-ink-2);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.art__lane {
+  fill: none;
+  stroke: var(--console-ink-2);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+}
+
+.art__horizon {
+  fill: none;
+  stroke: rgb(236 233 246 / 22%);
+  stroke-width: 1;
+}
+
+.art__frame {
+  fill: none;
+  stroke: rgb(236 233 246 / 30%);
+  stroke-width: 1.5;
+}
+
+.art__middle {
+  fill: none;
+  stroke: var(--console-ink-2);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.art__band {
+  fill: rgb(176 122 247 / 26%);
+  stroke: var(--model);
+  stroke-width: 1.5;
+  transition: fill 150ms ease;
+}
+
+.ownclip__console[data-drag="true"] .art__band {
+  fill: rgb(176 122 247 / 48%);
+}
+
+.drop__key {
+  max-width: 30rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--console-ink-2);
+}
+
+.drop__swatch {
+  display: inline-block;
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  margin-inline-end: 0.375rem;
+  border-radius: 2px;
+  background: rgb(176 122 247 / 26%);
+  box-shadow: inset 0 0 0 1.5px var(--model);
+  vertical-align: -0.1em;
+}
+
+.drop__title {
+  font: 600 var(--display-md) / 1.05 var(--font-display);
+}
+
+/* A finger cannot drop a file: on a touch screen the button says it all. */
+@media (pointer: coarse) {
+  .drop__title {
+    display: none;
+  }
+}
+
+.drop__hint {
+  max-width: 30rem;
+  font-size: var(--text-sm);
+  color: var(--console-ink-2);
+}
+
+/* The pill that opens the file picker: the console's one primary action, in
+   the model's violet, like Play above. */
+.ownclip__choose {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 3rem;
+  padding: 0 var(--space-5) 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 600 var(--text-md) / 1 var(--font-text);
+  cursor: pointer;
+  transition: box-shadow 150ms ease, transform 160ms var(--ease-out);
+}
+
+.ownclip__choose:hover {
+  box-shadow: 0 0 0 4px var(--accent-halo);
+}
+
+.ownclip__choose:active {
+  transform: scale(0.97);
+}
+
+/* -- The player: the video and the part the model reads, the wheel and its
+   estimate, the trace and the controls. */
+
+/* On a phone one column, in the order a visitor uses it: the video, the
+   wheel, the controls, then the model's own input. Wide: the video and its
+   controls on the left, the wheel and the model's input on the right. */
+.ownclip__player {
+  grid-area: body;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "screen"
+    "instruments"
+    "transport"
+    "foot"
+    "eye";
+  gap: var(--space-4);
+}
+
+@media (min-width: 60rem) {
+  .ownclip__player {
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas:
+      "screen    side"
+      "transport side"
+      "foot      side";
+    column-gap: var(--space-6);
+    row-gap: var(--space-3);
+  }
+}
+
+/* The screen keeps the video's shape, but no taller than 3:4 and no taller
+   than most of the window: a portrait video is drawn whole inside it, with
+   the console's dark at its sides. */
+.ownclip__screen {
+  grid-area: screen;
+  position: relative;
+  display: grid;
+  place-items: center;
+  /* Always the column's full width: capped in height, the screen gives up
+     its shape, not its width, and the video is fitted inside it. */
+  inline-size: 100%;
+  aspect-ratio: var(--screen-ar, 16 / 9);
+  max-block-size: min(70vh, 34rem);
+  container-type: size;
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+}
+
+.ownclip__frame {
+  position: relative;
+  inline-size: min(100cqw, 100cqh * var(--video-ar, 1.7778));
+  aspect-ratio: var(--video-ar, 16 / 9);
+  overflow: hidden;
+}
+
+.ownclip__video,
+.ownclip__still {
+  position: absolute;
+  inset: 0;
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: fill;
+}
+
+/* The part the model reads: the rest of the frame is dimmed, a hairline
+   marks its edges, and the heat lies over it. */
+.ownclip__band {
+  position: absolute;
+  inset: auto;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 70%), 0 0 0 100vmax rgb(14 11 29 / 45%);
+  transition: opacity 300ms ease;
+}
+
+.ownclip__heat {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  transition: opacity 300ms ease;
+}
+
+.ownclip__tag {
+  position: absolute;
+  top: 0;
+  left: var(--space-3);
+  translate: 0 -50%;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-chip);
+  background: rgb(14 11 29 / 82%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 30%);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* While the video opens nothing of it is on screen yet; while it is read
+   the heat waits, as the frame on screen is ahead of the model's answers. */
+[data-phase="loading"] .ownclip__band,
+[data-phase="sampling"] .ownclip__heat,
+[data-phase="running"] .ownclip__heat {
+  opacity: 0;
+}
+
+.ownclip__status {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  max-width: calc(100% - 2 * var(--space-3));
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-chip);
+  background: rgb(14 11 29 / 82%);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+[data-phase="loading"] .ownclip__status {
+  inset: 0;
+  max-width: none;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  background: transparent;
+  color: var(--console-ink-2);
+  font-size: var(--text-md);
+}
+
+.ownclip__side {
+  display: contents;
+}
+
+@media (min-width: 60rem) {
+  .ownclip__side {
+    grid-area: side;
+    display: grid;
+    align-content: start;
+    gap: var(--space-4);
+  }
+}
+
+.ownclip__instruments {
+  grid-area: instruments;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: var(--space-4);
+}
+
+@media (min-width: 60rem) {
+  .ownclip__instruments {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .ownclip__wheel {
+    inline-size: min(100%, 13.5rem);
+    margin-inline: auto;
+  }
+}
+
+/* The model's wheel alone: there is no driver's wheel to set beside it. */
+.ownclip__wheel :is(.wheel__track, .wheel__gap, .wheel__ghost) {
+  display: none;
+}
+
+.ownclip__wheel[data-waiting="true"] .wheel__model {
+  --wheel-ink: var(--model-unlit);
+  --model-stripe: var(--model-unlit);
+}
+
+/* While the video is read the wheel takes each new batch of answers at a
+   reading pace; while it plays, frame by frame, as in the cockpit. */
+.ownclip__wheel .wheel__turn {
+  transition: transform 240ms var(--ease-out);
+}
+
+[data-phase="done"] .ownclip__wheel .wheel__turn {
+  transition: transform 60ms linear;
+}
+
+.ownclip__readout {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ownclip__readout-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--console-ink-2);
+}
+
+.ownclip__angle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.3em;
+  line-height: 1.05;
+}
+
+.ownclip__angle .readout__size {
+  font-size: clamp(2rem, 1.6rem + 1.4vw, 2.75rem);
+}
+
+.ownclip__when {
+  font-size: var(--text-sm);
+  color: var(--console-ink-2);
+}
+
+/* The model's own input: the last row on a phone, under the wheel on a wide
+   screen. */
+.ownclip__eye {
+  grid-area: eye;
+}
+
+@media (min-width: 60rem) {
+  .ownclip__instruments,
+  .ownclip__eye {
+    grid-area: auto;
+  }
+}
+
+.ownclip__transport {
+  grid-area: transport;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "play back forward ."
+    "trace trace trace trace";
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@media (min-width: 40rem) {
+  .ownclip__transport {
+    grid-template-areas: "play back forward trace";
+  }
+}
+
+.ownclip__transport [data-ownclip="back"] {
+  grid-area: back;
+}
+
+.ownclip__transport [data-ownclip="forward"] {
+  grid-area: forward;
+}
+
+/* The trace of the model's estimate, which is also the scrubber: a range
+   input lies over it, unseen, with a thumb so thin that a press lands on the
+   frame under the pointer. */
+.trace {
+  grid-area: trace;
+  position: relative;
+  block-size: 3.5rem;
+  border-radius: var(--radius-chip);
+  background: var(--console-2);
+}
+
+.trace:has(.trace__scrub:focus-visible) {
+  outline: 2px solid var(--console-focus);
+  outline-offset: 2px;
+}
+
+.trace__canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* The two sides, on chips the trace passes behind. */
+.trace__side {
+  position: absolute;
+  left: var(--space-1);
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-chip);
+  background: rgb(23 19 48 / 88%);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--console-ink-2);
+  pointer-events: none;
+}
+
+.trace__side--right {
+  top: 0.1875rem;
+}
+
+.trace__side--left {
+  bottom: 0.1875rem;
+}
+
+.trace__scrub {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+}
+
+.trace__scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  inline-size: 2px;
+  block-size: 3.5rem;
+}
+
+.trace__scrub::-moz-range-thumb {
+  inline-size: 2px;
+  block-size: 3.5rem;
+  border: 0;
+}
+
+.trace__scrub:disabled {
+  cursor: default;
+}
+
+.ownclip__foot {
+  grid-area: foot;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-5);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--console-ink-2);
+}
+
+@media (min-width: 60rem) {
+  .ownclip__foot {
+    align-self: start;
+  }
+}
+
+.ownclip__note {
+  flex: 1 1 18rem;
+  overflow-wrap: anywhere;
+}
+
+/* The console's quieter buttons: stopping a reading, choosing again. */
+.ownclip__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 2.75rem;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--console-line);
+  border-radius: var(--radius-pill);
+  background: var(--console-2);
+  color: var(--console-ink);
+  font: 600 var(--text-sm) / 1 var(--font-text);
+  cursor: pointer;
+  transition: background-color 150ms ease, transform 160ms var(--ease-out);
+}
+
+.ownclip__action:hover {
+  background: var(--console-3);
+}
+
+.ownclip__action:active {
+  transform: scale(0.97);
+}
+
+/* -- A file the page could not read: what went wrong, and the way on. */
+
+.ownclip__error {
+  grid-area: body;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-4);
+  min-block-size: 22rem;
+  padding: var(--space-6) var(--space-4);
+  border-radius: var(--radius-control);
+  background: var(--console-2);
+  text-align: center;
+}
+
+.ownclip__icon--alert {
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  stroke-width: 1.5;
+  color: var(--console-ink-2);
+}
+
+.ownclip__error-words {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 34rem;
+}
+
+.ownclip__error-title {
+  font: 600 1.625rem / 1.1 var(--font-display);
+  color: var(--console-ink);
+  text-wrap: balance;
+}
+
+.ownclip__error-text {
+  color: var(--console-ink-2);
+}
+
+.ownclip__noscript {
+  color: var(--console-ink-2);
+}
+
+/* -- How it reads a video, in words. */
+
+.ownclip__notes {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ownclip__notes-title {
+  font-size: 1.375rem;
+}
+
+.ownclip__rules {
+  display: grid;
+  gap: var(--space-3) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-2);
+}
+
+@media (min-width: 60rem) {
+  .ownclip__rules {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.ownclip__rules li {
+  max-width: 34em;
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--line-strong);
+}
+
 /* -- The Results view ----------------------------------------------------------- */
 
 .results {
