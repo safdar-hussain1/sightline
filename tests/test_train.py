@@ -477,8 +477,9 @@ def test_matrix_records_its_pid_and_refuses_to_run_twice(matrix, monkeypatch, tm
     try:
         # until the child has exec'd, ps shows the forked copy of this process's command line, so
         # wait for the stand-in runner's own command line before asking whether a runner is alive
+        # (-ww as in the runner: a piped ps on Linux cuts its output to 80 columns otherwise)
         deadline = time.monotonic() + 10
-        while "train_matrix" not in subprocess.run(["ps", "-o", "command=", "-p", str(other.pid)],
+        while "train_matrix" not in subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(other.pid)],
                                                    capture_output=True, text=True).stdout:
             assert time.monotonic() < deadline, "the stand-in runner never showed its command line"
             time.sleep(0.05)

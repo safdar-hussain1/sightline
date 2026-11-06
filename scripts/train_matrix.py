@@ -141,7 +141,9 @@ def _live_runner(pid_file: Path) -> int | None:
     except PermissionError:
         pass  # alive, owned by someone else
     try:
-        ps = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True)
+        # -ww: without it Linux's ps cuts the command line to 80 columns when its output is piped,
+        # which can drop the script's name from a long interpreter path
+        ps = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, text=True)
     except OSError:
         return pid  # cannot tell what it is, so assume it is a runner
     return pid if ps.returncode == 0 and "train_matrix" in ps.stdout else None
