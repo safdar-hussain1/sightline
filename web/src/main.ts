@@ -24,9 +24,8 @@ import type { ResultsView } from "./results.ts";
 import { Router, type ViewName } from "./router.ts";
 import { Accuracy } from "./sections/accuracy.ts";
 import { HowItWorks } from "./sections/how.ts";
-import { mountDemoMarkup, mountMarkup } from "./sections/markup.ts";
-import { OwnClip } from "./sections/ownclip.ts";
-import { OWNCLIP_ROOT, ownclipHtml } from "./sections/ownclip-markup.ts";
+import { mountDemoMarkup } from "./sections/markup.ts";
+import { bootOwnClip } from "./sections/ownclip-boot.ts";
 import { readFigures } from "./sections/reader.ts";
 import { mountShell } from "./shell.ts";
 import { markResultsUnavailable } from "./sections/unavailable.ts";
@@ -36,7 +35,6 @@ console.info("Sightline — built by Safdar Hussain · https://github.com/safdar
 
 mountShell();
 mountDemoMarkup();
-mountMarkup(OWNCLIP_ROOT, ownclipHtml);
 initTheme();
 
 const how = HowItWorks.mount();
@@ -44,8 +42,9 @@ const accuracy = Accuracy.mount();
 
 const results = loadResults(new URL("./", document.baseURI).href);
 const cockpit = bootCockpit(() => import("./cockpit/cockpit.ts"), results);
-// The visitor's own video, read with a model session of its own.
-OwnClip.mount(results);
+// The visitor's own video, read with a model session of its own; its code
+// arrives as the section nears the screen.
+bootOwnClip(results, cockpit);
 
 /** The Results view's code, asked for once. */
 let resultsCode: Promise<typeof import("./results.ts")> | null = null;

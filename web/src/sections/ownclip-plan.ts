@@ -28,12 +28,13 @@ export interface Rect {
  * on camera frames of `camera` ([width, height], from the clips' own record).
  *
  * The rule: training kept the bottom `CROP_ROWS` rows of each camera frame at
- * full width. A video frame of the camera's shape, or wider, gives the same
- * share of its height, at full width. A frame taller than the camera's shape
- * (a phone held upright) first gives up its top and bottom: the band across
- * its middle with the camera's shape, as wide as the frame; then that band's
- * bottom share. So the part read always has the training crop's height share,
- * and from a portrait video also the training crop's shape.
+ * full width. A video frame first gives up whatever does not fit the camera's
+ * shape: the centred part of it with that shape, as large as fits -- the
+ * whole frame from a video of the camera's shape, the band across the middle
+ * of a portrait frame (a phone held upright), the middle of a frame wider
+ * than the camera's. Then that part's bottom share, as in training. So the
+ * part read always has the training crop's shape, and the model's input is
+ * never squeezed one way or the other.
  */
 export function cropRect(videoW: number, videoH: number, camera: readonly [number, number]): Rect {
   const [cameraW, cameraH] = camera;
@@ -43,10 +44,12 @@ export function cropRect(videoW: number, videoH: number, camera: readonly [numbe
 /** `cropRect`'s rule for a camera of `aspect` (width over height) whose
  * bottom `share` of the height is read. */
 export function readBand(videoW: number, videoH: number, aspect: number, share: number): Rect {
-  const band = Math.min(videoH, videoW / aspect);
-  const bandTop = (videoH - band) / 2;
-  const sh = band * share;
-  return { sx: 0, sy: bandTop + band - sh, sw: videoW, sh };
+  const bandW = Math.min(videoW, videoH * aspect);
+  const bandH = Math.min(videoH, videoW / aspect);
+  const left = (videoW - bandW) / 2;
+  const top = (videoH - bandH) / 2;
+  const sh = bandH * share;
+  return { sx: left, sy: top + bandH - sh, sw: bandW, sh };
 }
 
 // -- When the frames are taken --------------------------------------------------------
@@ -137,7 +140,7 @@ export function sniffContainer(bytes: Uint8Array): Container | null {
 // -- What went wrong ------------------------------------------------------------------
 
 /** The kinds of failure the page tells apart, each with its own message. */
-export type Failure = "not-a-video" | "codec" | "empty" | "too-long" | "unknown";
+export type Failure = "not-a-video" | "codec" | "damaged" | "empty" | "too-long" | "unknown";
 
 /** What the page saw of a file before it gave up on it. */
 export interface Evidence {
@@ -145,8 +148,10 @@ export interface Evidence {
   readonly bytes?: number;
   /** Its container, sniffed from its first bytes; null when it opens none. */
   readonly container?: Container | null;
-  /** The browser's MediaError code, when it refused the file. */
+  /** The browser's MediaError code, when it refused the file, and its own
+   * words on why. */
   readonly mediaError?: number;
+  readonly errorMessage?: string;
   /** The picture's size and the video's length, once the browser read them. */
   readonly width?: number;
   readonly height?: number;
@@ -156,6 +161,9 @@ export interface Evidence {
   readonly needed?: number;
   /** A seek that never finished. */
   readonly seekTimedOut?: boolean;
+  /** The frames the file gave before it stopped giving new ones, when that
+   * was too few for one answer. */
+  readonly endedAt?: number;
 }
 
 /** A video the page could not read, with what it saw. */
@@ -169,24 +177,50 @@ export class ClipError extends Error {
   }
 }
 
-/** Which kind of failure `err` is. Anything that is not a `ClipError` -- the
- * model not downloading, a canvas that cannot be read -- is "unknown". */
+/** MediaError's codes for a picture the browser cannot decode, and for a
+ * file it cannot use (HTML's numbering). */
+const MEDIA_ERR_DECODE = 3;
+
+/** What a browser says of a file whose format it does not support, and of a
+ * file it could not open or parse (Chrome's words, the commonest). */
+const UNSUPPORTED = /NO_SUPPORTED_STREAMS|not supported|unsupported|no decoder|codec/i;
+const BROKEN = /COULD_NOT_OPEN|COULD_NOT_PARSE|open context|parse|corrupt|truncat|incomplete|PIPELINE_ERROR_READ/i;
+
+/**
+ * Which kind of failure `err` is. A file the browser refused is no video when
+ * its first bytes open no video container; otherwise it is a video the
+ * browser either does not decode (its format) or could not read through (a
+ * file damaged or cut short), told apart by the browser's own words, and by a
+ * decoding error part way, which only a readable format can give. Anything
+ * that is not a `ClipError` -- the model not downloading, a canvas that cannot
+ * be read -- is "unknown".
+ */
 export function classifyFailure(err: unknown): Failure {
   if (!(err instanceof ClipError)) return "unknown";
   const e = err.evidence;
   if (e.bytes === 0) return "empty";
-  if (e.mediaError !== undefined) return e.container ? "codec" : "not-a-video";
-  if (e.seekTimedOut) return "codec";
+  if (e.mediaError !== undefined) {
+    if (!e.container) return "not-a-video";
+    const said = e.errorMessage ?? "";
+    if (UNSUPPORTED.test(said)) return "codec";
+    if (e.mediaError === MEDIA_ERR_DECODE || BROKEN.test(said)) return "damaged";
+    return "codec";
+  }
+  if (e.endedAt !== undefined) return "damaged";
+  const endless = e.duration !== undefined && !Number.isFinite(e.duration);
+  if (e.seekTimedOut) return endless ? "too-long" : "codec";
   if (e.width === 0 || e.height === 0) return "not-a-video";
-  if (e.duration !== undefined && !Number.isFinite(e.duration)) return "too-long";
   if (e.frames !== undefined && e.needed !== undefined && e.frames < e.needed) return "empty";
+  if (endless) return "too-long";
   return "unknown";
 }
 
 // -- The states of a reading ------------------------------------------------------------
 
 /** Where a reading stands. `total` frames are read; `answerable` of them have
- * the history the model needs, and get an answer each. */
+ * the history the model needs, and get an answer each. `early` says the file
+ * gave no new frames before the end its length promised, so `total` is what
+ * it gave. */
 export type OwnClipState =
   | { readonly phase: "idle" }
   | { readonly phase: "loading"; readonly name: string }
@@ -206,8 +240,16 @@ export type OwnClipState =
       readonly answered: number;
       readonly answerable: number;
       readonly capped: boolean;
+      readonly early: boolean;
     }
-  | { readonly phase: "done"; readonly name: string; readonly total: number; readonly answerable: number; readonly capped: boolean }
+  | {
+      readonly phase: "done";
+      readonly name: string;
+      readonly total: number;
+      readonly answerable: number;
+      readonly capped: boolean;
+      readonly early: boolean;
+    }
   | { readonly phase: "error"; readonly name: string; readonly failure: Failure };
 
 export type OwnClipEvent =
@@ -219,13 +261,17 @@ export type OwnClipEvent =
   | { readonly type: "read"; readonly count: number }
   /** The model has answered `count` frames. */
   | { readonly type: "answered"; readonly count: number }
+  /** The file gave no new frames from frame `count` on: what was read up to
+   * there is all there is. `early` when its length promised more. */
+  | { readonly type: "end"; readonly count: number; readonly early: boolean }
   | { readonly type: "fail"; readonly failure: Failure }
   | { readonly type: "cancel" };
 
 /**
  * The state after `event`: idle, loading, sampling (frames read so far), then
  * running (the model finishing the frames read), then done -- or error from
- * any of the working states, or idle again on cancel. A new file replaces any
+ * any of the working states, or idle again on cancel. A file that stops giving
+ * new frames ends the sampling there, and its total is what it gave. A new file replaces any
  * state. An event that does not belong to the state, or a count that goes
  * backwards or past the end, leaves the state as it was (the same object).
  */
@@ -244,7 +290,21 @@ export function advance(state: OwnClipState, event: OwnClipEvent): OwnClipState 
     case "read": {
       if (state.phase !== "sampling" || event.count < state.read || event.count > state.total) return state;
       if (event.count < state.total) return { ...state, read: event.count };
-      return finish({ phase: "running", name: state.name, total: state.total, answered: state.answered, answerable: state.answerable, capped: state.capped });
+      return finish({ phase: "running", name: state.name, total: state.total, answered: state.answered, answerable: state.answerable, capped: state.capped, early: false });
+    }
+    case "end": {
+      if (state.phase !== "sampling" || event.count < 0 || event.count >= state.total) return state;
+      const lag = state.total - state.answerable;
+      const answerable = Math.max(0, event.count - lag);
+      return finish({
+        phase: "running",
+        name: state.name,
+        total: event.count,
+        answered: Math.min(state.answered, answerable),
+        answerable,
+        capped: false,
+        early: event.early,
+      });
     }
     case "answered": {
       if (state.phase !== "sampling" && state.phase !== "running") return state;
@@ -259,5 +319,5 @@ export function advance(state: OwnClipState, event: OwnClipEvent): OwnClipState 
 function finish(state: Extract<OwnClipState, { phase: "running" }>): OwnClipState {
   return state.answered < state.answerable
     ? state
-    : { phase: "done", name: state.name, total: state.total, answerable: state.answerable, capped: state.capped };
+    : { phase: "done", name: state.name, total: state.total, answerable: state.answerable, capped: state.capped, early: state.early };
 }

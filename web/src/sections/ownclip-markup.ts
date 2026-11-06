@@ -13,20 +13,30 @@
 import { wheelSvg } from "../cockpit/wheel.ts";
 import { readBand, type Rect } from "./ownclip-plan.ts";
 
+/** The section's id; ownclip-boot.ts names it too (a test keeps the two
+ * equal). */
+export const OWNCLIP_ID = "own-video";
+
 /** The empty element index.html holds for the section. */
-export const OWNCLIP_ROOT = `<section class="ownclip" id="own-video" aria-labelledby="ownclip-title"></section>`;
+export const OWNCLIP_ROOT = `<section class="ownclip" id="${OWNCLIP_ID}" aria-labelledby="ownclip-title"></section>`;
 
 /** The id of the section's file input, which its labels name. */
 export const FILE_INPUT_ID = "ownclip-file";
 
 // -- The drawing of the rule ------------------------------------------------------------
 
-/** The two frames of the drawing, in its viewBox: a landscape one and a
- * portrait one, each [x, y, width, height]. */
+/** The three frames of the drawing, in its viewBox, each [x, y, width,
+ * height]: a landscape one, a portrait one and one wider than the camera's,
+ * centred on one line. */
 export const ART_FRAMES = {
-  landscape: [10, 22, 176, 99],
-  portrait: [226, 6, 72, 128],
+  landscape: [8, 25, 160, 90],
+  portrait: [186, 6, 72, 128],
+  wide: [276, 45, 120, 50],
 } as const;
+
+/** The drawing's size. */
+const ART_W = 404;
+const ART_H = 140;
 
 /** The camera the served drawing uses until the clips' own is known: a
  * nominal dashcam shape (width over height), and a nominal share of its height
@@ -50,57 +60,60 @@ export function artBand(frame: Frame, camera: Camera): Rect {
   return { sx: r2(x + band.sx), sy: r2(y + band.sy), sw: r2(band.sw), sh: r2(band.sh) };
 }
 
-/** The band across a portrait frame's middle with the camera's shape. */
+/** The centred part of `frame` with the camera's shape: the band across the
+ * middle of a portrait frame, the middle of a wide one. */
 export function artMiddle(frame: Frame, camera: Camera): Rect {
   const [x, y, w, h] = frame;
-  const band = Math.min(h, w / camera.aspect);
-  return { sx: x, sy: r2(y + (h - band) / 2), sw: w, sh: r2(band) };
+  const part = readBand(w, h, camera.aspect, 1);
+  return { sx: r2(x + part.sx), sy: r2(y + part.sy), sw: r2(part.sw), sh: r2(part.sh) };
 }
 
 const rectAttrs = (r: Rect) => `x="${r.sx}" y="${r.sy}" width="${r.sw}" height="${r.sh}"`;
 
 /** A road seen through the windscreen, drawn inside `frame`, its horizon at
  * `vanish` (a share of the frame's height). */
-function road([x, y, w, h]: Frame, vanish: number): string {
+function road([x, y, w, h]: Frame, vanish: number, spread = 0.8): string {
   const vx = x + w / 2;
   const vy = y + h * vanish;
   const foot = y + h;
-  const near = (share: number) => r2(x + w * share);
+  const half = (w * spread) / 2;
   return (
     `<path class="art__ground" d="M${x} ${r2(vy)}H${x + w}V${foot}H${x}Z"/>` +
-    `<path class="art__road" d="M${r2(vx - w * 0.03)} ${r2(vy)}H${r2(vx + w * 0.03)}L${near(0.9)} ${foot}H${near(0.1)}Z"/>` +
-    `<path class="art__edge" d="M${r2(vx - w * 0.03)} ${r2(vy)}L${near(0.1)} ${foot}M${r2(vx + w * 0.03)} ${r2(vy)}L${near(0.9)} ${foot}"/>` +
+    `<path class="art__road" d="M${r2(vx - w * 0.03)} ${r2(vy)}H${r2(vx + w * 0.03)}L${r2(vx + half)} ${foot}H${r2(vx - half)}Z"/>` +
+    `<path class="art__edge" d="M${r2(vx - w * 0.03)} ${r2(vy)}L${r2(vx - half)} ${foot}M${r2(vx + w * 0.03)} ${r2(vy)}L${r2(vx + half)} ${foot}"/>` +
     `<path class="art__lane" d="M${r2(vx)} ${r2(vy + 1)}V${foot}"/>` +
     `<path class="art__horizon" d="M${x} ${r2(vy)}H${x + w}"/>`
   );
 }
 
+/** One frame of the drawing: its picture, the camera-shaped part of it when
+ * that is not the whole frame (dashed), and the band the model reads. */
+function artFrame(name: string, frame: Frame, camera: Camera, vanish: number, spread: number, middle: boolean): string {
+  const [x, y, w, h] = frame;
+  const box = `x="${x}" y="${y}" width="${w}" height="${h}"`;
+  return (
+    `<g clip-path="url(#ownclip-art-${name})">` +
+    `<rect class="art__sky" ${box}/>` +
+    road(frame, vanish, spread) +
+    (middle ? `<rect class="art__middle" data-ownclip-art="${name}-middle" ${rectAttrs(artMiddle(frame, camera))}/>` : "") +
+    `<rect class="art__band" data-ownclip-art="${name}" ${rectAttrs(artBand(frame, camera))}/>` +
+    `</g>` +
+    `<rect class="art__frame" ${box} rx="6"/>`
+  );
+}
+
 function artSvg(camera: Camera): string {
-  const land = ART_FRAMES.landscape;
-  const port = ART_FRAMES.portrait;
-  const frame = ([x, y, w, h]: Frame) => `x="${x}" y="${y}" width="${w}" height="${h}"`;
-  const middle = artMiddle(port, camera);
+  const { landscape, portrait, wide } = ART_FRAMES;
+  const clip = (name: string, [x, y, w, h]: Frame) => `<clipPath id="ownclip-art-${name}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6"/></clipPath>`;
   // A phone held upright sees the horizon across the middle of its picture
   // and the road running on below it, to the foot of the frame.
-  const horizon = (middle.sy + middle.sh * 0.42 - port[1]) / port[3];
-  return `<svg class="art" viewBox="0 0 308 140" aria-hidden="true" focusable="false">
-            <defs>
-              <clipPath id="ownclip-art-land"><rect ${frame(land)} rx="6"/></clipPath>
-              <clipPath id="ownclip-art-port"><rect ${frame(port)} rx="6"/></clipPath>
-            </defs>
-            <g clip-path="url(#ownclip-art-land)">
-              <rect class="art__sky" ${frame(land)}/>
-              ${road(land, 0.42)}
-              <rect class="art__band" data-ownclip-art="land" ${rectAttrs(artBand(land, camera))}/>
-            </g>
-            <rect class="art__frame" ${frame(land)} rx="6"/>
-            <g clip-path="url(#ownclip-art-port)">
-              <rect class="art__sky" ${frame(port)}/>
-              ${road(port, horizon)}
-              <rect class="art__middle" data-ownclip-art="middle" ${rectAttrs(middle)}/>
-              <rect class="art__band" data-ownclip-art="port" ${rectAttrs(artBand(port, camera))}/>
-            </g>
-            <rect class="art__frame" ${frame(port)} rx="6"/>
+  const middle = artMiddle(portrait, camera);
+  const horizon = (middle.sy + middle.sh * 0.42 - portrait[1]) / portrait[3];
+  return `<svg class="art" viewBox="0 0 ${ART_W} ${ART_H}" aria-hidden="true" focusable="false">
+            <defs>${clip("land", landscape)}${clip("port", portrait)}${clip("wide", wide)}</defs>
+            ${artFrame("land", landscape, camera, 0.42, 0.8, false)}
+            ${artFrame("port", portrait, camera, horizon, 1.4, true)}
+            ${artFrame("wide", wide, camera, 0.42, 0.5, true)}
           </svg>`;
 }
 
@@ -135,7 +148,7 @@ export function ownclipHtml(): string {
             <div class="drop" data-ownclip="drop">
               <figure class="drop__figure">
                 <div class="drop__art">${artSvg(NOMINAL)}</div>
-                <figcaption class="drop__key"><span class="drop__swatch" aria-hidden="true"></span>The violet band is the part of each frame the model reads, from a landscape video and from a portrait one.</figcaption>
+                <figcaption class="drop__key"><span class="drop__swatch" aria-hidden="true"></span>The violet band is the part of each frame the model reads, from a landscape video, a portrait one and a wider one.</figcaption>
               </figure>
               <div class="drop__act">
                 <p class="drop__title">Drop a video here, or</p>

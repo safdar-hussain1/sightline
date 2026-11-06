@@ -53,9 +53,9 @@ export function cropRule(reading: Reading): string {
   const [w, h] = reading.camera;
   const share = fmtPct(Math.min(CROP_ROWS, h) / h);
   return (
-    `It reads the bottom ${share} of each frame, at full width, as it did in training. ` +
-    `From a portrait video it first takes the band across the middle with the shape of the camera it learned from ` +
-    `(${w} × ${h}), then the bottom ${share} of that.`
+    `It takes the part of each frame with the shape of the camera it learned from (${w} × ${h}), as large as fits: ` +
+    `the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. ` +
+    `Of that it reads the bottom ${share}, at full width, as it did in training, so nothing is squeezed.`
   );
 }
 
@@ -69,8 +69,10 @@ export function paceRule(reading: Reading): string {
     return `It reads ${fmtFixed(pace.rate, 1)} frames a second, the clips’ own rate, and each answer compares a frame with the one ${framesBack(pace.lag)} before it. ${first}`;
   }
   const where = reading.drive === null ? "" : ` on ${driveName(reading.drive)}${reading.trainedOnDrive ? ", which it learned from" : ""}`;
+  // The video's own frames fall where they fall: the frame read at a time is
+  // the one on screen then, so the gap is about the measured one, not exactly.
   return (
-    `It reads a frame every ${ms(pace.stepS)}, so each answer compares a frame with the one ${ms(pace.gapS)} before it: ` +
+    `It reads a frame every ${ms(pace.stepS)}, so each answer compares a frame with one about ${ms(pace.gapS)} before it: ` +
     `the median gap between a frame and the one ${framesBack(pace.lag)} before it${where}. ${first}`
   );
 }
@@ -100,16 +102,36 @@ export function finishingStatus(answered: number, answerable: number): string {
   return `Finishing the answers: ${fmtCount(answered)} of ${fmtCount(answerable)}`;
 }
 
-/** The line under the player once a video has been read: the file's own
- * name, so the visitor knows what is playing, and what was read of it. */
-export function doneNote(name: string, total: number, answerable: number, capped: boolean, reading: Reading): string {
-  const read = `${name}: ${fmtCount(total)} frames read, ${fmtCount(answerable)} answers.`;
-  return capped ? `${read} The video is longer than the page reads, so these are its first ${secondsText(capSeconds(reading.pace))}.` : read;
+/** How a reading ended, for the note under the player. */
+export interface Ending {
+  /** The video is longer than the page reads (or, when `endless`, ran at
+   * least that long). */
+  readonly capped: boolean;
+  /** The file gave no new frames before the end its length promised. */
+  readonly early: boolean;
+  /** The video stated no length. */
+  readonly endless: boolean;
 }
 
-/** Where the player is: "Frame 34 of 600, 1.7 s in". */
+/** The line under the player once a video has been read: the file's own
+ * name, so the visitor knows what is playing, and what was read of it. */
+export function doneNote(name: string, total: number, answerable: number, ending: Ending, reading: Reading): string {
+  const counts = `${fmtCount(total)} frames read, ${fmtCount(answerable)} answers.`;
+  if (ending.early) {
+    return `${name}: the file ends early. Only its first ${secondsText(total * reading.pace.stepS)} could be read, so these are the answers for that part: ${counts}`;
+  }
+  const read = `${name}: ${counts}`;
+  if (!ending.capped) return read;
+  const cap = secondsText(capSeconds(reading.pace));
+  return ending.endless
+    ? `${read} The page reads at most a video’s first ${cap}, and this one runs at least that long.`
+    : `${read} The video is longer than the page reads, so these are its first ${cap}.`;
+}
+
+/** Where the player is: "Frame 34 of 600, 1.7 s in", the number and its
+ * unit joined by a no-break space so a line never ends between them. */
 export function frameWhen(k: number, total: number, pace: Pace): string {
-  return `Frame ${fmtCount(k + 1)} of ${fmtCount(total)}, ${fmtFixed((k + 0.5) * pace.stepS, 1)} s in`;
+  return `Frame ${fmtCount(k + 1)} of ${fmtCount(total)}, ${fmtFixed((k + 0.5) * pace.stepS, 1)}\u00A0s in`;
 }
 
 /** The scrubber's spoken value at frame `k`, with the model's angle there
@@ -144,13 +166,18 @@ export function failureWords(failure: Failure, reading: Reading | null): Failure
       const needs =
         reading === null || reading.pace.lag === 0 ? "too short for the model to read one frame"
         : reading.pace.gapS === null ? `too short for one answer, which needs a frame and the one ${framesBack(reading.pace.lag)} before it`
-        : `too short for one answer, which needs ${countWord(framesPerAnswer(reading))} frames ${ms(reading.pace.gapS)} apart`;
+        : `too short for one answer, which needs ${countWord(framesPerAnswer(reading))} frames about ${ms(reading.pace.gapS)} apart`;
       return { title: "There is nothing to read in that file", text: `It is empty, or ${needs}.` };
     }
+    case "damaged":
+      return {
+        title: "That video looks damaged or incomplete",
+        text: "The browser could not read it through: part of the file may be missing, as when a copy or a download has not finished. Let it finish, or choose another copy.",
+      };
     case "too-long":
       return {
         title: "That video does not say how long it is",
-        text: "The browser reports no end to it, which a live recording can do, so its frames cannot be placed in time. Saving it again as an ordinary video file gives it a length.",
+        text: "It states no length, and the browser could not step through it to find its frames. Saving it again as an ordinary video file, in a video editor or converter, gives it one.",
       };
     case "unknown":
       return {

@@ -24,15 +24,32 @@ describe("cropRect", () => {
 
   it("takes the same share of the height from a larger frame of nearly the same shape", () => {
     const r = cropRect(1920, 1080, CAMERA);
-    expect(r.sx).toBe(0);
-    expect(r.sw).toBe(1920);
+    // 16:9 is a hair wider than 455:256: a quarter of a pixel goes at each side.
+    expect(r.sx).toBeCloseTo((1920 - (1080 * 455) / 256) / 2, 9);
+    expect(r.sx).toBeLessThan(0.5);
     expect(r.sh).toBeCloseTo((1080 * CROP_ROWS) / 256, 9);
     expect(r.sy + r.sh).toBeCloseTo(1080, 9); // it runs to the bottom edge
   });
 
-  it("keeps full width and the bottom share on a frame wider than the camera's", () => {
+  it("from a frame wider than the camera's, takes the centred part with the camera's shape, then its bottom share", () => {
     const r = cropRect(2560, 1080, CAMERA);
-    expect(r).toEqual({ sx: 0, sy: 1080 - (1080 * CROP_ROWS) / 256, sw: 2560, sh: (1080 * CROP_ROWS) / 256 });
+    const part = (1080 * 455) / 256; // the camera's shape at the video's height
+    expect(r.sw).toBeCloseTo(part, 9);
+    expect(r.sx).toBeCloseTo((2560 - part) / 2, 9);
+    expect(r.sh).toBeCloseTo((1080 * CROP_ROWS) / 256, 9);
+    expect(r.sy + r.sh).toBeCloseTo(1080, 9);
+    // Not squeezed: the part read has the training crop's shape.
+    expect(r.sw / r.sh).toBeCloseTo(455 / CROP_ROWS, 9);
+  });
+
+  it("never squeezes: the part read has the training crop's shape from any frame", () => {
+    for (const [w, h] of [[455, 256], [1280, 720], [720, 1280], [2560, 1080], [3840, 1080], [1080, 1080], [640, 480]] as const) {
+      const r = cropRect(w, h, CAMERA);
+      expect(r.sw / r.sh, `${w} x ${h}`).toBeCloseTo(455 / CROP_ROWS, 9);
+      expect(r.sx).toBeGreaterThanOrEqual(0);
+      expect(r.sx + r.sw).toBeLessThanOrEqual(w + 1e-9);
+      expect(r.sy + r.sh).toBeLessThanOrEqual(h + 1e-9);
+    }
   });
 
   it("from a portrait frame, takes the band across the middle with the camera's shape, then its bottom share", () => {
@@ -146,18 +163,28 @@ describe("classifyFailure", () => {
     expect(fail({ bytes: 1000, container: null, mediaError: 4 })).toBe("not-a-video");
   });
 
-  it("calls a video container the browser cannot decode a codec failure", () => {
+  it("calls a video in a format the browser does not decode a codec failure", () => {
+    expect(fail({ bytes: 1000, container: "mp4", mediaError: 4, errorMessage: "PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams" })).toBe("codec");
     expect(fail({ bytes: 1000, container: "mp4", mediaError: 4 })).toBe("codec");
-    expect(fail({ bytes: 1000, container: "matroska", mediaError: 3 })).toBe("codec");
     expect(fail({ bytes: 1000, container: "mp4", seekTimedOut: true })).toBe("codec");
+  });
+
+  it("calls a video the browser could not read through damaged, apart from one it cannot decode", () => {
+    expect(fail({ bytes: 1000, container: "mp4", mediaError: 4, errorMessage: "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed" })).toBe("damaged");
+    expect(fail({ bytes: 1000, container: "matroska", mediaError: 3, errorMessage: "PIPELINE_ERROR_DECODE" })).toBe("damaged");
+    expect(fail({ bytes: 1000, container: "mp4", width: 640, height: 360, duration: 12, endedAt: 2, needed: 3 })).toBe("damaged");
+  });
+
+  it("never calls a file that opens no video container damaged, whatever the browser said", () => {
+    expect(fail({ bytes: 1000, container: null, mediaError: 4, errorMessage: "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN" })).toBe("not-a-video");
   });
 
   it("calls a video with no picture (sound alone) not a video", () => {
     expect(fail({ bytes: 1000, container: "mp4", width: 0, height: 0, duration: 3 })).toBe("not-a-video");
   });
 
-  it("calls a video of endless or unknown length too long", () => {
-    expect(fail({ bytes: 1000, container: "matroska", width: 640, height: 360, duration: Number.POSITIVE_INFINITY })).toBe("too-long");
+  it("calls a video of no known length that cannot be stepped through too long", () => {
+    expect(fail({ bytes: 1000, container: "matroska", width: 640, height: 360, duration: Number.POSITIVE_INFINITY, seekTimedOut: true })).toBe("too-long");
     expect(fail({ bytes: 1000, container: "mp4", width: 640, height: 360, duration: Number.NaN })).toBe("too-long");
   });
 
@@ -184,14 +211,31 @@ describe("advance: the reading's states", () => {
     const reading = advance(advance(opened, { type: "read", count: 4 }), { type: "answered", count: 2 });
     expect(reading).toMatchObject({ phase: "sampling", read: 4, answered: 2 });
     const running = advance(reading, { type: "read", count: 10 });
-    expect(running).toEqual({ phase: "running", name: "drive.mp4", total: 10, answered: 2, answerable: 8, capped: false });
+    expect(running).toEqual({ phase: "running", name: "drive.mp4", total: 10, answered: 2, answerable: 8, capped: false, early: false });
     expect(advance(running, { type: "answered", count: 7 })).toMatchObject({ phase: "running", answered: 7 });
-    expect(advance(running, { type: "answered", count: 8 })).toEqual({ phase: "done", name: "drive.mp4", total: 10, answerable: 8, capped: false });
+    expect(advance(running, { type: "answered", count: 8 })).toEqual({ phase: "done", name: "drive.mp4", total: 10, answerable: 8, capped: false, early: false });
   });
 
   it("is done straight from sampling when the last read leaves nothing to answer", () => {
     const all = advance(advance(opened, { type: "answered", count: 8 }), { type: "read", count: 10 });
     expect(all.phase).toBe("done");
+  });
+
+  it("ends the sampling where the file stops giving new frames: its total is what it gave", () => {
+    const reading = advance(advance(opened, { type: "read", count: 6 }), { type: "answered", count: 3 });
+    const ended = advance(reading, { type: "end", count: 6, early: true });
+    expect(ended).toEqual({ phase: "running", name: "drive.mp4", total: 6, answered: 3, answerable: 4, capped: false, early: true });
+    expect(advance(ended, { type: "answered", count: 4 })).toEqual({ phase: "done", name: "drive.mp4", total: 6, answerable: 4, capped: false, early: true });
+    // Answers already given past the end are not counted.
+    const ahead = advance(advance(opened, { type: "read", count: 9 }), { type: "answered", count: 7 });
+    expect(advance(ahead, { type: "end", count: 6, early: true })).toEqual({ phase: "done", name: "drive.mp4", total: 6, answerable: 4, capped: false, early: true });
+    // A video of no stated length reaches its end: not early.
+    expect(advance(ahead, { type: "end", count: 9, early: false })).toMatchObject({ phase: "done", total: 9, early: false });
+  });
+
+  it("ignores an end that is no end", () => {
+    expect(advance(opened, { type: "end", count: 10, early: true })).toBe(opened);
+    expect(advance(loading, { type: "end", count: 3, early: true })).toBe(loading);
   });
 
   it("goes to error from any working state, and keeps the class of the failure", () => {

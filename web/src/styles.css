@@ -2136,7 +2136,7 @@ html:not(.js) .windshield__status {
 }
 
 .drop__art {
-  inline-size: min(100%, 27rem);
+  inline-size: min(100%, 30rem);
 }
 
 .drop__act {
@@ -2532,6 +2532,7 @@ html:not(.js) .windshield__status {
   grid-area: trace;
   position: relative;
   block-size: 3.5rem;
+  overflow: hidden;
   border-radius: var(--radius-chip);
   background: var(--console-2);
 }
@@ -2547,12 +2548,13 @@ html:not(.js) .windshield__status {
   block-size: 100%;
 }
 
-/* The two sides, on chips the trace passes behind. */
+/* The two sides, on chips the trace passes behind, flush with its left edge
+   so no stroke of it shows beside them. */
 .trace__side {
   position: absolute;
-  left: var(--space-1);
-  padding: 0.0625rem 0.3125rem;
-  border-radius: var(--radius-chip);
+  left: 0;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
   background: rgb(23 19 48 / 88%);
   font-size: 0.75rem;
   line-height: 1.2;
@@ -2561,11 +2563,11 @@ html:not(.js) .windshield__status {
 }
 
 .trace__side--right {
-  top: 0.1875rem;
+  top: 0;
 }
 
 .trace__side--left {
-  bottom: 0.1875rem;
+  bottom: 0;
 }
 
 .trace__scrub {

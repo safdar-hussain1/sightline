@@ -33,6 +33,7 @@ import { renderWheel } from "../cockpit/wheel.ts";
 import { CROP_ROWS } from "../cockpit/geometry.ts";
 import { loadClip } from "../data/load.ts";
 import { driveGaps } from "../data/timing.ts";
+import type { LiveCockpit } from "../cockpit/live.ts";
 import type { Clip, Results } from "../data/types.ts";
 import { NO_VALUE, steerParts } from "../format.ts";
 import { prefersReducedMotion } from "./motion.ts";
@@ -51,9 +52,11 @@ import {
   scrubText,
   type Reading,
 } from "./ownclip-copy.ts";
-import { ART_FRAMES, artBand, artMiddle } from "./ownclip-markup.ts";
+import { mountMarkup } from "./markup.ts";
+import { ART_FRAMES, OWNCLIP_ID, OWNCLIP_ROOT, artBand, artMiddle, ownclipHtml } from "./ownclip-markup.ts";
 import {
   ClipError,
+  MAX_FRAMES,
   advance,
   classifyFailure,
   cropRect,
@@ -124,28 +127,73 @@ export const shippedSession: OpenSession = async (modelUrl, inputW, inputH) => {
   };
 };
 
-/** The reading's context from results.json and the clips it names: the
- * model's history and input size and the camera from the clip files, and the
- * pace from the measured gaps of the drive the shipped model learned from
- * (the clip whose drive has them). */
-export async function loadContext(results: Promise<Results>): Promise<Context> {
+/** What the reading needs of a clip file: the model's history and input
+ * size, the camera it learned from, and the clips' frame rate. Every clip
+ * file records the same. */
+export type ClipFacts = Pick<Clip, "frame_lags" | "camera_size" | "sprite" | "fps">;
+
+/** How often the cockpit is asked for its clip, and how long it is given to
+ * have one before the clip file is fetched here instead, ms. */
+const CLIP_POLL_MS = 250;
+const CLIP_PATIENCE_MS = 20000;
+
+/**
+ * A clip file's facts, from the cockpit: it fetches the clip files anyway,
+ * so the section reads them from it rather than asking again. Only when the
+ * cockpit cannot start, fails, or has no clip in time is the first clip file
+ * that results.json names fetched here.
+ */
+export function cockpitClip(
+  cockpit: Promise<LiveCockpit | null>,
+  results: Promise<Results>,
+  poll = CLIP_POLL_MS,
+  patience = CLIP_PATIENCE_MS,
+): Promise<ClipFacts> {
+  const fetchOwn = async (): Promise<ClipFacts> => {
+    const loaded = await results;
+    const path = Object.values(loaded.assets.clips)[0];
+    if (path === undefined) throw new Error("results.json names no clips");
+    return loadClip(new URL(path, document.baseURI).href);
+  };
+  return cockpit.then((live) => {
+    if (!live) return fetchOwn();
+    return new Promise<ClipFacts>((resolve, reject) => {
+      const started = Date.now();
+      const look = () => {
+        const status = live.status();
+        if (status.clip) {
+          window.clearInterval(timer);
+          resolve(status.clip);
+        } else if (status.state === "unavailable" || Date.now() - started > patience) {
+          window.clearInterval(timer);
+          fetchOwn().then(resolve, reject);
+        }
+      };
+      const timer = window.setInterval(look, poll);
+      look();
+    });
+  }, fetchOwn);
+}
+
+/** The reading's context, from results.json and a clip file's facts: the
+ * model's history and input size and the camera from the clip, and the pace
+ * from the measured gaps of the drive the shipped model learned from (the
+ * timed drive its run is named after, or else the first timed drive). */
+export async function loadContext(results: Promise<Results>, clip: Promise<ClipFacts>): Promise<Context> {
   const loaded = await results;
-  const clips = await Promise.all(Object.values(loaded.assets.clips).map((path) => loadClip(new URL(path, document.baseURI).href)));
+  const facts = await clip;
   const gaps = driveGaps(loaded.raw);
-  const timed = clips.find((clip) => gaps[clip.drive] != null);
-  const clip: Clip | undefined = timed ?? clips[0];
-  if (!clip) throw new Error("results.json names no clips");
-  const drive = timed ? timed.drive : null;
-  const pace = readingPace(clip.frame_lags, drive ? (gaps[drive] ?? null) : null, clip.fps);
-  const model = loaded.assets.models.sightline;
+  const timed = Object.keys(gaps).filter((drive) => gaps[drive] != null);
+  const drive = timed.find((name) => loaded.shipped.run.startsWith(`${name}_`)) ?? timed[0] ?? null;
+  const pace = readingPace(facts.frame_lags, drive ? (gaps[drive] ?? null) : null, facts.fps);
   return {
-    modelUrl: new URL(model, document.baseURI).href,
+    modelUrl: new URL(loaded.assets.models.sightline, document.baseURI).href,
     reading: {
       pace,
-      lags: clip.frame_lags,
-      camera: clip.camera_size,
-      inputW: clip.sprite.frame_w,
-      inputH: clip.sprite.frame_h,
+      lags: facts.frame_lags,
+      camera: facts.camera_size,
+      inputW: facts.sprite.frame_w,
+      inputH: facts.sprite.frame_h,
       drive,
       trainedOnDrive: drive !== null && loaded.shipped.run.startsWith(`${drive}_`),
     },
@@ -157,7 +205,12 @@ export async function loadContext(results: Promise<Results>): Promise<Context> {
 /** The frames of one video and the model's answers on them. */
 interface Result {
   readonly name: string;
+  /** The planned times; only the first `total` of them have frames. */
   readonly times: readonly number[];
+  /** The frames there are: all planned, or fewer when the file ends early. */
+  total: number;
+  /** The video stated no length: it was read up to the cap. */
+  readonly endless: boolean;
   readonly crop: Rect;
   readonly width: number;
   readonly height: number;
@@ -188,11 +241,14 @@ function isAbort(error: unknown): boolean {
 }
 
 export class OwnClip {
-  /** The section in the page, or null on a page without it. */
-  static mount(results: Promise<Results>): OwnClip | null {
-    const section = document.getElementById("own-video");
+  /** The section in the page, or null on a page without it, reading the
+   * clip's facts from `cockpit`. Its markup is written in if the page
+   * arrived without it. */
+  static mount(results: Promise<Results>, cockpit: Promise<LiveCockpit | null>): OwnClip | null {
+    mountMarkup(OWNCLIP_ROOT, ownclipHtml);
+    const section = document.getElementById(OWNCLIP_ID);
     if (!section) return null;
-    const context = loadContext(results);
+    const context = loadContext(results, cockpitClip(cockpit, results));
     context.catch(() => undefined); // said when a file is chosen
     return new OwnClip(section, { context });
   }
@@ -275,7 +331,9 @@ export class OwnClip {
     };
     set("land", artBand(ART_FRAMES.landscape, camera));
     set("port", artBand(ART_FRAMES.portrait, camera));
-    set("middle", artMiddle(ART_FRAMES.portrait, camera));
+    set("port-middle", artMiddle(ART_FRAMES.portrait, camera));
+    set("wide", artBand(ART_FRAMES.wide, camera));
+    set("wide-middle", artMiddle(ART_FRAMES.wide, camera));
   }
 
   // -- Input ------------------------------------------------------------------------------
@@ -380,18 +438,22 @@ export class OwnClip {
       live();
 
       const { pace } = reading;
-      const times = sampleTimes(source.duration, pace.rate);
+      // A video whose length neither the file nor the browser could tell is
+      // read up to the cap, and ends where it stops giving new frames.
+      const endless = !Number.isFinite(source.duration);
+      const times = endless ? sampleTimes(MAX_FRAMES / pace.rate, pace.rate) : sampleTimes(source.duration, pace.rate);
       const needed = pace.lag + 1;
       const seen: Evidence = { ...evidence, width: source.width, height: source.height, duration: source.duration, frames: times.length, needed };
-      // The reader refuses these too; a picture of no size, or a video of no
-      // known length or too short for one answer, never reaches the model.
+      // The reader refuses a picture of no size too; neither it nor a video too
+      // short for one answer ever reaches the model.
       if (!(source.width > 0 && source.height > 0)) throw new ClipError("the video has no picture", seen);
-      if (times.length < needed) throw new ClipError("the video is too short for one answer, or of no known length", seen);
+      if (times.length < needed) throw new ClipError("the video is too short for one answer", seen);
       const total = times.length;
       const map = reading.inputW * reading.inputH;
       const result: Result = {
         name: file.name,
         times,
+        total,
         crop: cropRect(source.width, source.height, reading.camera),
         width: source.width,
         height: source.height,
@@ -399,7 +461,8 @@ export class OwnClip {
         angles: new Float32Array(total).fill(Number.NaN),
         heat: new Uint8Array(total * map),
         done: new Uint8Array(total),
-        capped: exceedsCap(source.duration, pace.rate),
+        capped: endless || exceedsCap(source.duration, pace.rate),
+        endless,
       };
       this.result = result;
       this.layOut(result);
@@ -407,7 +470,7 @@ export class OwnClip {
 
       const session = await run.session;
       live();
-      await this.readAll(run, source, session, result, reading, live);
+      await this.readAll(run, source, session, result, reading, live, seen);
       live();
       // Done: the second reader and the session go; the video on screen
       // keeps the file, and the player plays it.
@@ -427,15 +490,27 @@ export class OwnClip {
   }
 
   /** Read every frame of `result` and run the model on each one that has
-   * its history, a batch at a time, as soon as its frames are in. */
-  private async readAll(run: Run, source: VideoSource, session: Session, result: Result, reading: Reading, live: () => void): Promise<void> {
+   * its history, a batch at a time, as soon as its frames are in. A file that
+   * stops giving new frames ends the reading there: what came before is all
+   * there is, and nothing after it is kept. */
+  private async readAll(
+    run: Run,
+    source: VideoSource,
+    session: Session,
+    result: Result,
+    reading: Reading,
+    live: () => void,
+    seen: Evidence,
+  ): Promise<void> {
     const { frames, times } = result;
-    const total = times.length;
+    const planned = times.length;
     const { lag } = reading.pace;
     const map = reading.inputW * reading.inputH;
     const channels = 3 * (1 + reading.lags.length);
     let read = 0;
     let finished = false;
+    /** The frames there are: all planned, until the file is found to end. */
+    let limit = planned;
     let failure: unknown = null;
     let wake: (() => void) | null = null;
     const nudge = () => {
@@ -450,11 +525,11 @@ export class OwnClip {
         result.crop,
         [reading.inputW, reading.inputH],
         (j, rgb, picture) => {
-          if (this.run !== run) return;
+          if (this.run !== run || j >= limit) return;
           frames[j] = rgb;
           if (j === 0 || !this.reduced()) this.paintStill(picture);
           const before = read;
-          while (read < total && frames[read]) read += 1;
+          while (read < planned && frames[read]) read += 1;
           if (read !== before) {
             this.apply({ type: "read", count: read });
             this.trace.update(read, result.angles);
@@ -464,7 +539,8 @@ export class OwnClip {
         run.controller.signal,
       )
       .then(
-        () => {
+        (outcome) => {
+          if (outcome.end !== null) limit = outcome.end;
           finished = true;
           nudge();
         },
@@ -476,13 +552,21 @@ export class OwnClip {
 
     let next = lag;
     let batch = 2;
-    while (next < total) {
-      const want = Math.min(total, next + batch);
+    for (;;) {
+      const want = Math.min(limit, next + batch);
+      if (next >= want) {
+        if (finished || failure !== null) break;
+        await new Promise<void>((resolve) => (wake = resolve));
+        continue;
+      }
       while (read < want && failure === null && !finished) await new Promise<void>((resolve) => (wake = resolve));
       if (failure !== null) throw failure;
       live();
-      const upto = Math.min(read, want);
-      if (upto <= next) throw new Error("the reader stopped short of the frames it was asked for");
+      const upto = Math.min(read, want, limit);
+      if (upto <= next) {
+        if (finished) break;
+        continue;
+      }
       const count = upto - next;
       const stride = map * channels;
       const stacks = new Uint8Array(count * stride);
@@ -502,13 +586,30 @@ export class OwnClip {
       batch = Math.max(1, Math.min(MAX_BATCH, Math.floor(BATCH_BUDGET_MS / Math.max(perFrame, 1))));
       next = upto;
       this.apply({ type: "answered", count: next - lag });
-      this.trace.update(read, result.angles);
+      this.trace.update(read, result.angles.subarray(0, limit));
       this.showAnswer(result, next - 1, reading);
       // Let the page and the seeks through before the next batch.
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     await reads;
     if (failure !== null) throw failure;
+    live();
+    if (limit === planned) return;
+
+    // The file gave frames up to `limit` only.
+    if (limit < lag + 1) {
+      throw new ClipError("the file gives no new frames before one answer", { ...seen, ...(result.endless ? { frames: limit } : { endedAt: limit }) });
+    }
+    for (let k = limit; k < planned; k += 1) {
+      frames[k] = undefined;
+      result.angles[k] = Number.NaN;
+      result.done[k] = 0;
+    }
+    result.total = limit;
+    this.part<HTMLInputElement>("scrub").max = String(limit - 1);
+    this.trace.reset(limit);
+    this.trace.update(limit, result.angles.subarray(0, limit));
+    this.apply({ type: "end", count: limit, early: !result.endless });
   }
 
   /** Stop the stage on the last frame read while the video is read; under
@@ -574,10 +675,10 @@ export class OwnClip {
     still.height = Math.max(1, Math.round(height * scale));
     still.hidden = false;
     this.heatContext?.clearRect(0, 0, this.part<HTMLCanvasElement>("heat").width, this.part<HTMLCanvasElement>("heat").height);
-    this.trace.reset(result.times.length);
+    this.trace.reset(result.total);
     const scrub = this.part<HTMLInputElement>("scrub");
     scrub.min = String(this.reading?.pace.lag ?? 0);
-    scrub.max = String(result.times.length - 1);
+    scrub.max = String(result.total - 1);
     scrub.value = scrub.min;
     this.clearReadout();
   }
@@ -604,7 +705,7 @@ export class OwnClip {
     const parts = steerParts(angle);
     this.part("angle").textContent = parts.size;
     this.part("side").textContent = parts.side;
-    this.part("when").textContent = frameWhen(k, result.times.length, reading.pace);
+    this.part("when").textContent = frameWhen(k, result.total, reading.pace);
     this.paintEye(result, k, reading);
   }
 
@@ -637,7 +738,7 @@ export class OwnClip {
   }
 
   /** Show frame `k` of the read video in the player. */
-  private render(k: number, announce: boolean): void {
+  private render(k: number): void {
     const result = this.result;
     const reading = this.reading;
     if (!result || !reading || this.state.phase !== "done") return;
@@ -650,7 +751,8 @@ export class OwnClip {
     this.trace.setFrame(k);
     const scrub = this.part<HTMLInputElement>("scrub");
     scrub.value = String(k);
-    if (announce) scrub.setAttribute("aria-valuetext", scrubText(k, result.times.length, reading.pace, steerParts(result.angles[k] as number)));
+    // The spoken value follows the frame on screen, playing or not.
+    scrub.setAttribute("aria-valuetext", scrubText(k, result.total, reading.pace, steerParts(result.angles[k] as number)));
   }
 
   private async startPlayer(result: Result, reading: Reading): Promise<void> {
@@ -659,7 +761,7 @@ export class OwnClip {
     await this.seekVideo(seekTime(first, reading.pace.rate));
     if (this.result !== result || this.state.phase !== "done") return;
     this.part("still").hidden = true;
-    this.render(first, true);
+    this.render(first);
     this.wanted = !this.reduced();
     video.loop = false;
     if (this.wanted && !this.offscreen) await this.play();
@@ -705,7 +807,7 @@ export class OwnClip {
     this.stopLoop = null;
     this.playing = false;
     this.showPlaying(false);
-    if (this.frame >= 0) this.render(this.frame, true);
+    if (this.frame >= 0) this.render(this.frame);
   }
 
   /** Follow the video as it plays: the frame on screen is the one whose step
@@ -715,7 +817,7 @@ export class OwnClip {
     this.stopLoop?.();
     const video = this.part<HTMLVideoElement>("video");
     const { rate } = reading.pace;
-    const total = result.times.length;
+    const total = result.total;
     const end = total / rate;
     let stopped = false;
     const follow = (time: number) => {
@@ -724,7 +826,7 @@ export class OwnClip {
         return;
       }
       const k = Math.max(reading.pace.lag, frameIndexAt(time, rate, total));
-      if (k !== this.frame) this.render(k, false);
+      if (k !== this.frame) this.render(k);
     };
     const request = video.requestVideoFrameCallback?.bind(video);
     if (request) {
@@ -767,9 +869,9 @@ export class OwnClip {
     const result = this.result;
     const reading = this.reading;
     if (!result || !reading || this.state.phase !== "done") return;
-    const target = Math.min(result.times.length - 1, Math.max(reading.pace.lag, Math.round(k)));
+    const target = Math.min(result.total - 1, Math.max(reading.pace.lag, Math.round(k)));
     this.part<HTMLVideoElement>("video").currentTime = seekTime(target, reading.pace.rate);
-    this.render(target, true);
+    this.render(target);
   }
 
   private step(by: number): void {
@@ -850,7 +952,9 @@ export class OwnClip {
         break;
       case "done":
         status.textContent = "";
-        note.textContent = reading ? doneNote(state.name, state.total, state.answerable, state.capped, reading) : "";
+        note.textContent = reading
+          ? doneNote(state.name, state.total, state.answerable, { capped: state.capped, early: state.early, endless: this.result?.endless ?? false }, reading)
+          : "";
         break;
       case "error": {
         const words = failureWords(state.failure, reading);

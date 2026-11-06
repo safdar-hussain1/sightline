@@ -11,8 +11,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseResults } from "../data/load.ts";
+import type { Clip, Results } from "../data/types.ts";
 import { steerParts } from "../format.ts";
-import { OwnClip, loadContext, shippedSession, type Context, type ObjectUrls, type OpenSession, type Session } from "./ownclip.ts";
+import type { LiveCockpit, LiveStatus } from "../cockpit/live.ts";
+import { OwnClip, cockpitClip, loadContext, shippedSession, type ClipFacts, type Context, type ObjectUrls, type OpenSession, type Session } from "./ownclip.ts";
 import { ownclipHtml } from "./ownclip-markup.ts";
 import { ClipError, MAX_FRAMES, readingPace, type Evidence } from "./ownclip-plan.ts";
 import type { OpenVideo, VideoSource } from "./ownclip-reader.ts";
@@ -98,11 +100,14 @@ interface Script {
   readonly holdAt?: number;
   /** Opening fails with this evidence (added to what the page passed in). */
   readonly refuse?: Evidence;
+  /** The file gives no new frames from this frame on: the reader passes on
+   * the frames before it (and the one at it, before it knew), then says so. */
+  readonly endAt?: number;
 }
 
 /** A fake video reader that reads frames on a timer, and what it saw. */
 function fakeVideo(script: Script = {}) {
-  const seen = { opened: [] as Array<{ url: string; evidence: Evidence }>, signals: [] as AbortSignal[], closed: 0, release: () => undefined as void };
+  const seen = { opened: [] as Array<{ url: string; evidence: Evidence }>, signals: [] as AbortSignal[], closed: 0, planned: 0, release: () => undefined as void };
   let release: () => void = () => undefined;
   const held = new Promise<void>((resolve) => (release = resolve));
   seen.release = () => release();
@@ -115,13 +120,16 @@ function fakeVideo(script: Script = {}) {
       height: script.height ?? 720,
       duration: script.duration ?? 1,
       read: async (times, _crop, _size, onFrame, readSignal) => {
-        for (let j = 0; j < times.length; j += 1) {
+        seen.planned = times.length;
+        const last = script.endAt === undefined ? times.length : Math.min(times.length, script.endAt + 1);
+        for (let j = 0; j < last; j += 1) {
           if (j === script.holdAt) await held;
           await new Promise((resolve) => setTimeout(resolve, 0));
           if (readSignal.aborted) throw new DOMException("stopped", "AbortError");
           if (script.failAt && j === script.failAt.frame) throw new ClipError("a seek never finished", { ...evidence, ...script.failAt.evidence });
           onFrame(j, frameOf(j), document.createElement("video"));
         }
+        return { end: script.endAt === undefined || script.endAt >= times.length ? null : script.endAt };
       },
       close: () => {
         seen.closed += 1;
@@ -246,11 +254,8 @@ describe("the reading's context, from the data the site publishes", () => {
   it("takes the history, the input and the camera from the clips, and the pace from the measured gap of the drive the model learned from", async () => {
     const raw = JSON.parse(published("data/results.json")) as Record<string, unknown>;
     const results = parseResults(raw, "data/results.json");
-    vi.stubGlobal("fetch", async (url: string) => {
-      const path = String(url).replace(/^https?:\/\/[^/]+\//, "");
-      return new Response(published(path), { headers: { "content-type": "application/json" } });
-    });
-    const context = await loadContext(Promise.resolve(results));
+    const clip = JSON.parse(published("data/clips/c2018/clip.json")) as ClipFacts;
+    const context = await loadContext(Promise.resolve(results), Promise.resolve(clip));
     const timing = (raw["timing"] as Record<string, { lag_gap_s: Array<{ lag: number; median: number }> } | null>)["drive2018"];
     const gap = timing?.lag_gap_s.find((entry) => entry.lag === 2)?.median;
     expect(context.reading.lags).toEqual([2]);
@@ -261,6 +266,45 @@ describe("the reading's context, from the data the site publishes", () => {
     expect(context.reading.pace.gapS).toBe(gap);
     expect(context.reading.pace.stepS).toBeCloseTo((gap as number) / 2, 12);
     expect(context.modelUrl).toMatch(/\/models\/sightline\.onnx$/);
+  });
+});
+
+describe("the clip's facts, from the cockpit", () => {
+  const results = () => parseResults(JSON.parse(published("data/results.json")), "data/results.json");
+  const clip = () => JSON.parse(published("data/clips/c2018/clip.json")) as Clip;
+  const live = (statuses: Array<Partial<LiveStatus>>): LiveCockpit => {
+    let call = 0;
+    return {
+      status: () => ({ state: "loading", playing: false, frame: 0, clip: null, model: "sightline", ...(statuses[Math.min(call++, statuses.length - 1)] ?? {}) }),
+      frameAt: () => null,
+      agreement: () => null,
+      msPerFrame: () => null,
+    };
+  };
+  const fetched: string[] = [];
+  beforeEach(() => {
+    fetched.length = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(String(url));
+      const path = String(url).replace(/^https?:\/\/[^/]+\//, "");
+      return new Response(published(path), { headers: { "content-type": "application/json" } });
+    });
+  });
+
+  it("reads them from the cockpit's clip once it has one, and fetches nothing", async () => {
+    const cockpit = live([{}, {}, { state: "ready", clip: clip() }]);
+    const facts = await cockpitClip(Promise.resolve(cockpit), Promise.resolve(results() as Results), 1);
+    expect(facts.frame_lags).toEqual([2]);
+    expect(facts.camera_size).toEqual([455, 256]);
+    expect(fetched).toEqual([]);
+  });
+
+  it("fetches the first clip file itself when the cockpit cannot start, or fails", async () => {
+    await cockpitClip(Promise.resolve(null), Promise.resolve(results() as Results), 1);
+    expect(fetched).toHaveLength(1);
+    await cockpitClip(Promise.resolve(live([{ state: "unavailable" }])), Promise.resolve(results() as Results), 1);
+    expect(fetched).toHaveLength(2);
+    expect(fetched[0]).toMatch(/data\/clips\/c2017\/clip\.json$/);
   });
 });
 
@@ -282,7 +326,7 @@ describe("a video read from start to finish", () => {
     expect(phases).toContain("sampling");
     expect(phases.at(-1)).toBe("done");
     // A second of video at the measured pace: 20 frames, 18 with history.
-    expect(own.status()).toEqual({ phase: "done", name: "drive.mp4", total: 20, answerable: 18, capped: false });
+    expect(own.status()).toEqual({ phase: "done", name: "drive.mp4", total: 20, answerable: 18, capped: false, early: false });
     expect(sessions.log.runs.reduce((sum, run) => sum + run.n, 0)).toBe(18);
   });
 
@@ -309,8 +353,8 @@ describe("a video read from start to finish", () => {
     expect([scrub.min, scrub.max, scrub.value]).toEqual(["2", "19", "2"]);
     expect(text("angle")).toBe(steerParts(2).size);
     expect(text("side")).toBe("right");
-    expect(text("when")).toBe("Frame 3 of 20, 0.1 s in");
-    expect(scrub.getAttribute("aria-valuetext")).toBe(`Frame 3 of 20, 0.1 s in: the model estimates ${steerParts(2).size} right`);
+    expect(text("when")).toBe("Frame 3 of 20, 0.1\u00A0s in");
+    expect(scrub.getAttribute("aria-valuetext")).toBe(`Frame 3 of 20, 0.1\u00A0s in: the model estimates ${steerParts(2).size} right`);
     expect(text("note")).toBe("drive.mp4: 20 frames read, 18 answers.");
     expect(q("wheel").dataset["waiting"]).toBe("false");
     // The reading's second reader and its session are let go of; the video on
@@ -329,7 +373,7 @@ describe("a video read from start to finish", () => {
     expect(scrub.value).toBe("8");
     for (let i = 0; i < 12; i += 1) q("back").click();
     expect(scrub.value).toBe("2");
-    expect(text("when")).toBe("Frame 3 of 20, 0.1 s in");
+    expect(text("when")).toBe("Frame 3 of 20, 0.1\u00A0s in");
   });
 
   it("releases the session once read, and plays on its own unless motion is reduced", async () => {
@@ -353,18 +397,65 @@ describe("a video read from start to finish", () => {
   it("reads a long video up to the cap, from its start, and says so", async () => {
     const { own } = mount({ video: fakeVideo({ duration: 60 }) });
     await own.choose(videoFile("long.mp4"));
-    expect(own.status()).toEqual({ phase: "done", name: "long.mp4", total: MAX_FRAMES, answerable: MAX_FRAMES - 2, capped: true });
+    expect(own.status()).toEqual({ phase: "done", name: "long.mp4", total: MAX_FRAMES, answerable: MAX_FRAMES - 2, capped: true, early: false });
     expect(text("note")).toBe(`long.mp4: ${MAX_FRAMES} frames read, ${MAX_FRAMES - 2} answers. The video is longer than the page reads, so these are its first 30 seconds.`);
+  });
+
+  it("stops where a file cut short stops giving new frames, says so, and keeps nothing past it", async () => {
+    const { own, sessions } = mount({ video: fakeVideo({ duration: 1, endAt: 8 }) });
+    await own.choose(videoFile("cut.mp4"));
+    await settle();
+    expect(own.status()).toEqual({ phase: "done", name: "cut.mp4", total: 8, answerable: 6, capped: false, early: true });
+    expect(text("note")).toBe("cut.mp4: the file ends early. Only its first 0.4 seconds could be read, so these are the answers for that part: 8 frames read, 6 answers.");
+    expect(q<HTMLInputElement>("scrub").max).toBe("7");
+    expect(text("live")).toContain("the file ends early");
+    // The player never goes past the end.
+    for (let i = 0; i < 12; i += 1) q("forward").click();
+    expect(q<HTMLInputElement>("scrub").value).toBe("7");
+    expect(text("when")).toBe("Frame 8 of 8, 0.4\u00A0s in");
+    // Answers given before the end was known are not shown for frames past it.
+    expect(sessions.log.runs.flatMap((run) => run.firsts.map((pixel) => pixel[0])).filter((frame) => (frame as number) < 8)).toHaveLength(6);
+  });
+
+  it("calls a file that stops before one answer damaged", async () => {
+    const { own } = mount({ video: fakeVideo({ duration: 1, endAt: 2 }) });
+    await own.choose(videoFile("stub.mp4"));
+    expect(own.status()).toMatchObject({ phase: "error", failure: "damaged" });
+    expect(text("error-title")).toBe("That video looks damaged or incomplete");
+  });
+
+  it("reads a video of no stated length up to the cap, and its end there is no early end", async () => {
+    const ended = mount({ video: fakeVideo({ duration: Number.POSITIVE_INFINITY, endAt: 30 }) });
+    await ended.own.choose(videoFile("recorded.webm"));
+    expect(ended.video.seen.planned).toBe(MAX_FRAMES);
+    expect(ended.own.status()).toEqual({ phase: "done", name: "recorded.webm", total: 30, answerable: 28, capped: false, early: false });
+    expect(text("note")).toBe("recorded.webm: 30 frames read, 28 answers.");
+
+    document.body.innerHTML = "";
+    const long = mount({ video: fakeVideo({ duration: Number.POSITIVE_INFINITY }) });
+    await long.own.choose(videoFile("long.webm"));
+    expect(long.own.status()).toMatchObject({ phase: "done", total: MAX_FRAMES, capped: true });
+    expect(text("note")).toBe(`long.webm: ${MAX_FRAMES} frames read, ${MAX_FRAMES - 2} answers. The page reads at most a video’s first 30 seconds, and this one runs at least that long.`);
+  });
+
+  it("keeps the scrubber's spoken value on the frame on screen while the video plays", async () => {
+    const { own } = mount({ reduced: false });
+    await own.choose(videoFile());
+    await settle();
+    const video = q<HTMLVideoElement>("video");
+    video.currentTime = (11 + 0.5) / 20;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(q<HTMLInputElement>("scrub").getAttribute("aria-valuetext")).toMatch(/^Frame 12 of 20, 0\.6\u00A0s in: the model estimates /);
   });
 
   it("writes the rules in once the data is in: the crop, the pace from the measured gap, the cap", async () => {
     mount();
     await settle();
     expect(text("rule-crop")).toBe(
-      "It reads the bottom 59% of each frame, at full width, as it did in training. From a portrait video it first takes the band across the middle with the shape of the camera it learned from (455 × 256), then the bottom 59% of that.",
+      "It takes the part of each frame with the shape of the camera it learned from (455 × 256), as large as fits: the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. Of that it reads the bottom 59%, at full width, as it did in training, so nothing is squeezed.",
     );
     expect(text("rule-pace")).toBe(
-      "It reads a frame every 50 ms, so each answer compares a frame with the one 100 ms before it: the median gap between a frame and the one two frames before it on the 2018 drive, which it learned from. Its first answer is on the third frame it reads, as each one needs the frame two frames before.",
+      "It reads a frame every 50 ms, so each answer compares a frame with one about 100 ms before it: the median gap between a frame and the one two frames before it on the 2018 drive, which it learned from. Its first answer is on the third frame it reads, as each one needs the frame two frames before.",
     );
     expect(text("rule-cap")).toBe("It reads up to 600 frames, so a longer video is read for its first 30 seconds.");
     expect(text("eye-caption")).toBe("What the model gets from this frame, 200 × 66 pixels, with where it looked.");
@@ -373,12 +464,21 @@ describe("a video read from start to finish", () => {
   it("redraws the drawing of the rule to the camera the model learned from", async () => {
     mount();
     await settle();
-    const band = document.querySelector('[data-ownclip-art="land"]') as SVGRectElement;
-    const height = Number(band.getAttribute("height"));
-    const y = Number(band.getAttribute("y"));
-    // The landscape frame of the drawing is 99 tall from y = 22; its bottom 150 / 256.
-    expect(height).toBeCloseTo((99 * 150) / 256, 1);
-    expect(y + height).toBeCloseTo(22 + 99, 1);
+    const box = (name: string) => {
+      const rect = document.querySelector(`[data-ownclip-art="${name}"]`) as SVGRectElement;
+      return ["x", "y", "width", "height"].map((key) => Number(rect.getAttribute(key))) as [number, number, number, number];
+    };
+    const [, y, , height] = box("land");
+    // The landscape frame of the drawing is 90 tall from y = 25 (16:9, a hair
+    // wider than the camera); the band is its bottom 150 / 256.
+    expect(height).toBeCloseTo((90 * 150) / 256, 1);
+    expect(y + height).toBeCloseTo(25 + 90, 1);
+    // The wide frame (120 x 50 at x = 276): its centred camera-shaped part,
+    // then that part's bottom share, in the camera's shape.
+    const [wx, , ww, wh] = box("wide");
+    expect(ww).toBeCloseTo((50 * 455) / 256, 1);
+    expect(wx).toBeCloseTo(276 + (120 - (50 * 455) / 256) / 2, 1);
+    expect(ww / wh).toBeCloseTo(455 / 150, 1);
   });
 });
 
@@ -397,7 +497,7 @@ describe("a file the page cannot read", () => {
     await own.choose(new File([], "empty.mp4", { type: "video/mp4" }));
     expect(own.status()).toEqual({ phase: "error", name: "empty.mp4", failure: "empty" });
     expectError("There is nothing to read in that file");
-    expect(text("error-text")).toBe("It is empty, or too short for one answer, which needs two frames 100 ms apart.");
+    expect(text("error-text")).toBe("It is empty, or too short for one answer, which needs two frames about 100 ms apart.");
     expect(video.seen.opened).toHaveLength(0);
     expect(sessions.log.opened).toBe(0);
     expect(urls.made).toHaveLength(0);
@@ -424,8 +524,9 @@ describe("a file the page cannot read", () => {
     expect(own.status()).toMatchObject({ phase: "error", failure: "not-a-video" });
   });
 
-  it("says a video of no known length cannot be placed in time", async () => {
-    const { own } = mount({ video: fakeVideo({ duration: Number.POSITIVE_INFINITY }) });
+  it("says a video of no known length that cannot be stepped through cannot be placed in time", async () => {
+    const endless = Number.POSITIVE_INFINITY;
+    const { own } = mount({ video: fakeVideo({ duration: endless, failAt: { frame: 0, evidence: { seekTimedOut: true, duration: endless } } }) });
     await own.choose(videoFile("stream.webm"));
     expect(own.status()).toMatchObject({ phase: "error", failure: "too-long" });
     expectError("That video does not say how long it is");
