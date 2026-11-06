@@ -73,6 +73,21 @@ def test_saliency_wrapper_matches_the_plain_model_for_every_architecture():
         assert sal.shape == (3, 66, 200) and float(sal.min()) >= 0 and float(sal.max()) <= 1
 
 
+def test_visual_backprop_scales_each_map_onto_zero_to_one_whatever_the_activations_scale():
+    """Each sample's map runs from exactly 0 to 1, on its own: the second sample's activations are
+    the first's times three at every layer, so its raw relevance is 27 times larger and its map is
+    the same. The bounds above cannot show this: a random PilotNet's raw relevance already lies
+    between 0 and 1."""
+    from sightline.saliency import visual_backprop
+    torch.manual_seed(0)
+    first = [torch.rand(1, c, h, w) + 0.1 for c, h, w in ((8, 31, 98), (16, 14, 47), (32, 5, 22))]
+    maps = visual_backprop([torch.cat([a, 3 * a]) for a in first]).flatten(1)
+    assert maps.shape == (2, 66 * 200)
+    assert torch.equal(maps.min(dim=1).values, torch.zeros(2))
+    torch.testing.assert_close(maps.max(dim=1).values, torch.ones(2))
+    torch.testing.assert_close(maps[1], maps[0])
+
+
 # --- runs: what training records is what loading a run restores -----------
 
 
