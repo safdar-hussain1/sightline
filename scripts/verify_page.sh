@@ -107,10 +107,11 @@ trap 'exit 130' INT TERM
 CHROME_PID=$!
 
 # The title of the "page" target on $URL, compared without the fragment and
-# with an empty path read as "/"; nothing while there is none.
+# with an empty path read as "/"; nothing while there is none. The endpoint
+# HTML-escapes titles, so the title is unescaped back to what the page wrote.
 read_title() {
   curl -s --max-time 5 "http://127.0.0.1:$1/json/list" | "$PYTHON" -c '
-import json, sys
+import html, json, sys
 from urllib.parse import urlsplit
 
 def key(url):
@@ -124,7 +125,7 @@ except Exception:
 wanted = key(sys.argv[1])
 for target in targets:
     if target.get("type") == "page" and key(target.get("url", "")) == wanted:
-        print(target.get("title", ""))
+        print(html.unescape(target.get("title", "")))
         break
 ' "$URL" || true
 }
