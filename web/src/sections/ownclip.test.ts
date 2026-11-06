@@ -15,6 +15,7 @@ import type { Clip, Results } from "../data/types.ts";
 import { steerParts } from "../format.ts";
 import type { LiveCockpit, LiveStatus } from "../cockpit/live.ts";
 import { OwnClip, cockpitClip, loadContext, shippedSession, type ClipFacts, type Context, type ObjectUrls, type OpenSession, type Session } from "./ownclip.ts";
+import { answeredNote, doneNote, failureWords } from "./ownclip-copy.ts";
 import { ownclipHtml } from "./ownclip-markup.ts";
 import { ClipError, MAX_FRAMES, readingPace, type Evidence } from "./ownclip-plan.ts";
 import type { OpenVideo, VideoSource } from "./ownclip-reader.ts";
@@ -293,18 +294,59 @@ describe("the clip's facts, from the cockpit", () => {
 
   it("reads them from the cockpit's clip once it has one, and fetches nothing", async () => {
     const cockpit = live([{}, {}, { state: "ready", clip: clip() }]);
-    const facts = await cockpitClip(Promise.resolve(cockpit), Promise.resolve(results() as Results), 1);
+    const facts = await cockpitClip(Promise.resolve(cockpit), Promise.resolve(results() as Results), 1).facts;
     expect(facts.frame_lags).toEqual([2]);
     expect(facts.camera_size).toEqual([455, 256]);
     expect(fetched).toEqual([]);
   });
 
   it("fetches the first clip file itself when the cockpit cannot start, or fails", async () => {
-    await cockpitClip(Promise.resolve(null), Promise.resolve(results() as Results), 1);
+    await cockpitClip(Promise.resolve(null), Promise.resolve(results() as Results), 1).facts;
     expect(fetched).toHaveLength(1);
-    await cockpitClip(Promise.resolve(live([{ state: "unavailable" }])), Promise.resolve(results() as Results), 1);
+    await cockpitClip(Promise.resolve(live([{ state: "unavailable" }])), Promise.resolve(results() as Results), 1).facts;
     expect(fetched).toHaveLength(2);
     expect(fetched[0]).toMatch(/data\/clips\/c2017\/clip\.json$/);
+  });
+
+  it("does not wait on the cockpit's decoded frames once a video is chosen: it fetches the clip file at once", async () => {
+    // The cockpit is still decoding, for as long as it likes.
+    const source = cockpitClip(Promise.resolve(live([{}])), Promise.resolve(results() as Results), 1, 60_000);
+    const started = Date.now();
+    const facts = await source.now();
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(facts.camera_size).toEqual([455, 256]);
+    expect(fetched).toHaveLength(1);
+    // Asked again, it fetches nothing more.
+    await source.now();
+    expect(fetched).toHaveLength(1);
+  });
+
+  it("fetches nothing when a video is chosen after the cockpit has its clip", async () => {
+    const source = cockpitClip(Promise.resolve(live([{ state: "ready", clip: clip() }])), Promise.resolve(results() as Results), 1);
+    await source.facts;
+    await source.now();
+    expect(fetched).toEqual([]);
+  });
+});
+
+describe("a page whose measurements cannot be had", () => {
+  it("leaves no failure unheard when results.json does not load", async () => {
+    const heard: unknown[] = [];
+    const listen = (reason: unknown) => heard.push(reason);
+    const node = (globalThis as { process?: { on(e: string, f: (r: unknown) => void): void; off(e: string, f: (r: unknown) => void): void } }).process;
+    node?.on("unhandledRejection", listen);
+    try {
+      const section = document.createElement("section");
+      section.id = "own-video";
+      section.innerHTML = ownclipHtml();
+      document.body.append(section);
+      const failed = Promise.reject(new Error("results.json is not on this server"));
+      OwnClip.mount(failed, Promise.resolve(null));
+      for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      node?.off("unhandledRejection", listen);
+    }
+    expect(heard).toEqual([]);
   });
 });
 
@@ -452,7 +494,7 @@ describe("a video read from start to finish", () => {
     mount();
     await settle();
     expect(text("rule-crop")).toBe(
-      "It takes the part of each frame with the shape of the camera it learned from (455 × 256), as large as fits: the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. Of that it reads the bottom 59%, at full width, as it did in training, so nothing is squeezed.",
+      "It takes the part of each frame with the shape of the camera it learned from (455 × 256), as large as fits: the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. Of that part it reads the bottom 59%, across its whole width, as it did in training, so nothing is squeezed.",
     );
     expect(text("rule-pace")).toBe(
       "It reads a frame every 50 ms, so each answer compares a frame with one about 100 ms before it: the median gap between a frame and the one two frames before it on the 2018 drive, which it learned from. Its first answer is on the third frame it reads, as each one needs the frame two frames before.",
@@ -637,6 +679,32 @@ describe("a reading stopped or replaced", () => {
 });
 
 // -- What it never does ------------------------------------------------------------------
+
+describe("the words", () => {
+  it("serve the crop rule whole before the data is in: the camera-shaped part, then its bottom, with no number", () => {
+    const served = document.createElement("div");
+    served.innerHTML = ownclipHtml();
+    const rule = served.querySelector('[data-ownclip="rule-crop"]')?.textContent ?? "";
+    expect(rule).toMatch(/shape of the camera it learned from, as large as fits/);
+    expect(rule).toMatch(/portrait/);
+    expect(rule).toMatch(/wider/);
+    expect(rule).toMatch(/bottom part/);
+    expect(rule).not.toMatch(/full width/);
+    expect(rule).not.toMatch(/\d/);
+  });
+
+  it("count one answer as one, not as answers", () => {
+    const reading = context().reading;
+    expect(doneNote("blink.mp4", 3, 1, { capped: false, early: false, endless: false }, reading)).toBe("blink.mp4: 3 frames read, 1 answer.");
+    expect(answeredNote(1, 1, reading)).toBe("1 of 1 answer so far.");
+    expect(answeredNote(2, 9, reading)).toBe("2 of 9 answers so far.");
+  });
+
+  it("say the demo above is not affected only while it is running", () => {
+    expect(failureWords("unknown", null, true).text).toMatch(/the demo above is not affected/);
+    expect(failureWords("unknown", null, false).text).not.toMatch(/demo above/);
+  });
+});
 
 describe("the visitor's video stays on the device", () => {
   it("sends nothing anywhere while a video is read: the only request is the model's own download", async () => {

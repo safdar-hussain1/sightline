@@ -106,7 +106,12 @@ export interface ObjectUrls {
 }
 
 export interface Deps {
+  /** The reading's context, without hurrying anything. */
   readonly context: Promise<Context>;
+  /** The context once a video is chosen, when waiting is no longer worth it. */
+  readonly contextNow?: () => Promise<Context>;
+  /** Whether the cockpit above is running. */
+  readonly demoRunning?: () => boolean;
   readonly openSession?: OpenSession;
   readonly openVideo?: OpenVideo;
   readonly urls?: ObjectUrls;
@@ -137,25 +142,40 @@ export type ClipFacts = Pick<Clip, "frame_lags" | "camera_size" | "sprite" | "fp
 const CLIP_POLL_MS = 250;
 const CLIP_PATIENCE_MS = 20000;
 
+/** A clip file's facts, as the section waits for them: `facts` without
+ * asking for anything, `now()` once a video is chosen and there is no more
+ * time to wait. */
+export interface ClipSource {
+  readonly facts: Promise<ClipFacts>;
+  now(): Promise<ClipFacts>;
+}
+
 /**
- * A clip file's facts, from the cockpit: it fetches the clip files anyway,
- * so the section reads them from it rather than asking again. Only when the
- * cockpit cannot start, fails, or has no clip in time is the first clip file
- * that results.json names fetched here.
+ * A clip file's facts. The cockpit fetches the clip files anyway, so while
+ * nobody is waiting the section reads them from the cockpit's clip, which it
+ * has once that clip's frames are decoded, rather than asking again; only
+ * when the cockpit cannot start, fails, or has no clip in time is the first
+ * clip file that results.json names fetched here. Once a video is chosen
+ * (`now()`) the section no longer waits on the cockpit's decoding: it
+ * fetches that clip file itself at once, unless the cockpit has its clip
+ * already -- one small file, usually from the browser's cache, against a
+ * wait that on a slow connection could be long.
  */
 export function cockpitClip(
   cockpit: Promise<LiveCockpit | null>,
   results: Promise<Results>,
   poll = CLIP_POLL_MS,
   patience = CLIP_PATIENCE_MS,
-): Promise<ClipFacts> {
-  const fetchOwn = async (): Promise<ClipFacts> => {
-    const loaded = await results;
-    const path = Object.values(loaded.assets.clips)[0];
-    if (path === undefined) throw new Error("results.json names no clips");
-    return loadClip(new URL(path, document.baseURI).href);
-  };
-  return cockpit.then((live) => {
+): ClipSource {
+  let own: Promise<ClipFacts> | null = null;
+  const fetchOwn = (): Promise<ClipFacts> =>
+    (own ??= results.then((loaded) => {
+      const path = Object.values(loaded.assets.clips)[0];
+      if (path === undefined) throw new Error("results.json names no clips");
+      return loadClip(new URL(path, document.baseURI).href);
+    }));
+  let settled: ClipFacts | null = null;
+  const facts = cockpit.then((live) => {
     if (!live) return fetchOwn();
     return new Promise<ClipFacts>((resolve, reject) => {
       const started = Date.now();
@@ -164,7 +184,7 @@ export function cockpitClip(
         if (status.clip) {
           window.clearInterval(timer);
           resolve(status.clip);
-        } else if (status.state === "unavailable" || Date.now() - started > patience) {
+        } else if (status.state === "unavailable" || own !== null || Date.now() - started > patience) {
           window.clearInterval(timer);
           fetchOwn().then(resolve, reject);
         }
@@ -173,15 +193,20 @@ export function cockpitClip(
       look();
     });
   }, fetchOwn);
+  facts.then((known) => (settled = known), () => undefined);
+  return {
+    facts,
+    now: () => (settled ? Promise.resolve(settled) : Promise.race([facts, fetchOwn()])),
+  };
 }
 
 /** The reading's context, from results.json and a clip file's facts: the
  * model's history and input size and the camera from the clip, and the pace
  * from the measured gaps of the drive the shipped model learned from (the
- * timed drive its run is named after, or else the first timed drive). */
+ * timed drive its run is named after, or else the first timed drive). Both
+ * are waited on together, so a failure of either is heard here. */
 export async function loadContext(results: Promise<Results>, clip: Promise<ClipFacts>): Promise<Context> {
-  const loaded = await results;
-  const facts = await clip;
+  const [loaded, facts] = await Promise.all([results, clip]);
   const gaps = driveGaps(loaded.raw);
   const timed = Object.keys(gaps).filter((drive) => gaps[drive] != null);
   const drive = timed.find((name) => loaded.shipped.run.startsWith(`${name}_`)) ?? timed[0] ?? null;
@@ -248,13 +273,27 @@ export class OwnClip {
     mountMarkup(OWNCLIP_ROOT, ownclipHtml);
     const section = document.getElementById(OWNCLIP_ID);
     if (!section) return null;
-    const context = loadContext(results, cockpitClip(cockpit, results));
+    const clip = cockpitClip(cockpit, results);
+    const context = loadContext(results, clip.facts);
     context.catch(() => undefined); // said when a file is chosen
-    return new OwnClip(section, { context });
+    let urgent: Promise<Context> | null = null;
+    const contextNow = () => {
+      urgent ??= loadContext(results, clip.now());
+      urgent.catch(() => undefined);
+      return urgent;
+    };
+    let live: LiveCockpit | null = null;
+    cockpit.then(
+      (running) => (live = running),
+      () => undefined,
+    );
+    return new OwnClip(section, { context, contextNow, demoRunning: () => live?.status().state === "ready" });
   }
 
   private readonly section: HTMLElement;
   private readonly context: Promise<Context>;
+  private readonly contextNow: (() => Promise<Context>) | null;
+  private readonly demoRunning: () => boolean;
   private readonly openSession: OpenSession;
   private readonly openVideo: OpenVideo;
   private readonly urls: ObjectUrls;
@@ -280,6 +319,8 @@ export class OwnClip {
   constructor(section: HTMLElement, deps: Deps) {
     this.section = section;
     this.context = deps.context;
+    this.contextNow = deps.contextNow ?? null;
+    this.demoRunning = deps.demoRunning ?? (() => false);
     this.openSession = deps.openSession ?? shippedSession;
     this.openVideo = deps.openVideo ?? browserOpenVideo;
     this.urls = deps.urls ?? { create: (file) => URL.createObjectURL(file), revoke: (url) => URL.revokeObjectURL(url) };
@@ -423,7 +464,7 @@ export class OwnClip {
       if (this.run !== run || run.controller.signal.aborted) throw stopped();
     };
     try {
-      const context = await this.context;
+      const context = await (this.contextNow?.() ?? this.context);
       live();
       const { reading } = context;
       if (file.size === 0) throw new ClipError("the file is empty", { bytes: 0 });
@@ -957,7 +998,7 @@ export class OwnClip {
           : "";
         break;
       case "error": {
-        const words = failureWords(state.failure, reading);
+        const words = failureWords(state.failure, reading, this.demoRunning());
         this.part("error-title").textContent = words.title;
         this.part("error-text").textContent = words.text;
         status.textContent = "";

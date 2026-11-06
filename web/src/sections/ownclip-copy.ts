@@ -44,6 +44,9 @@ export function capSeconds(pace: Pace): number {
   return MAX_FRAMES * pace.stepS;
 }
 
+/** `n` things, one of them in the singular: "1 answer", "2 answers". */
+const counted = (n: number, word: string) => `${fmtCount(n)} ${word}${n === 1 ? "" : "s"}`;
+
 /** How many frames one answer reads: the frame itself and its history. */
 const framesPerAnswer = (reading: Reading) => reading.lags.length + 1;
 
@@ -55,7 +58,7 @@ export function cropRule(reading: Reading): string {
   return (
     `It takes the part of each frame with the shape of the camera it learned from (${w} × ${h}), as large as fits: ` +
     `the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. ` +
-    `Of that it reads the bottom ${share}, at full width, as it did in training, so nothing is squeezed.`
+    `Of that part it reads the bottom ${share}, across its whole width, as it did in training, so nothing is squeezed.`
   );
 }
 
@@ -87,14 +90,14 @@ export function eyeCaptionText(reading: Reading): string {
 
 // -- How far it has got ------------------------------------------------------------------
 
-export const OPENING = "Opening your video";
+export { OPENING } from "./ownclip-boot.ts";
 
 export function readingStatus(read: number, total: number): string {
   return `Reading frame ${fmtCount(Math.min(total, read + 1))} of ${fmtCount(total)}`;
 }
 
 export function answeredNote(answered: number, answerable: number, reading: Reading): string {
-  if (answered > 0) return `${fmtCount(answered)} of ${fmtCount(answerable)} answers so far.`;
+  if (answered > 0) return `${fmtCount(answered)} of ${counted(answerable, "answer")} so far.`;
   return `The model answers as soon as it has ${countWord(framesPerAnswer(reading))} frames to compare.`;
 }
 
@@ -116,7 +119,7 @@ export interface Ending {
 /** The line under the player once a video has been read: the file's own
  * name, so the visitor knows what is playing, and what was read of it. */
 export function doneNote(name: string, total: number, answerable: number, ending: Ending, reading: Reading): string {
-  const counts = `${fmtCount(total)} frames read, ${fmtCount(answerable)} answers.`;
+  const counts = `${counted(total, "frame")} read, ${counted(answerable, "answer")}.`;
   if (ending.early) {
     return `${name}: the file ends early. Only its first ${secondsText(total * reading.pace.stepS)} could be read, so these are the answers for that part: ${counts}`;
   }
@@ -149,8 +152,10 @@ export interface FailureWords {
 }
 
 /** The message for each kind of failure; `reading` (null until the data has
- * loaded) lets the one for a too-short video say what one answer needs. */
-export function failureWords(failure: Failure, reading: Reading | null): FailureWords {
+ * loaded) lets the one for a too-short video say what one answer needs, and
+ * `demoRunning` lets a failure of the page's own say the demo above is not
+ * affected, only when that is so. */
+export function failureWords(failure: Failure, reading: Reading | null, demoRunning = false): FailureWords {
   switch (failure) {
     case "not-a-video":
       return {
@@ -160,7 +165,7 @@ export function failureWords(failure: Failure, reading: Reading | null): Failure
     case "codec":
       return {
         title: "This browser cannot decode that video",
-        text: "Its picture is in a format this browser does not play. Try another browser, or save the video as an MP4 (H.264), which most browsers play.",
+        text: "It is in a format this browser does not play. Try another browser, or save the video as an MP4 (H.264), which most browsers play.",
       };
     case "empty": {
       const needs =
@@ -182,7 +187,7 @@ export function failureWords(failure: Failure, reading: Reading | null): Failure
     case "unknown":
       return {
         title: "The model could not read that video",
-        text: "Something went wrong part way, so it stopped. Choose the video again, or try another; the demo above is not affected.",
+        text: `Something went wrong part way, so it stopped. Choose the video again, or try another${demoRunning ? "; the demo above is not affected" : ""}.`,
       };
   }
 }

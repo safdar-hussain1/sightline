@@ -220,7 +220,7 @@ export function ownclipHtml(): string {
           <div class="ownclip__notes">
             <h3 class="ownclip__notes-title">How it reads your video</h3>
             <ul class="ownclip__rules">
-              <li data-ownclip="rule-crop">It reads the bottom of each frame, at full width, the share of the picture it was trained on. From a portrait video it first takes the band across the middle with the shape of the camera it learned from, then the bottom of that.</li>
+              <li data-ownclip="rule-crop">It takes the part of each frame with the shape of the camera it learned from, as large as fits: the whole frame of a video that shape, the band across the middle of a portrait one, the middle of a wider one. Of that it reads the bottom part, the share of the picture it was trained on, so nothing is squeezed.</li>
               <li data-ownclip="rule-pace">It steps through your video so that the frames each answer compares are as far apart in time as the ones it learned from. Its first answer comes once it has a frame from just before.</li>
               <li data-ownclip="rule-cap">A long video is read from its start, up to a limit.</li>
             </ul>

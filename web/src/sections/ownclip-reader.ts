@@ -20,13 +20,25 @@
  *
  * A file cut short -- still copying, a download that broke off -- can keep
  * answering every seek with its last decodable frame, as if it were whole.
- * So each frame is checked against the one the same element drew before:
- * pixels that repeat while the frame on screen falls well behind the time
- * asked for (`requestVideoFrameCallback` says which frame is on screen, and
- * stops when nothing new comes) mean the file gives no new frames from
- * there. Reading stops at the first frame after the last real one, and none
- * of the repeated frames is passed on. A scene that does not change is not
- * mistaken for this: its frames are new, only their pixels repeat.
+ * So each frame is checked against the one the same element drew before.
+ * Pixels that repeat are a still scene, a gap in a variable frame rate, or a
+ * file that gives no new frames, and the browser's word on the frame it
+ * presented tells them apart: `requestVideoFrameCallback` gives its media
+ * time, and stops when nothing new comes; where it is missing, a count of
+ * frames decoded (`webkitDecodedFrameCount`) says whether the seek decoded
+ * anything. A repeated frame the browser shows as new -- a still scene -- is
+ * passed on at once, so the progress keeps moving. One it does not is held
+ * back; once the picture has stood more than a second and a half behind the
+ * time asked for, a seek far ahead looks for a newer frame: one found means
+ * a gap, and the held frames are passed on; none means the file stops there,
+ * and reading stops at the first frame after the last real one, with none
+ * of the repeated frames passed on. Where the browser says nothing of the
+ * frames it presents, no frame is held and the page never cuts a reading
+ * short: it cannot tell a cut file from a still scene there, so it claims
+ * neither.
+ *
+ * A decoding error can be passing (a decoder under load), so the element on
+ * screen opens the file again, once, before the error counts.
  *
  * Each frame is cropped to the part the model reads and scaled to its input
  * with `drawImage` at `imageSmoothingQuality = "high"`. Training shrank its
@@ -59,6 +71,15 @@ const LIMIT_TICK_MS = 250;
  * second and a half would be a slide show), so a slow frame rate is never
  * mistaken for a file cut short. */
 const STALE_S = 1.5;
+
+/** How long a repeated frame waits for the browser to say it presented a new
+ * frame for its seek, ms; and how long the look ahead past a standing
+ * picture waits. */
+const PRESENT_WAIT_MS = 120;
+const PROBE_WAIT_MS = 400;
+
+/** MediaError's code for a picture that could not be decoded. */
+const MEDIA_ERR_DECODE = 3;
 
 /** How a reading ended: `end` is the number of frames read when the file
  * stopped giving new frames before the last one asked for; null when every
@@ -101,6 +122,9 @@ export interface ReaderDeps {
   /** Call `onFrame` with the media time of every frame `video` presents,
    * until the returned function is called; null where the browser cannot say. */
   watch(video: HTMLVideoElement, onFrame: (mediaTime: number) => void): (() => void) | null;
+  /** The number of frames `video` has decoded so far; null where the browser
+   * does not count them. */
+  decoded(video: HTMLVideoElement): number | null;
   /** Whether the page is on screen (not a tab in the background). */
   visible(): boolean;
 }
@@ -271,14 +295,34 @@ function browserWatch(video: HTMLVideoElement, onFrame: (mediaTime: number) => v
   };
 }
 
+function browserDecoded(video: HTMLVideoElement): number | null {
+  const count = (video as HTMLVideoElement & { webkitDecodedFrameCount?: number }).webkitDecodedFrameCount;
+  return typeof count === "number" ? count : null;
+}
+
 const browserDeps = (): ReaderDeps => ({
   create: () => document.createElement("video"),
   grab: browserGrab(),
   watch: browserWatch,
+  decoded: browserDecoded,
   visible: () => document.visibilityState !== "hidden",
 });
 
 // -- Opening and reading ------------------------------------------------------------------
+
+const isDecodeError = (error: unknown) => error instanceof ClipError && error.evidence.mediaError === MEDIA_ERR_DECODE;
+
+/** Open `url` in `video`; a decoding error, which can be passing, earns one
+ * more try. */
+async function openAgainOnce(video: HTMLVideoElement, url: string, evidence: Evidence, signal: AbortSignal, deps: ReaderDeps): Promise<Evidence> {
+  try {
+    return await open(video, url, evidence, signal, deps);
+  } catch (error) {
+    if (!isDecodeError(error) || signal.aborted) throw error;
+    emptyVideo(video);
+    return open(video, url, evidence, signal, deps);
+  }
+}
 
 /** Open the file at `url` for reading, with `display` (the video on screen)
  * as the first of the elements that seek through it. */
@@ -289,7 +333,7 @@ export async function openVideo(
   display: HTMLVideoElement,
   deps: ReaderDeps = browserDeps(),
 ): Promise<VideoSource> {
-  const seen = await open(display, url, evidence, signal, deps);
+  const seen = await openAgainOnce(display, url, evidence, signal, deps);
   let second: HTMLVideoElement | null = null;
   try {
     second = deps.create();
@@ -305,7 +349,7 @@ export async function openVideo(
     width: seen.width as number,
     height: seen.height as number,
     duration: seen.duration as number,
-    read: (times, crop, [w, h], onFrame, outer) => readFrames([display, ...others], seen, times, crop, w, h, onFrame, outer, deps),
+    read: (times, crop, [w, h], onFrame, outer) => readFrames([display, ...others], url, seen, times, crop, w, h, onFrame, outer, deps),
     close: () => others.forEach(emptyVideo),
   };
 }
@@ -316,12 +360,22 @@ interface Seeker {
   /** The pixels it drew last. */
   prev: Bytes | null;
   /** Frames whose pixels repeat the one before, held back until it is
-   * clear whether the scene is still or the file has stopped. */
+   * clear whether the picture stands still or the file has stopped. */
   held: Array<{ readonly j: number; readonly rgb: Bytes }>;
   /** The media time of the last frame it presented; null where unknown. */
   lastMedia: number | null;
+  /** Calls waiting for the next frame it presents. */
+  readonly waiters: Set<(mediaTime: number) => void>;
+  /** A media time the picture stood at in a gap the file went on after:
+   * frames showing it are real. */
+  knownGap: number | null;
   /** Seeks finished while the page was on screen, since it last was not. */
   visibleSeeks: number;
+  /** It has opened the file again after a decoding error. */
+  reopened: boolean;
+  /** The first frame of the run of repeated pictures it is in, passed on or
+   * held; null while the pictures change. */
+  repeatFrom: number | null;
   stopWatch: (() => void) | null;
 }
 
@@ -331,8 +385,28 @@ const same = (a: Bytes, b: Bytes) => {
   return true;
 };
 
+/** The media time of the next frame `seeker` presents for which `wanted`
+ * holds, or null if none comes within `ms` (or the browser cannot say). */
+function presented(seeker: Seeker, ms: number, wanted: (mediaTime: number) => boolean): Promise<number | null> {
+  if (seeker.stopWatch === null) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      seeker.waiters.delete(hear);
+      resolve(null);
+    }, ms);
+    const hear = (mediaTime: number) => {
+      if (!wanted(mediaTime)) return;
+      window.clearTimeout(timer);
+      seeker.waiters.delete(hear);
+      resolve(mediaTime);
+    };
+    seeker.waiters.add(hear);
+  });
+}
+
 async function readFrames(
   videos: readonly HTMLVideoElement[],
+  url: string,
   evidence: Evidence,
   times: readonly number[],
   crop: Rect,
@@ -343,13 +417,30 @@ async function readFrames(
   deps: ReaderDeps,
 ): Promise<ReadOutcome> {
   const step = times.length > 1 ? (times[1] as number) - (times[0] as number) : 0;
+  const last = times[times.length - 1] as number;
+  const duration = evidence.duration ?? Number.POSITIVE_INFINITY;
   const seekers: Seeker[] = videos.map((video) => {
-    const seeker: Seeker = { video, prev: null, held: [], lastMedia: null, visibleSeeks: 0, stopWatch: null };
+    const seeker: Seeker = {
+      video,
+      prev: null,
+      held: [],
+      lastMedia: null,
+      waiters: new Set(),
+      knownGap: null,
+      visibleSeeks: 0,
+      reopened: false,
+      repeatFrom: null,
+      stopWatch: null,
+    };
     seeker.stopWatch = deps.watch(video, (mediaTime) => {
       seeker.lastMedia = mediaTime;
+      for (const hear of [...seeker.waiters]) hear(mediaTime);
     });
     return seeker;
   });
+  // Without either word from the browser the page cannot tell a cut file
+  // from a still scene, and holds nothing back.
+  const canTell = (seeker: Seeker) => seeker.stopWatch !== null || deps.decoded(seeker.video) !== null;
   // A failure in the last element still reading stops the reading, and the
   // failure is what the caller hears, not the others' being stopped.
   const local = new AbortController();
@@ -373,29 +464,65 @@ async function readFrames(
   const pass = (seeker: Seeker, j: number, rgb: Bytes) => {
     if (j < cut) onFrame(j, rgb, seeker.video);
   };
+  const flush = (seeker: Seeker) => {
+    for (const held of seeker.held) pass(seeker, held.j, held.rgb);
+    seeker.held = [];
+  };
+
+  /** Whether the file has a newer frame than the one `seeker` stands at:
+   * a seek far ahead, to near the end of what is read. */
+  const newerAhead = async (seeker: Seeker, t: number, rgb: Bytes): Promise<boolean> => {
+    const ahead = Number.isFinite(duration) ? Math.max(last, duration - step / 2) : last;
+    if (!(ahead > t + step)) return false;
+    const standing = seeker.lastMedia;
+    const newer = presented(seeker, PROBE_WAIT_MS, (mediaTime) => standing === null || mediaTime > standing + step / 2);
+    const before = deps.decoded(seeker.video);
+    await seek(seeker.video, ahead, evidence, local.signal, deps);
+    const there = deps.grab(seeker.video, crop, w, h);
+    if (seeker.stopWatch !== null) return (await newer) !== null;
+    const after = deps.decoded(seeker.video);
+    return before !== null && after !== null && after > before && !same(there, rgb);
+  };
 
   /** The frame `rgb` at `j` from `seeker`: passed on, held back, or the sign
    * that the file stops before it. False once reading should stop. */
-  const examine = (seeker: Seeker, j: number, rgb: Bytes): boolean => {
+  const examine = async (seeker: Seeker, j: number, rgb: Bytes, fresh: () => Promise<boolean>): Promise<boolean> => {
     const t = times[j] as number;
-    if (seeker.prev === null || !same(rgb, seeker.prev)) {
-      for (const held of seeker.held) pass(seeker, held.j, held.rgb);
-      seeker.held = [];
+    if (seeker.prev === null || !same(rgb, seeker.prev) || !canTell(seeker)) {
+      flush(seeker);
       seeker.prev = rgb;
+      seeker.repeatFrom = null;
+      pass(seeker, j, rgb);
+      return true;
+    }
+    seeker.repeatFrom ??= j;
+    // The picture repeats. Shown as a new frame (a still scene), or as the
+    // picture of a gap the file is known to go on after, it is real.
+    const inGap = seeker.knownGap !== null && seeker.lastMedia !== null && Math.abs(seeker.lastMedia - seeker.knownGap) < 1e-6;
+    if (inGap || (await fresh())) {
+      flush(seeker);
       pass(seeker, j, rgb);
       return true;
     }
     seeker.held.push({ j, rgb });
-    const behind =
-      seeker.stopWatch !== null && seeker.lastMedia !== null
-        ? t - seeker.lastMedia
-        : t - (times[(seeker.held[0] as { j: number }).j] as number);
-    if (!(deps.visible() && seeker.visibleSeeks >= 2 && behind > STALE_S)) return true;
-    // The file gives no new frames from here. The first frame past its end
-    // is the first asked for a step after the last one it showed.
-    const last = seeker.stopWatch !== null && seeker.lastMedia !== null ? seeker.lastMedia : null;
     const first = (seeker.held[0] as { j: number }).j;
-    const past = last === null ? first : times.findIndex((time) => time >= last + step - 1e-9);
+    const behind = seeker.stopWatch !== null && seeker.lastMedia !== null ? t - seeker.lastMedia : t - (times[first] as number);
+    if (!(deps.visible() && seeker.visibleSeeks >= 2 && behind > STALE_S)) return true;
+    const standing = seeker.lastMedia;
+    if (await newerAhead(seeker, t, rgb)) {
+      // A gap: the picture stood still, and the file goes on after it.
+      seeker.knownGap = standing;
+      flush(seeker);
+      return true;
+    }
+    // The file gives no new frames from here. The first frame past its end
+    // is the first asked for a step after the last one it showed; where only
+    // a count of frames decoded can say, which a browser can raise a while
+    // past the end, it is the first repeat of the picture it stands at.
+    const past =
+      seeker.stopWatch !== null && standing !== null
+        ? times.findIndex((time) => time >= standing + step - 1e-9)
+        : (seeker.repeatFrom ?? first);
     cut = Math.min(cut, past < 0 ? first : Math.min(first, past));
     seeker.held = [];
     return false;
@@ -405,10 +532,29 @@ async function readFrames(
     for (;;) {
       const j = take();
       if (j === undefined) break;
+      const t = times[j] as number;
+      // Asked before the seek, so the frame it presents is heard.
+      const shown = presented(seeker, PRESENT_WAIT_MS, (mediaTime) => Math.abs(t - mediaTime) <= step + 1e-6);
+      const before = deps.decoded(seeker.video);
       try {
-        await seek(seeker.video, times[j] as number, evidence, local.signal, deps);
+        await seek(seeker.video, t, evidence, local.signal, deps);
       } catch (error) {
         if (isAbort(error) || local.signal.aborted) return;
+        if (isDecodeError(error) && !seeker.reopened) {
+          // A decoding error can be passing: open the file again, once, and
+          // read this frame again.
+          seeker.reopened = true;
+          try {
+            emptyVideo(seeker.video);
+            await open(seeker.video, url, evidence, local.signal, deps);
+            flush(seeker);
+            seeker.prev = null;
+            retry.push(j);
+            continue;
+          } catch (again) {
+            if (isAbort(again) || local.signal.aborted) return;
+          }
+        }
         if (alive.size > 1) {
           // Another element reads on, and takes this frame too.
           alive.delete(seeker);
@@ -429,11 +575,24 @@ async function readFrames(
         local.abort();
         return;
       }
-      if (!examine(seeker, j, rgb)) break;
+      const fresh = async () => {
+        if (seeker.stopWatch !== null) return (await shown) !== null;
+        const after = deps.decoded(seeker.video);
+        return before !== null && after !== null && after > before;
+      };
+      let going: boolean;
+      try {
+        going = await examine(seeker, j, rgb, fresh);
+      } catch (error) {
+        if (isAbort(error) || local.signal.aborted) return;
+        if (failure === null) failure = error;
+        local.abort();
+        return;
+      }
+      if (!going) break;
     }
-    // A still scene that lasted to the end of what was read is real.
-    for (const held of seeker.held) pass(seeker, held.j, held.rgb);
-    seeker.held = [];
+    // A picture that stood still to the end of what was read is real.
+    flush(seeker);
   };
 
   try {
@@ -445,7 +604,10 @@ async function readFrames(
     }
   } finally {
     outer.removeEventListener("abort", stop);
-    for (const seeker of seekers) seeker.stopWatch?.();
+    for (const seeker of seekers) {
+      seeker.stopWatch?.();
+      seeker.waiters.clear();
+    }
   }
   if (outer.aborted) throw aborted();
   if (failure !== null) throw failure;

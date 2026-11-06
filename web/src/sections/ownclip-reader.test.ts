@@ -31,6 +31,14 @@ interface Script {
   readonly decodableTo?: number;
   /** A scene that never changes: every frame's pixels are the same. */
   readonly still?: boolean;
+  /** A stretch with no frames at all (a variable frame rate's gap): the
+   * picture there is the last frame before it. */
+  readonly gap?: { readonly from: number; readonly to: number };
+  /** The element refuses the file once with this MediaError, then opens it. */
+  readonly refuseOnce?: { readonly code: number; readonly message: string };
+  /** How far past the decodable end the decoded-frame count still rises
+   * (a browser decoding what is left of a cut frame), seconds. */
+  readonly countsPast?: number;
 }
 
 /** A fake video element following `script`; `log` records the order of
@@ -42,11 +50,22 @@ function fakeVideo(script: Script, log: string[], name: string) {
   let seeks = 0;
   let duration = Number.NaN;
   let presented = -1;
+  let loads = 0;
   const fps = script.fps ?? 30;
   const end = script.decodableTo ?? Number.POSITIVE_INFINITY;
   const watchers = new Set<(mediaTime: number) => void>();
+  /** The source frame shown for a seek to `t`. */
+  const frameAt = (t: number) => {
+    let k = Math.min(Math.floor(t * fps + 1e-9), Math.floor(end * fps));
+    if (script.gap && k / fps >= script.gap.from && k / fps < script.gap.to) k = Math.ceil(script.gap.from * fps) - 1;
+    return k;
+  };
   const video = {
     name,
+    /** Frames decoded so far, as a browser counts them: none for a seek past
+     * the decodable end. */
+    decoded: 0,
+    seeks: 0,
     muted: false,
     preload: "",
     error: null as { code: number; message: string } | null,
@@ -75,8 +94,11 @@ function fakeVideo(script: Script, log: string[], name: string) {
         return;
       }
       time = t;
-      const frame = Math.min(Math.floor(t * fps), Math.floor(end * fps));
-      // A frame past the decodable end is the last one again, and nothing new is presented.
+      video.seeks += 1;
+      if (t <= end + (script.countsPast ?? 0)) video.decoded += 1;
+      const frame = frameAt(t);
+      // A frame past the decodable end, or in a gap, is the last one again,
+      // and nothing new is presented.
       if (frame !== presented) {
         presented = frame;
         queueMicrotask(() => watchers.forEach((watch) => watch(frame / fps)));
@@ -100,6 +122,14 @@ function fakeVideo(script: Script, log: string[], name: string) {
       log.push(`${name} src`);
     },
     load() {
+      loads += 1;
+      video.error = null;
+      if (script.refuse || (script.refuseOnce && loads === 1)) {
+        video.error = (script.refuse ?? script.refuseOnce) as { code: number; message: string };
+        log.push(`${name} refused`);
+        fire("error");
+        return;
+      }
       if (script.refuse) {
         video.error = script.refuse;
         log.push(`${name} refused`);
@@ -125,16 +155,26 @@ function fakeVideo(script: Script, log: string[], name: string) {
 
 type FakeVideo = ReturnType<typeof fakeVideo>;
 
-function deps(second: FakeVideo | (() => never)): ReaderDeps {
+/** What the fake browser can say of the frames it presents: their media
+ * times (requestVideoFrameCallback), a count of frames decoded, or neither. */
+interface Signals {
+  readonly watch?: boolean;
+  readonly counter?: boolean;
+}
+
+function deps(second: FakeVideo | (() => never), signals: Signals = { watch: true, counter: true }): ReaderDeps {
   return {
     create: () => (typeof second === "function" ? second() : second) as unknown as HTMLVideoElement,
     // Each frame's pixels say which source frame it is.
     grab: (video) => new Uint8Array(12).fill(((video as unknown as FakeVideo).frame + 1) % 256),
-    watch: (video, onFrame) => {
-      const fake = video as unknown as FakeVideo;
-      fake.watchers.add(onFrame);
-      return () => fake.watchers.delete(onFrame);
-    },
+    watch: signals.watch
+      ? (video, onFrame) => {
+          const fake = video as unknown as FakeVideo;
+          fake.watchers.add(onFrame);
+          return () => fake.watchers.delete(onFrame);
+        }
+      : () => null,
+    decoded: (video) => (signals.counter ? (video as unknown as FakeVideo).decoded : null),
     visible: () => true,
   };
 }
@@ -143,12 +183,23 @@ const EVIDENCE: Evidence = { bytes: 5000, container: "matroska" };
 const CROP = { sx: 0, sy: 0, sw: 640, sh: 360 };
 const times = (n: number, rate = 20) => Array.from({ length: n }, (_, j) => (j + 0.5) / rate);
 
-async function readAll(display: FakeVideo, second: FakeVideo, n: number) {
+async function readAll(display: FakeVideo, second: FakeVideo, n: number, signals?: Signals) {
   const signal = new AbortController().signal;
-  const source = await openVideo("blob:x", EVIDENCE, signal, display as unknown as HTMLVideoElement, deps(second));
+  const source = await openVideo("blob:x", EVIDENCE, signal, display as unknown as HTMLVideoElement, deps(second, signals));
   const got: number[] = [];
-  const outcome = await source.read(times(n), CROP, [2, 2], (j) => got.push(j), signal);
-  return { source, got: got.sort((a, b) => a - b), outcome };
+  // How far the frames passed on fall behind the seeks made, at worst.
+  let lag = 0;
+  const outcome = await source.read(
+    times(n),
+    CROP,
+    [2, 2],
+    (j) => {
+      got.push(j);
+      lag = Math.max(lag, display.seeks + second.seeks - got.length);
+    },
+    signal,
+  );
+  return { source, got: got.sort((a, b) => a - b), outcome, lag };
 }
 
 afterEach(() => {
@@ -189,6 +240,25 @@ describe("opening a file", () => {
     const second = fakeVideo({ failSeek: { at: 10, code: 3 } }, log, "second");
     const { got, outcome } = await readAll(display, second, 20);
     expect(got).toEqual(Array.from({ length: 20 }, (_, j) => j));
+    expect(outcome.end).toBeNull();
+  });
+
+  it("re-opens the element on screen once when it refuses the file with a decoding error, and reads on", async () => {
+    const log: string[] = [];
+    const display = fakeVideo({ refuseOnce: { code: 3, message: "PIPELINE_ERROR_DECODE" } }, log, "display");
+    const second = fakeVideo({}, log, "second");
+    const { got, outcome } = await readAll(display, second, 20);
+    expect(log.slice(0, 3)).toEqual(["display src", "display refused", "display src"]);
+    expect(got).toEqual(Array.from({ length: 20 }, (_, j) => j));
+    expect(outcome.end).toBeNull();
+  });
+
+  it("re-opens the element on screen once after a decoding error part way, when it reads alone, and reads on", async () => {
+    const log: string[] = [];
+    const display = fakeVideo({ failSeek: { at: 5, code: 3 } }, log, "display");
+    const second = fakeVideo({ refuse: { code: 4, message: "busy" } }, log, "second");
+    const { got, outcome } = await readAll(display, second, 30);
+    expect(got).toEqual(Array.from({ length: 30 }, (_, j) => j));
     expect(outcome.end).toBeNull();
   });
 
@@ -258,6 +328,66 @@ describe("where a file stops giving new frames", () => {
     const { got, outcome } = await readAll(display, second, 80);
     expect(outcome.end).toBeNull();
     expect(got).toHaveLength(80);
+  });
+
+  it("reads through a gap in a variable frame rate: the picture stands still a while, then the file goes on", async () => {
+    const log: string[] = [];
+    const gap = { from: 2.95, to: 5.5 };
+    const display = fakeVideo({ gap }, log, "display");
+    const second = fakeVideo({ gap }, log, "second");
+    const { got, outcome } = await readAll(display, second, 150);
+    expect(outcome.end).toBeNull();
+    expect(got).toEqual(Array.from({ length: 150 }, (_, j) => j));
+  });
+
+  it("passes the frames of a still scene on as it reads them, so the progress keeps moving", async () => {
+    const log: string[] = [];
+    const display = fakeVideo({ still: true }, log, "display");
+    const second = fakeVideo({ still: true }, log, "second");
+    const { got, lag } = await readAll(display, second, 120);
+    expect(got).toHaveLength(120);
+    expect(lag).toBeLessThanOrEqual(3);
+  });
+
+  it("never cuts a still scene where the browser says nothing of the frames it presents", async () => {
+    const log: string[] = [];
+    const display = fakeVideo({ still: true }, log, "display");
+    const second = fakeVideo({ still: true }, log, "second");
+    const { got, outcome } = await readAll(display, second, 100, { watch: false, counter: false });
+    expect(outcome.end).toBeNull();
+    expect(got).toHaveLength(100);
+  });
+
+  it("says nothing of a file's end where it cannot tell: no cut without a word on the frames presented", async () => {
+    const log: string[] = [];
+    const display = fakeVideo({ decodableTo: 3 }, log, "display");
+    const second = fakeVideo({ decodableTo: 3 }, log, "second");
+    const { got, outcome } = await readAll(display, second, 120, { watch: false, counter: false });
+    expect(outcome.end).toBeNull();
+    expect(got).toHaveLength(120);
+  });
+
+  it("with only a count of frames decoded, finds a file cut short and reads a still scene through", async () => {
+    const log: string[] = [];
+    const cut = await readAll(fakeVideo({ decodableTo: 3 }, log, "display"), fakeVideo({ decodableTo: 3 }, log, "second"), 120, { watch: false, counter: true });
+    expect(cut.outcome.end).not.toBeNull();
+    expect(cut.outcome.end).toBeGreaterThanOrEqual(59);
+    expect(cut.outcome.end).toBeLessThanOrEqual(62);
+    const still = await readAll(fakeVideo({ still: true }, log, "display"), fakeVideo({ still: true }, log, "second"), 100, { watch: false, counter: true });
+    expect(still.outcome.end).toBeNull();
+    expect(still.got).toHaveLength(100);
+  });
+
+  it("with only a count, puts the cut where the picture first stood, though the count rose a while past it", async () => {
+    const log: string[] = [];
+    const cut = await readAll(
+      fakeVideo({ decodableTo: 3, countsPast: 0.8 }, log, "display"),
+      fakeVideo({ decodableTo: 3, countsPast: 0.8 }, log, "second"),
+      120,
+      { watch: false, counter: true },
+    );
+    expect(cut.outcome.end).toBeGreaterThanOrEqual(59);
+    expect(cut.outcome.end).toBeLessThanOrEqual(62);
   });
 
   it("finds the real end of a video of unknown length read up to the limit", async () => {

@@ -181,6 +181,12 @@ export class ClipError extends Error {
  * file it cannot use (HTML's numbering). */
 const MEDIA_ERR_DECODE = 3;
 
+/** The containers a browser opens: an MP4 or QuickTime file, a Matroska or
+ * WebM one. Only a file in one of these can be damaged in the page's eyes;
+ * AVI, MPEG and Ogg files are refused whole, with the same words a browser
+ * gives a file it could not open, and are a format it does not play. */
+const OPENED: ReadonlySet<Container> = new Set<Container>(["mp4", "matroska"]);
+
 /** What a browser says of a file whose format it does not support, and of a
  * file it could not open or parse (Chrome's words, the commonest). */
 const UNSUPPORTED = /NO_SUPPORTED_STREAMS|not supported|unsupported|no decoder|codec/i;
@@ -188,12 +194,13 @@ const BROKEN = /COULD_NOT_OPEN|COULD_NOT_PARSE|open context|parse|corrupt|trunca
 
 /**
  * Which kind of failure `err` is. A file the browser refused is no video when
- * its first bytes open no video container; otherwise it is a video the
- * browser either does not decode (its format) or could not read through (a
- * file damaged or cut short), told apart by the browser's own words, and by a
- * decoding error part way, which only a readable format can give. Anything
- * that is not a `ClipError` -- the model not downloading, a canvas that cannot
- * be read -- is "unknown".
+ * its first bytes open no video container. A container the browser does not
+ * open at all (AVI, MPEG, Ogg) is a format it does not play, whatever it
+ * said. In a container it opens, the file is either in a format it does not
+ * decode, or one it could not read through (damaged or cut short), told
+ * apart by the browser's own words, and by a decoding error part way, which
+ * only a readable format can give. Anything that is not a `ClipError` -- the
+ * model not downloading, a canvas that cannot be read -- is "unknown".
  */
 export function classifyFailure(err: unknown): Failure {
   if (!(err instanceof ClipError)) return "unknown";
@@ -201,6 +208,7 @@ export function classifyFailure(err: unknown): Failure {
   if (e.bytes === 0) return "empty";
   if (e.mediaError !== undefined) {
     if (!e.container) return "not-a-video";
+    if (!OPENED.has(e.container)) return "codec";
     const said = e.errorMessage ?? "";
     if (UNSUPPORTED.test(said)) return "codec";
     if (e.mediaError === MEDIA_ERR_DECODE || BROKEN.test(said)) return "damaged";

@@ -175,6 +175,17 @@ describe("classifyFailure", () => {
     expect(fail({ bytes: 1000, container: "mp4", width: 640, height: 360, duration: 12, endedAt: 2, needed: 3 })).toBe("damaged");
   });
 
+  it("calls a container the browser does not open (AVI, MPEG, Ogg) a format it does not play, never damaged", () => {
+    const couldNotOpen = "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed";
+    for (const container of ["avi", "mpeg", "ogg"] as const) {
+      expect(fail({ bytes: 1000, container, mediaError: 4, errorMessage: couldNotOpen }), container).toBe("codec");
+      expect(fail({ bytes: 1000, container, mediaError: 4 }), container).toBe("codec");
+    }
+    // The same words from a container the browser does open mean a damaged file.
+    expect(fail({ bytes: 1000, container: "mp4", mediaError: 4, errorMessage: couldNotOpen })).toBe("damaged");
+    expect(fail({ bytes: 1000, container: "matroska", mediaError: 4, errorMessage: couldNotOpen })).toBe("damaged");
+  });
+
   it("never calls a file that opens no video container damaged, whatever the browser said", () => {
     expect(fail({ bytes: 1000, container: null, mediaError: 4, errorMessage: "PipelineStatus::DEMUXER_ERROR_COULD_NOT_OPEN" })).toBe("not-a-video");
   });
