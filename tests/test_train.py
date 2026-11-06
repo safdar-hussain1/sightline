@@ -475,6 +475,13 @@ def test_matrix_records_its_pid_and_refuses_to_run_twice(matrix, monkeypatch, tm
 
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "train_matrix"])
     try:
+        # until the child has exec'd, ps shows the forked copy of this process's command line, so
+        # wait for the stand-in runner's own command line before asking whether a runner is alive
+        deadline = time.monotonic() + 10
+        while "train_matrix" not in subprocess.run(["ps", "-o", "command=", "-p", str(other.pid)],
+                                                   capture_output=True, text=True).stdout:
+            assert time.monotonic() < deadline, "the stand-in runner never showed its command line"
+            time.sleep(0.05)
         pid_file.write_text(f"{other.pid}\n")
         assert matrix.main(["--runs-dir", str(runs)]) == 2
         assert f"already running (pid {other.pid})" in capsys.readouterr().err
