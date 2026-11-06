@@ -94,3 +94,7 @@ addEventListener("load", () => {
   const idle = window.requestIdleCallback ?? ((callback: () => void) => window.setTimeout(callback, 1500));
   idle(() => void loadResultsCode().catch(() => undefined), { timeout: 4000 });
 });
+
+// The self-test runs only when the address asks for it; without ?selftest=1 its
+// code is never fetched.
+if (new URLSearchParams(location.search).get("selftest") === "1") void import("./selftest.ts");
